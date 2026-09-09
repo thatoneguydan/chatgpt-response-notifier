@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <AssemblyName>ChatGPTResponseNotifier.Setup</AssemblyName>
+    <RootNamespace>ChatGPTResponseNotifier.Setup</RootNamespace>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <SelfContained>true</SelfContained>
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\src\ChatGPTResponseNotifier.Core\ChatGPTResponseNotifier.Core.csproj" />
+    <EmbeddedResource Include="$(PayloadZipPath)" LogicalName="ChatGPTResponseNotifier.Payload.zip" Condition="'$(PayloadZipPath)' != ''" />
+  </ItemGroup>
+</Project>
