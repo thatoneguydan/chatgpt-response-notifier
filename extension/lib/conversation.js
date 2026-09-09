@@ -54,7 +54,7 @@ export function cleanSessionTitle(rawTitle) {
   return cleaned && cleaned.toLowerCase() !== 'chatgpt' ? cleaned : 'ChatGPT';
 }
 
-export function truncatePreview(text, maxChars = 260) {
+export function truncatePreview(text, maxChars = 600) {
   const normalized = String(text || '').replace(/\s+/g, ' ').trim();
   if (!normalized) return 'Response finished.';
   if (normalized.length <= maxChars) return normalized;

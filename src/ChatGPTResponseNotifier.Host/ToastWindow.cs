@@ -18,7 +18,7 @@ internal sealed class ToastWindow : Window
     public ToastWindow(NotificationRecord record)
     {
         Record = record;
-        Width = 370;
+        Width = 420;
         SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
@@ -84,7 +84,7 @@ internal sealed class ToastWindow : Window
             Foreground = new SolidColorBrush(Color.FromRgb(220, 220, 220)),
             FontSize = 12.5,
             TextWrapping = TextWrapping.Wrap,
-            MaxHeight = 76
+            MaxHeight = 150
         };
 
         var time = new TextBlock

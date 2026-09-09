@@ -13,6 +13,7 @@
   const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
   const FINAL_TURN_WAIT_MS = 30000;
   const ANSWER_CHECK_THROTTLE_MS = 150;
+  const ANSWER_STABLE_MS = 900;
   const VIEW_SIGNAL_DELAY_MS = 80;
   const VIEW_SIGNAL_DEDUPE_MS = 750;
   let watchToken = 0;
@@ -67,12 +68,20 @@
         ? turn
         : turn.querySelector('[data-message-author-role="assistant"]');
       if (!roleNode) return '';
-      const rendered = roleNode.querySelector('.markdown, [class*="prose"]');
-      return normalize(
-        rendered
-          ? (rendered.textContent || rendered.innerText || '')
-          : (roleNode.textContent || roleNode.innerText || '')
-      );
+
+      const markdownNodes = Array.from(roleNode.querySelectorAll('.markdown'));
+      const renderedNodes = markdownNodes.length > 0
+        ? markdownNodes
+        : Array.from(roleNode.querySelectorAll('[class*="prose"]'));
+      if (renderedNodes.length > 0) {
+        const renderedText = renderedNodes
+          .map((node) => normalize(node.textContent || node.innerText || ''))
+          .filter(Boolean)
+          .join(' ');
+        if (renderedText) return normalize(renderedText);
+      }
+
+      return normalize(roleNode.textContent || roleNode.innerText || '');
     } catch {
       return '';
     }
@@ -114,6 +123,11 @@
     };
   }
 
+  function snapshotFingerprint(snapshot) {
+    if (!snapshot?.response) return '';
+    return `${snapshot.promptKey}|${snapshot.assistantKey}|${snapshot.response}`;
+  }
+
   function conversationObserverRoot() {
     const turns = turnNodes();
     const latestTurn = turns[turns.length - 1];
@@ -123,8 +137,6 @@
 
   function waitForLatestAnswer() {
     if (!isCurrentGeneration()) return Promise.resolve(null);
-    const immediate = latestPromptSnapshot();
-    if (immediate?.response) return Promise.resolve(immediate);
 
     return new Promise((resolve) => {
       let settled = false;
@@ -132,12 +144,15 @@
       let timeoutId = null;
       let throttleId = null;
       let frameId = null;
+      let stableTimerId = null;
       let lastCheckAt = 0;
+      let lastCandidateFingerprint = '';
 
       const cleanup = () => {
         observer?.disconnect();
         if (timeoutId !== null) clearTimeout(timeoutId);
         if (throttleId !== null) clearTimeout(throttleId);
+        if (stableTimerId !== null) clearTimeout(stableTimerId);
         if (frameId !== null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frameId);
       };
 
@@ -152,6 +167,27 @@
         resolve(snapshot || latestPromptSnapshot() || { promptKey: '', assistantKey: '', response: 'Response finished.' });
       };
 
+      const armStableFinish = (candidateFingerprint) => {
+        if (stableTimerId !== null) clearTimeout(stableTimerId);
+        stableTimerId = setTimeout(() => {
+          stableTimerId = null;
+          if (!isCurrentGeneration()) {
+            finish(null);
+            return;
+          }
+          const latest = latestPromptSnapshot();
+          const latestFingerprint = snapshotFingerprint(latest);
+          if (latestFingerprint && latestFingerprint === candidateFingerprint) {
+            finish(latest);
+            return;
+          }
+          if (latestFingerprint) {
+            lastCandidateFingerprint = latestFingerprint;
+            armStableFinish(latestFingerprint);
+          }
+        }, ANSWER_STABLE_MS);
+      };
+
       const check = () => {
         if (settled) return;
         if (!isCurrentGeneration()) {
@@ -160,7 +196,14 @@
         }
         lastCheckAt = performance.now();
         const snapshot = latestPromptSnapshot();
-        if (snapshot?.response) finish(snapshot);
+        const candidateFingerprint = snapshotFingerprint(snapshot);
+        if (!candidateFingerprint) return;
+        if (candidateFingerprint === lastCandidateFingerprint) {
+          if (stableTimerId === null) armStableFinish(candidateFingerprint);
+          return;
+        }
+        lastCandidateFingerprint = candidateFingerprint;
+        armStableFinish(candidateFingerprint);
       };
 
       const scheduleCheck = () => {
@@ -205,12 +248,6 @@
 
   function armForCurrentPrompt() {
     if (!isCurrentGeneration() || Date.now() < suppressUntilEpoch) return;
-    const snapshot = latestPromptSnapshot();
-    if (snapshot?.response) {
-      sendCompletion(snapshot);
-      return;
-    }
-
     const token = watchToken;
     waitForLatestAnswer().then((resolved) => {
       if (!isCurrentGeneration() || token !== watchToken || !resolved) return;
