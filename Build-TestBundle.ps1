@@ -50,6 +50,7 @@ if ($unexpectedRuntimeFiles.Count -gt 0) {
 
 Copy-Item -LiteralPath $publishedExe -Destination (Join-Path $bundleRoot 'ChatGPTResponseNotifier.Host.exe') -Force
 Copy-Item -LiteralPath (Join-Path $root 'extension') -Destination (Join-Path $bundleRoot 'extension') -Recurse -Force
+Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $bundleRoot 'LICENSE') -Force
 
 $installText = @"
 ChatGPT Response Notifier $version
