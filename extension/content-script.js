@@ -1,7 +1,13 @@
 'use strict';
 
 (() => {
-  if (globalThis.__chatgptNativeNotifierInstalled) return;
+  let scriptVersion = '';
+  try { scriptVersion = String(chrome.runtime.getManifest().version || ''); } catch {}
+  if (!scriptVersion || globalThis.__chatgptNativeNotifierVersion === scriptVersion) return;
+
+  const generation = (Number(globalThis.__chatgptNativeNotifierGeneration) || 0) + 1;
+  globalThis.__chatgptNativeNotifierVersion = scriptVersion;
+  globalThis.__chatgptNativeNotifierGeneration = generation;
   globalThis.__chatgptNativeNotifierInstalled = true;
 
   const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
@@ -15,6 +21,23 @@
   let viewSignalTimer = null;
   let lastViewedUrl = '';
   let lastViewedAt = 0;
+
+  function isCurrentGeneration() {
+    return globalThis.__chatgptNativeNotifierGeneration === generation;
+  }
+
+  function safeRuntimeSendMessage(message) {
+    if (!isCurrentGeneration()) return Promise.resolve(null);
+    try {
+      if (!chrome.runtime?.id) return Promise.resolve(null);
+      const result = chrome.runtime.sendMessage(message);
+      return result && typeof result.then === 'function'
+        ? result.catch(() => null)
+        : Promise.resolve(result ?? null);
+    } catch {
+      return Promise.resolve(null);
+    }
+  }
 
   function turnNodes() {
     try {
@@ -99,6 +122,7 @@
   }
 
   function waitForLatestAnswer() {
+    if (!isCurrentGeneration()) return Promise.resolve(null);
     const immediate = latestPromptSnapshot();
     if (immediate?.response) return Promise.resolve(immediate);
 
@@ -121,18 +145,26 @@
         if (settled) return;
         settled = true;
         cleanup();
+        if (!isCurrentGeneration()) {
+          resolve(null);
+          return;
+        }
         resolve(snapshot || latestPromptSnapshot() || { promptKey: '', assistantKey: '', response: 'Response finished.' });
       };
 
       const check = () => {
         if (settled) return;
+        if (!isCurrentGeneration()) {
+          finish(null);
+          return;
+        }
         lastCheckAt = performance.now();
         const snapshot = latestPromptSnapshot();
         if (snapshot?.response) finish(snapshot);
       };
 
       const scheduleCheck = () => {
-        if (settled || throttleId !== null || frameId !== null) return;
+        if (settled || !isCurrentGeneration() || throttleId !== null || frameId !== null) return;
         const elapsed = performance.now() - lastCheckAt;
         const delay = Math.max(0, ANSWER_CHECK_THROTTLE_MS - elapsed);
         throttleId = setTimeout(() => {
@@ -158,20 +190,21 @@
   }
 
   function sendCompletion(snapshot) {
+    if (!isCurrentGeneration() || !snapshot) return;
     const fingerprint = `${snapshot.promptKey}|${snapshot.assistantKey}|${snapshot.response.slice(0, 1000)}`;
     if (fingerprint === lastSentFingerprint) return;
     lastSentFingerprint = fingerprint;
-    chrome.runtime.sendMessage({
+    safeRuntimeSendMessage({
       type: 'CHATGPT_RESPONSE_COMPLETE',
       conversationUrl: location.href,
       sessionTitle: document.title,
       response: snapshot.response,
       fingerprint
-    }).catch(() => {});
+    });
   }
 
   function armForCurrentPrompt() {
-    if (Date.now() < suppressUntilEpoch) return;
+    if (!isCurrentGeneration() || Date.now() < suppressUntilEpoch) return;
     const snapshot = latestPromptSnapshot();
     if (snapshot?.response) {
       sendCompletion(snapshot);
@@ -180,7 +213,7 @@
 
     const token = watchToken;
     waitForLatestAnswer().then((resolved) => {
-      if (token !== watchToken) return;
+      if (!isCurrentGeneration() || token !== watchToken || !resolved) return;
       sendCompletion(resolved);
     }).catch(() => {});
   }
@@ -191,9 +224,11 @@
   }
 
   function scheduleViewedSignal() {
+    if (!isCurrentGeneration()) return;
     if (viewSignalTimer !== null) clearTimeout(viewSignalTimer);
     viewSignalTimer = setTimeout(() => {
       viewSignalTimer = null;
+      if (!isCurrentGeneration()) return;
       if (document.visibilityState !== 'visible') return;
       if (typeof document.hasFocus === 'function' && !document.hasFocus()) return;
 
@@ -203,29 +238,39 @@
       lastViewedUrl = conversationUrl;
       lastViewedAt = now;
 
-      chrome.runtime.sendMessage({
+      safeRuntimeSendMessage({
         type: 'CHATGPT_CONVERSATION_VIEWED',
         conversationUrl
-      }).catch(() => {});
+      });
     }, VIEW_SIGNAL_DELAY_MS);
   }
 
   document.addEventListener('click', (event) => {
-    if (!isStopButton(event.target)) return;
+    if (!isCurrentGeneration() || !isStopButton(event.target)) return;
     watchToken += 1;
     suppressUntilEpoch = Date.now() + 1500;
   }, true);
 
   document.addEventListener('visibilitychange', () => {
+    if (!isCurrentGeneration()) return;
     if (document.visibilityState === 'visible') scheduleViewedSignal();
   }, true);
-  window.addEventListener('focus', scheduleViewedSignal, true);
-  window.addEventListener('pageshow', scheduleViewedSignal, true);
-  document.addEventListener('DOMContentLoaded', scheduleViewedSignal, { once: true });
+  window.addEventListener('focus', () => {
+    if (isCurrentGeneration()) scheduleViewedSignal();
+  }, true);
+  window.addEventListener('pageshow', () => {
+    if (isCurrentGeneration()) scheduleViewedSignal();
+  }, true);
+  document.addEventListener('DOMContentLoaded', () => {
+    if (isCurrentGeneration()) scheduleViewedSignal();
+  }, { once: true });
 
-  chrome.runtime.onMessage.addListener((message) => {
-    if (message?.type === 'CHATGPT_CONVERSATION_REQUEST_COMPLETED') armForCurrentPrompt();
-  });
+  try {
+    chrome.runtime.onMessage.addListener((message) => {
+      if (!isCurrentGeneration()) return;
+      if (message?.type === 'CHATGPT_CONVERSATION_REQUEST_COMPLETED') armForCurrentPrompt();
+    });
+  } catch {}
 
   scheduleViewedSignal();
 })();
