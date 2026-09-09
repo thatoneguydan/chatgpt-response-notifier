@@ -1,0 +1,133 @@
+name: Build and publish notifier release
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - update/manifest.json
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          node --check .\extension\service-worker.js
+          node --check .\extension\content-script.js
+          node --check .\extension\lib\conversation.js
+          node --check .\extension\popup.js
+
+          $manifest = Get-Content -LiteralPath .\extension\manifest.json -Raw | ConvertFrom-Json
+          foreach ($forbidden in @('downloads', 'alarms', 'storage', 'nativeMessaging')) {
+            if ($manifest.permissions -contains $forbidden) { throw "Forbidden extension permission present: $forbidden" }
+          }
+          if ($manifest.host_permissions -contains 'https://github.com/*') { throw 'Extension must not depend on GitHub browser permissions.' }
+          if ($manifest.host_permissions -notcontains 'ws://127.0.0.1/*') { throw 'Loopback WebSocket permission is missing.' }
+
+          dotnet build .\src\ChatGPTResponseNotifier.Host\ChatGPTResponseNotifier.Host.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Windows helper build failed.' }
+          dotnet build .\installer\ChatGPTResponseNotifier.Setup.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Setup.exe project build failed.' }
+
+      - name: Build, prove, and publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content -LiteralPath .\VERSION.txt -Raw).Trim()
+          if ([string]::IsNullOrWhiteSpace($version)) { throw 'VERSION.txt is empty.' }
+          $tag = "v$version"
+          $artifactRoot = Join-Path $env:RUNNER_TEMP "chatgpt-response-notifier-release-$version"
+          Remove-Item -LiteralPath $artifactRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
+
+          gh release view $tag --json tagName *> $null
+          $releaseExists = $LASTEXITCODE -eq 0
+
+          if (-not $releaseExists) {
+            $sourceCommit = $env:GITHUB_SHA
+            $bundleOutput = Join-Path $artifactRoot 'bundle'
+            New-Item -ItemType Directory -Path $bundleOutput -Force | Out-Null
+
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-TestBundle.ps1 `
+              -OutputDirectory $bundleOutput `
+              -SourceCommit $sourceCommit
+            if ($LASTEXITCODE -ne 0) { throw 'Managed-update bundle build failed.' }
+
+            $bundleRoot = Join-Path $bundleOutput "ChatGPT-Response-Notifier-$version"
+            $managedZip = Join-Path $artifactRoot "ChatGPT-Response-Notifier-$version.zip"
+            Compress-Archive -Path (Join-Path $bundleRoot '*') -DestinationPath $managedZip -CompressionLevel Optimal -Force
+
+            $setupOutput = Join-Path $artifactRoot 'setup'
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-Installer.ps1 `
+              -OutputDirectory $setupOutput `
+              -SourceCommit $sourceCommit
+            if ($LASTEXITCODE -ne 0) { throw 'Setup.exe build failed.' }
+            $setupExe = Join-Path $setupOutput "ChatGPT-Response-Notifier-Setup-$version.exe"
+            if (-not (Test-Path -LiteralPath $setupExe -PathType Leaf)) { throw 'Setup.exe output is missing.' }
+
+            # Prove the actual installer can install, launch the helper, and complete its built-in localhost ping/pong.
+            $testInstallRoot = Join-Path $env:RUNNER_TEMP ('chatgpt-response-notifier-install-' + [Guid]::NewGuid().ToString('N'))
+            $env:CHATGPT_RESPONSE_NOTIFIER_INSTALL_ROOT = $testInstallRoot
+            try {
+              $setupProcess = Start-Process -FilePath $setupExe -ArgumentList '--silent','--skip-startup' -PassThru
+              Wait-Process -Id $setupProcess.Id -Timeout 45
+              $setupProcess.Refresh()
+              if ($setupProcess.ExitCode -ne 0) { throw "Setup.exe acceptance test failed with exit code $($setupProcess.ExitCode)." }
+            }
+            finally {
+              Get-Process -Name 'ChatGPTResponseNotifier.Host' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+              Remove-Item Env:CHATGPT_RESPONSE_NOTIFIER_INSTALL_ROOT -ErrorAction SilentlyContinue
+              Remove-Item -LiteralPath $testInstallRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+
+            gh release create $tag $managedZip $setupExe `
+              --target $sourceCommit `
+              --title "ChatGPT Response Notifier $version" `
+              --notes "Persistent stacked Windows ChatGPT response notifications. This release uses the localhost helper-owned updater and restores the original two-note completion chime."
+            if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
+          }
+          else {
+            git fetch origin "refs/tags/$tag:refs/tags/$tag" --force
+            if ($LASTEXITCODE -ne 0) { throw 'Could not fetch existing release tag.' }
+            $sourceCommit = (git rev-list -n 1 $tag).Trim()
+            if ([string]::IsNullOrWhiteSpace($sourceCommit)) { throw 'Could not resolve existing release source commit.' }
+            gh release download $tag --pattern "ChatGPT-Response-Notifier-$version.zip" --dir $artifactRoot --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Could not download existing managed-update release asset.' }
+            $managedZip = Join-Path $artifactRoot "ChatGPT-Response-Notifier-$version.zip"
+          }
+
+          if (-not (Test-Path -LiteralPath $managedZip -PathType Leaf)) { throw 'Managed-update release ZIP is missing.' }
+          $sha256 = (Get-FileHash -LiteralPath $managedZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $downloadUrl = "https://github.com/thatoneguydan/chatgpt-response-notifier/releases/download/$tag/ChatGPT-Response-Notifier-$version.zip"
+
+          New-Item -ItemType Directory -Path .\update -Force | Out-Null
+          $updateManifest = [ordered]@{
+            schemaVersion = 1
+            version = $version
+            sourceCommit = $sourceCommit
+            downloadUrl = $downloadUrl
+            sha256 = $sha256
+          }
+          $updateManifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath .\update\manifest.json -Encoding UTF8
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add update/manifest.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "Publish update manifest for $tag"
+            git push origin HEAD:main
+          }
