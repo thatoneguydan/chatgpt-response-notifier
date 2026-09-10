@@ -46,17 +46,27 @@ export function sameConversation(leftUrl, rightUrl) {
 
 export function cleanSessionTitle(rawTitle) {
   const raw = String(rawTitle || '').replace(/\s+/g, ' ').trim();
-  if (!raw) return 'ChatGPT';
+  if (!raw) return 'Chat';
   const cleaned = raw
     .replace(/\s*[-|\u2013\u2014]\s*ChatGPT\s*$/i, '')
     .replace(/^ChatGPT\s*[-|\u2013\u2014]\s*/i, '')
     .trim();
-  return cleaned && cleaned.toLowerCase() !== 'chatgpt' ? cleaned : 'ChatGPT';
+  return cleaned && cleaned.toLowerCase() !== 'chatgpt' ? cleaned : 'Chat';
+}
+
+export function formatNotificationTitle(projectTitle, rawSessionTitle) {
+  const chatTitle = cleanSessionTitle(rawSessionTitle);
+  const project = String(projectTitle || '')
+    .replace(/\s+/g, ' ')
+    .replace(/^Open project options for\s+/i, '')
+    .trim();
+  if (!project || project.toLowerCase() === chatTitle.toLowerCase()) return chatTitle;
+  return `${project} — ${chatTitle}`;
 }
 
 export function truncatePreview(text, maxChars = 600) {
   const normalized = String(text || '').replace(/\s+/g, ' ').trim();
-  if (!normalized) return 'Response finished.';
+  if (!normalized) return '';
   if (normalized.length <= maxChars) return normalized;
   const slice = normalized.slice(0, Math.max(1, maxChars - 3));
   const lastSpace = slice.lastIndexOf(' ');
