@@ -4,6 +4,7 @@ const testButton = document.getElementById('test');
 const updateButton = document.getElementById('checkUpdate');
 const status = document.getElementById('status');
 const updateStatus = document.getElementById('updateStatus');
+const captureStatus = document.getElementById('captureStatus');
 
 function formatUpdateState(value) {
   if (!value || typeof value !== 'object') return 'Managed updates: waiting for helper status.';
@@ -33,6 +34,26 @@ async function refreshHostStatus() {
   } catch (error) {
     status.textContent = `Helper check failed: ${error.message}`;
     updateStatus.textContent = 'Managed update status unavailable.';
+  }
+}
+
+async function refreshCaptureStatus() {
+  captureStatus.textContent = 'Last capture: checking current ChatGPT tab...';
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (typeof tab?.id !== 'number' || !String(tab.url || '').startsWith('https://chatgpt.com/')) {
+      captureStatus.textContent = 'Last capture: open a ChatGPT tab to inspect.';
+      return;
+    }
+    const result = await chrome.tabs.sendMessage(tab.id, { type: 'GET_CHATGPT_CAPTURE_DIAGNOSTIC' });
+    const capture = result?.capture;
+    if (!capture) {
+      captureStatus.textContent = 'Last capture: none recorded in this tab yet.';
+      return;
+    }
+    captureStatus.textContent = `Last capture: ${capture.status}; ${capture.responseLength || 0} chars; final marker ${capture.finalActionReady ? 'yes' : 'no'}; ${capture.elapsedMs || 0} ms.`;
+  } catch {
+    captureStatus.textContent = 'Last capture: unavailable for the current tab.';
   }
 }
 
@@ -67,3 +88,4 @@ updateButton.addEventListener('click', async () => {
 });
 
 refreshHostStatus();
+refreshCaptureStatus();
