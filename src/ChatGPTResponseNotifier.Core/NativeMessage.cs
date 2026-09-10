@@ -9,6 +9,11 @@ public sealed class NativeMessage
     public string? ConversationId { get; init; }
     public string? ConversationUrl { get; init; }
     public string? NotificationId { get; init; }
+    public string? WindowTitle { get; init; }
+    public int? WindowLeft { get; init; }
+    public int? WindowTop { get; init; }
+    public int? WindowWidth { get; init; }
+    public int? WindowHeight { get; init; }
     public NotificationRecord? Notification { get; init; }
 
     public static NativeMessage Parse(JsonElement root)
@@ -18,6 +23,11 @@ public sealed class NativeMessage
         string? ReadString(string name) =>
             root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
                 ? value.GetString()
+                : null;
+
+        int? ReadInt32(string name) =>
+            root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number)
+                ? number
                 : null;
 
         NotificationRecord? notification = null;
@@ -35,6 +45,11 @@ public sealed class NativeMessage
             ConversationId = ReadString("conversationId"),
             ConversationUrl = ReadString("conversationUrl"),
             NotificationId = ReadString("notificationId"),
+            WindowTitle = ReadString("windowTitle"),
+            WindowLeft = ReadInt32("windowLeft"),
+            WindowTop = ReadInt32("windowTop"),
+            WindowWidth = ReadInt32("windowWidth"),
+            WindowHeight = ReadInt32("windowHeight"),
             Notification = notification
         };
 
