@@ -13,14 +13,11 @@ const [serviceWorker, contentScript, popupHtml, popupJs] = await Promise.all([
   readFile(path.join(extensionRoot, 'popup.js'), 'utf8')
 ]);
 
-test('conversation dismissal requires an actual page interaction', () => {
+test('legacy page-interaction signals cannot dismiss alerts after the 0.2.13 lifecycle split', () => {
   assert.match(contentScript, /CHATGPT_CONVERSATION_INTERACTED/);
-  assert.match(contentScript, /document\.addEventListener\('pointerdown', signalConversationInteraction, true\)/);
-  assert.match(contentScript, /document\.addEventListener\('keydown', signalConversationInteraction, true\)/);
-  assert.match(contentScript, /document\.addEventListener\('wheel', signalConversationInteraction/);
-  assert.match(contentScript, /event\?\.isTrusted === false/);
-  assert.match(serviceWorker, /CHATGPT_CONVERSATION_INTERACTED/);
-  assert.match(serviceWorker, /dismissReportedInteractedConversation/);
+  assert.doesNotMatch(serviceWorker, /message\?\.type === 'CHATGPT_CONVERSATION_INTERACTED'/);
+  assert.match(serviceWorker, /CHATGPT_CONVERSATION_USER_INTERACTED/);
+  assert.match(serviceWorker, /dismissReportedUserInteraction/);
   assert.doesNotMatch(contentScript, /CHATGPT_CONVERSATION_VIEWED/);
   assert.doesNotMatch(contentScript, /scheduleViewedSignal/);
 });
@@ -170,10 +167,10 @@ test('popup exposes bounded local capture diagnostics without logging response t
   assert.doesNotMatch(popupJs, /capture\.response\b/);
 });
 
-test('service worker proactively injects the current content script into already-open ChatGPT tabs', () => {
+test('service worker proactively injects both current content scripts into already-open ChatGPT tabs', () => {
   assert.match(serviceWorker, /ensureContentScriptsInChatgptTabs/);
   assert.match(serviceWorker, /chrome\.tabs\.query\(\{ url: \['https:\/\/chatgpt\.com\/\*'\] \}\)/);
-  assert.match(serviceWorker, /chrome\.scripting\.executeScript\(\{ target: \{ tabId: tab\.id \}, files: \['content-script\.js'\] \}\)/);
+  assert.match(serviceWorker, /files: \['content-script\.js', 'recovery-watchdog\.js'\]/);
   assert.match(serviceWorker, /await ensureContentScriptsInChatgptTabs\(\)/);
   assert.match(serviceWorker, /ensureContentScriptsInChatgptTabs\(\)\.catch/);
 });
