@@ -205,6 +205,36 @@ function isAnswerStreamRequest(details) {
   }
 }
 
+async function contentScriptIsLive(tabId) {
+  try {
+    const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_CHATGPT_CAPTURE_DIAGNOSTIC' });
+    return response?.ok === true;
+  } catch {
+    return false;
+  }
+}
+
+async function injectCurrentContentScripts(tabId) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      // A disabled/re-enabled extension can leave same-version globals in the
+      // existing isolated page world after the old runtime listeners are dead.
+      // Invalidate the old generation before reinjecting so stale listeners
+      // cannot become current again, then clear version guards for both scripts.
+      globalThis.__chatgptNativeNotifierGeneration =
+        (Number(globalThis.__chatgptNativeNotifierGeneration) || 0) + 1;
+      globalThis.__chatgptNativeNotifierVersion = '';
+      globalThis.__chatgptNativeNotifierInstalled = false;
+      globalThis.__chatgptNotifierRecoveryVersion = '';
+    }
+  });
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    files: ['content-script.js', 'recovery-watchdog.js']
+  });
+}
+
 async function ensureContentScriptsInChatgptTabs() {
   let tabs = [];
   try {
@@ -216,10 +246,8 @@ async function ensureContentScriptsInChatgptTabs() {
   for (const tab of tabs) {
     if (typeof tab.id !== 'number') continue;
     try {
-      await chrome.scripting.executeScript({
-        target: { tabId: tab.id },
-        files: ['content-script.js', 'recovery-watchdog.js']
-      });
+      if (await contentScriptIsLive(tab.id)) continue;
+      await injectCurrentContentScripts(tab.id);
     } catch {}
   }
 }
@@ -232,7 +260,7 @@ async function signalConversationRequestCompleted(tabId) {
   } catch {}
 
   try {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['content-script.js', 'recovery-watchdog.js'] });
+    await injectCurrentContentScripts(tabId);
     await chrome.tabs.sendMessage(tabId, message);
   } catch (error) {
     console.warn('Could not arm completion watcher', error);
