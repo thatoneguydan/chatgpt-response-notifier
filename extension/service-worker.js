@@ -291,16 +291,50 @@ async function foregroundChromeWindow(windowId) {
   }
 }
 
+function finiteWindowCoordinate(value) {
+  return Number.isFinite(value) ? Math.round(value) : null;
+}
+
+async function requestNativeChromeForeground(tabId, windowId) {
+  if (typeof tabId !== 'number' || typeof windowId !== 'number') return false;
+  try {
+    // Give Chrome a moment to update the native window title after activating the tab.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    const [tabInfo, windowInfo] = await Promise.all([
+      chrome.tabs.get(tabId),
+      chrome.windows.get(windowId)
+    ]);
+    const response = await sendNativeRequest({
+      type: 'window.foreground',
+      windowTitle: String(tabInfo?.title || ''),
+      windowLeft: finiteWindowCoordinate(windowInfo?.left),
+      windowTop: finiteWindowCoordinate(windowInfo?.top),
+      windowWidth: finiteWindowCoordinate(windowInfo?.width),
+      windowHeight: finiteWindowCoordinate(windowInfo?.height)
+    }, ['window.foregroundResult'], 1500);
+    return response?.success === true;
+  } catch {
+    return false;
+  }
+}
+
 async function focusOrOpenConversation(conversationId, conversationUrl) {
   const tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] });
   const existing = tabs.find((tab) => conversationFromUrl(tab.url)?.id === conversationId);
   if (existing?.id !== undefined) {
-    if (typeof existing.windowId === 'number') await foregroundChromeWindow(existing.windowId);
     await chrome.tabs.update(existing.id, { active: true });
-    if (typeof existing.windowId === 'number') await foregroundChromeWindow(existing.windowId);
+    if (typeof existing.windowId === 'number') {
+      const nativeFocused = await requestNativeChromeForeground(existing.id, existing.windowId);
+      if (!nativeFocused) await foregroundChromeWindow(existing.windowId);
+    }
   } else {
     const created = await chrome.tabs.create({ url: conversationUrl, active: true });
-    if (typeof created?.windowId === 'number') await foregroundChromeWindow(created.windowId);
+    if (typeof created?.id === 'number' && typeof created?.windowId === 'number') {
+      const nativeFocused = await requestNativeChromeForeground(created.id, created.windowId);
+      if (!nativeFocused) await foregroundChromeWindow(created.windowId);
+    } else if (typeof created?.windowId === 'number') {
+      await foregroundChromeWindow(created.windowId);
+    }
   }
   sendNative({ type: 'toast.dismissConversation', conversationId });
 }
