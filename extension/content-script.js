@@ -16,11 +16,13 @@
   const ANSWER_STABLE_AFTER_UNOBSERVED_FINAL_ACTION_MS = 3000;
   const ANSWER_STABLE_AFTER_GENERATION_MS = 1200;
   const ANSWER_STABLE_WITHOUT_GENERATION_MARKER_MS = 45000;
+  const MIN_TRUSTED_MARKERLESS_RESPONSE_CHARS = 80;
   const ANSWER_CHECK_THROTTLE_MS = 100;
   const REQUEST_RENDER_GRACE_MS = 100;
   const INTERACTION_SIGNAL_DEDUPE_MS = 750;
   const CAPTURE_DIAGNOSTIC_HISTORY_LIMIT = 8;
   const CAPTURE_DIAGNOSTIC_HISTORY_KEY = '__chatgptNativeNotifierCaptureHistoryV1';
+  const RECOVERY_REQUEST_EVENT = 'chatgpt-native-notifier-recovery-needed';
   let watchToken = 0;
   let completionGeneration = 0;
   let lastSentFingerprint = '';
@@ -297,6 +299,16 @@
     ].join('::');
   }
 
+  function hasTrustworthyMarkerlessCapture(snapshot) {
+    if (!snapshot?.response || snapshot.response.length < MIN_TRUSTED_MARKERLESS_RESPONSE_CHARS) return false;
+    if (snapshot.captureSource === 'whole-turn') return false;
+    const authoredSurfaceLength = Math.max(
+      Number(snapshot.responseSurfaceTextLength || 0),
+      Number(snapshot.assistantRoleTextLength || 0)
+    );
+    return authoredSurfaceLength >= MIN_TRUSTED_MARKERLESS_RESPONSE_CHARS;
+  }
+
   function latestPromptSnapshot() {
     const turns = turnNodes();
     if (turns.length === 0) return null;
@@ -416,9 +428,7 @@
 
       const stableDelayFor = (snapshot) => {
         if (snapshot?.finalActionReady) {
-          return generationObserved
-            ? ANSWER_STABLE_AFTER_FINAL_ACTION_MS
-            : ANSWER_STABLE_AFTER_UNOBSERVED_FINAL_ACTION_MS;
+          return generationObserved ? ANSWER_STABLE_AFTER_FINAL_ACTION_MS : ANSWER_STABLE_AFTER_UNOBSERVED_FINAL_ACTION_MS;
         }
         if (generationObserved) return ANSWER_STABLE_AFTER_GENERATION_MS;
         return ANSWER_STABLE_WITHOUT_GENERATION_MARKER_MS;
@@ -440,6 +450,10 @@
           if (finalSettleSignature !== settleSignature) {
             lastSettleSignature = finalSettleSignature;
             scheduleStableFinish(lastSettleSignature, stableDelayFor(finalSnapshot));
+            return;
+          }
+          if (!finalSnapshot.finalActionReady && !generationObserved && !hasTrustworthyMarkerlessCapture(finalSnapshot)) {
+            finish(finalSnapshot, 'markerless-capture-untrusted');
             return;
           }
           const status = finalSnapshot.finalActionReady
@@ -548,6 +562,12 @@
     });
   }
 
+  function requestRecoveryForUntrustedCapture() {
+    try {
+      document.dispatchEvent(new CustomEvent(RECOVERY_REQUEST_EVENT, { detail: { reason: 'markerless-capture-untrusted' } }));
+    } catch {}
+  }
+
   function scheduleCompletionFromRequest() {
     const requestGeneration = ++completionGeneration;
     const requestObservedAt = Date.now();
@@ -560,7 +580,12 @@
       waitForCompletedLatestAnswer().then((result) => {
         if (!isCurrentGeneration()) return;
         if (requestGeneration !== completionGeneration || token !== watchToken) return;
-        captureDiagnostic(result?.status || 'unknown', result?.snapshot || latestPromptSnapshot(), requestObservedAt, result?.generationObserved);
+        const status = result?.status || 'unknown';
+        captureDiagnostic(status, result?.snapshot || latestPromptSnapshot(), requestObservedAt, result?.generationObserved);
+        if (status === 'markerless-capture-untrusted') {
+          requestRecoveryForUntrustedCapture();
+          return;
+        }
         if (result?.snapshot?.response) sendCompletion(result.snapshot);
       }).catch(() => {
         captureDiagnostic('capture-error', latestPromptSnapshot(), requestObservedAt, false);
