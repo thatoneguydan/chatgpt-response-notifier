@@ -242,31 +242,12 @@ chrome.webRequest.onCompleted.addListener((details) => {
   signalConversationRequestCompleted(details.tabId).catch(() => {});
 }, CHATGPT_REQUEST_FILTER);
 
-async function isTabActuallyViewed(tab) {
-  if (!tab?.active || typeof tab.windowId !== 'number') return false;
-  try {
-    const windowInfo = await chrome.windows.get(tab.windowId);
-    return Boolean(windowInfo.focused);
-  } catch {
-    return false;
-  }
-}
-
-async function dismissIfActuallyViewed(tab) {
-  if (!(await isTabActuallyViewed(tab))) return false;
-  const identity = conversationFromUrl(tab.url);
-  if (!identity) return false;
-  sendNative({ type: 'toast.dismissConversation', conversationId: identity.id });
-  return true;
-}
-
-async function dismissReportedViewedConversation(message, sender) {
+async function dismissReportedInteractedConversation(message, sender) {
   const tabId = sender.tab?.id;
   if (typeof tabId !== 'number') return false;
 
   try {
     const tab = await chrome.tabs.get(tabId);
-    if (!(await isTabActuallyViewed(tab))) return false;
     const identity = conversationFromUrl(message.conversationUrl || tab.url);
     if (!identity) return false;
     sendNative({ type: 'toast.dismissConversation', conversationId: identity.id });
@@ -275,24 +256,6 @@ async function dismissReportedViewedConversation(message, sender) {
     return false;
   }
 }
-
-async function dismissCurrentlyViewedConversations() {
-  let activeTabs = [];
-  try {
-    activeTabs = await chrome.tabs.query({ active: true, url: ['https://chatgpt.com/*'] });
-  } catch {
-    return;
-  }
-
-  for (const tab of activeTabs) {
-    try { await dismissIfActuallyViewed(tab); } catch {}
-  }
-}
-
-chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (!changeInfo.url || !tab.active) return;
-  dismissIfActuallyViewed(tab).catch(() => {});
-});
 
 async function resolveConversationIdentity(initialUrl, tabId) {
   let identity = conversationFromUrl(initialUrl);
@@ -311,16 +274,30 @@ async function resolveConversationIdentity(initialUrl, tabId) {
   return null;
 }
 
+async function foregroundChromeWindow(windowId) {
+  if (typeof windowId !== 'number') return false;
+  try {
+    const windowInfo = await chrome.windows.get(windowId);
+    if (windowInfo.state === 'minimized') {
+      await chrome.windows.update(windowId, { state: 'normal' });
+    }
+    await chrome.windows.update(windowId, { focused: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function focusOrOpenConversation(conversationId, conversationUrl) {
   const tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] });
   const existing = tabs.find((tab) => conversationFromUrl(tab.url)?.id === conversationId);
   if (existing?.id !== undefined) {
+    if (typeof existing.windowId === 'number') await foregroundChromeWindow(existing.windowId);
     await chrome.tabs.update(existing.id, { active: true });
-    if (typeof existing.windowId === 'number') {
-      await chrome.windows.update(existing.windowId, { focused: true });
-    }
+    if (typeof existing.windowId === 'number') await foregroundChromeWindow(existing.windowId);
   } else {
-    await chrome.tabs.create({ url: conversationUrl, active: true });
+    const created = await chrome.tabs.create({ url: conversationUrl, active: true });
+    if (typeof created?.windowId === 'number') await foregroundChromeWindow(created.windowId);
   }
   sendNative({ type: 'toast.dismissConversation', conversationId });
 }
@@ -335,7 +312,6 @@ async function handleNativeMessage(message) {
 
   if (message.type === 'host.ready') {
     await ensureContentScriptsInChatgptTabs();
-    await dismissCurrentlyViewedConversations();
     return;
   }
 
@@ -348,8 +324,8 @@ async function handleNativeMessage(message) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type === 'CHATGPT_CONVERSATION_VIEWED') {
-    dismissReportedViewedConversation(message, sender).then((dismissed) => {
+  if (message?.type === 'CHATGPT_CONVERSATION_INTERACTED') {
+    dismissReportedInteractedConversation(message, sender).then((dismissed) => {
       sendResponse?.({ ok: dismissed });
     }).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
     return true;
