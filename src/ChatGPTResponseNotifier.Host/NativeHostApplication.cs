@@ -108,6 +108,20 @@ internal sealed class NativeHostApplication : Application
             case "toast.clearAll":
                 _toastManager!.ClearAll();
                 break;
+            case "window.foreground":
+                var foregrounded = ChromeWindowForeground.TryForeground(
+                    message.WindowTitle,
+                    message.WindowLeft,
+                    message.WindowTop,
+                    message.WindowWidth,
+                    message.WindowHeight);
+                _ = SendEventAsync(new
+                {
+                    type = "window.foregroundResult",
+                    requestId = message.RequestId,
+                    success = foregrounded
+                });
+                break;
             case "ping":
                 _ = SendEventAsync(new
                 {
