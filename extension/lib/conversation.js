@@ -63,7 +63,7 @@ export function formatNotificationTitle(projectTitle, rawSessionTitle) {
   return `${project} — ${chatTitle}`;
 }
 
-export function truncatePreview(text, maxChars = 600) {
+export function truncatePreview(text, maxChars = 300) {
   const normalized = String(text || '').replace(/\s+/g, ' ').trim();
   if (!normalized) return '';
   if (normalized.length <= maxChars) return normalized;
