@@ -25,7 +25,9 @@ jobs:
           $ErrorActionPreference = 'Stop'
           node --check .\extension\service-worker.js
           node --check .\extension\content-script.js
+          node --check .\extension\recovery-watchdog.js
           node --check .\extension\lib\conversation.js
+          node --check .\extension\lib\server-capture.js
           node --check .\extension\popup.js
 
           $manifest = Get-Content -LiteralPath .\extension\manifest.json -Raw | ConvertFrom-Json
@@ -96,7 +98,7 @@ jobs:
             gh release create $tag $managedZip $setupExe `
               --target $sourceCommit `
               --title "ChatGPT Response Notifier $version" `
-              --notes "Persistent stacked Windows ChatGPT response notifications. This release uses the localhost helper-owned updater and restores the original two-note completion chime."
+              --notes "Persistent stacked Windows ChatGPT response notifications. This release captures completed responses outside frozen background tabs and retains the localhost helper-owned updater."
             if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
           }
           else {

@@ -5,6 +5,12 @@ import {
   formatNotificationTitle,
   truncatePreview
 } from './lib/conversation.js';
+import {
+  captureIsFreshForRequest,
+  currentConversationReadUrl,
+  latestCompletedAssistant,
+  legacyConversationReadUrl
+} from './lib/server-capture.js';
 
 const BRIDGE_URL = 'ws://127.0.0.1:38473/bridge';
 const CHATGPT_REQUEST_FILTER = {
@@ -13,6 +19,18 @@ const CHATGPT_REQUEST_FILTER = {
     'https://chatgpt.com/backend-api/conversation*'
   ]
 };
+const SERVER_CAPTURE_RETRY_DELAYS_MS = [100, 350, 900, 1800, 3000];
+const SERVER_CAPTURE_FETCH_TIMEOUT_MS = 5000;
+const SERVER_CAPTURE_FRESHNESS_TOLERANCE_MS = 5000;
+const SERVER_CAPTURE_GENERIC_PREVIEW = 'Your ChatGPT response finished. Open this conversation to read it.';
+const SERVER_CAPTURE_HEADER_NAMES = new Set([
+  'authorization',
+  'chatgpt-account-id',
+  'oai-client-version',
+  'oai-device-id',
+  'x-conduit-token',
+  'x-openai-assistant-app-id'
+]);
 
 let bridgeSocket = null;
 let reconnectTimer = null;
@@ -20,6 +38,7 @@ let reconnectDelayMs = 750;
 let keepAliveTimer = null;
 const outboundQueue = [];
 const nativeRequestWaiters = new Map();
+const answerRequestContexts = new Map();
 
 function queueNativeMessage(message) {
   outboundQueue.push(message);
@@ -205,6 +224,160 @@ function isAnswerStreamRequest(details) {
   }
 }
 
+function boundedRequestContextCache() {
+  while (answerRequestContexts.size > 100) {
+    const oldest = answerRequestContexts.keys().next().value;
+    if (!oldest) break;
+    answerRequestContexts.delete(oldest);
+  }
+}
+
+function captureRequestHeaders(requestHeaders) {
+  const headers = {};
+  for (const header of requestHeaders || []) {
+    const lowerName = String(header?.name || '').trim().toLowerCase();
+    if (!SERVER_CAPTURE_HEADER_NAMES.has(lowerName)) continue;
+    if (typeof header?.value !== 'string' || !header.value) continue;
+    headers[header.name] = header.value;
+  }
+  return headers;
+}
+
+function captureAnswerRequestContext(details) {
+  if (!isAnswerStreamRequest(details)) return;
+  answerRequestContexts.set(String(details.requestId), {
+    tabId: details.tabId,
+    startedAt: Number(details.timeStamp) || Date.now(),
+    headers: captureRequestHeaders(details.requestHeaders)
+  });
+  boundedRequestContextCache();
+}
+
+function takeAnswerRequestContext(details) {
+  const key = String(details?.requestId || '');
+  const context = answerRequestContexts.get(key) || null;
+  if (key) answerRequestContexts.delete(key);
+  return context;
+}
+
+function sleep(delayMs) {
+  return new Promise((resolve) => setTimeout(resolve, Math.max(0, delayMs)));
+}
+
+async function accessTokenFromSession() {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SERVER_CAPTURE_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch('https://chatgpt.com/api/auth/session', {
+      method: 'GET',
+      credentials: 'include',
+      cache: 'no-store',
+      headers: { Accept: 'application/json' },
+      signal: controller.signal
+    });
+    if (!response.ok) return '';
+    const payload = await response.json();
+    const token = String(payload?.accessToken || payload?.access_token || '');
+    return token.length >= 20 ? token : '';
+  } catch {
+    return '';
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function serverReadHeaders(context) {
+  const headers = { Accept: 'application/json' };
+  for (const [name, value] of Object.entries(context?.headers || {})) {
+    headers[name] = value;
+  }
+  const hasAuthorization = Object.keys(headers).some((name) => name.toLowerCase() === 'authorization');
+  if (!hasAuthorization) {
+    const token = await accessTokenFromSession();
+    if (token) headers.Authorization = `Bearer ${token}`;
+  }
+  return headers;
+}
+
+async function fetchConversationJson(url, headers) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SERVER_CAPTURE_FETCH_TIMEOUT_MS);
+  try {
+    const response = await fetch(url, {
+      method: 'GET',
+      credentials: 'include',
+      cache: 'no-store',
+      headers,
+      signal: controller.signal
+    });
+    if (!response.ok) return { ok: false, status: response.status, payload: null };
+    return { ok: true, status: response.status, payload: await response.json() };
+  } catch (error) {
+    return { ok: false, status: 0, payload: null, error: String(error?.message || error) };
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function readCompletedConversation(identity, context) {
+  const headers = await serverReadHeaders(context);
+  const currentUrl = currentConversationReadUrl(identity.id);
+  const legacyUrl = legacyConversationReadUrl(identity.id);
+  const requestStartedAt = Number(context?.startedAt) || Date.now();
+  let lastStatus = 0;
+  let lastReason = 'no-completed-assistant';
+
+  for (const delayMs of SERVER_CAPTURE_RETRY_DELAYS_MS) {
+    await sleep(delayMs);
+    let result = await fetchConversationJson(currentUrl, headers);
+    let source = 'current-conversations-api';
+
+    if (!result.ok && result.status === 404) {
+      result = await fetchConversationJson(legacyUrl, headers);
+      source = 'legacy-conversation-api';
+    }
+
+    lastStatus = result.status;
+    if (!result.ok) {
+      lastReason = result.status ? `http-${result.status}` : 'network-or-timeout';
+      if (result.status === 401 || result.status === 403 || result.status === 429) break;
+      continue;
+    }
+
+    const capture = latestCompletedAssistant(result.payload);
+    if (!capture?.response) {
+      lastReason = 'no-completed-assistant';
+      continue;
+    }
+    if (!captureIsFreshForRequest(capture, requestStartedAt, SERVER_CAPTURE_FRESHNESS_TOLERANCE_MS)) {
+      lastReason = 'stale-completed-assistant';
+      continue;
+    }
+
+    return { ok: true, capture, source, status: result.status };
+  }
+
+  return { ok: false, capture: null, source: 'none', status: lastStatus, reason: lastReason };
+}
+
+function showCompletionToast(identity, response, sessionTitle, projectTitle = '') {
+  const preview = truncatePreview(response);
+  if (!identity || !preview) return null;
+  const notificationId = crypto.randomUUID();
+  sendNative({
+    type: 'toast.show',
+    notification: {
+      id: notificationId,
+      conversationId: identity.id,
+      conversationUrl: identity.url,
+      title: formatNotificationTitle(projectTitle, sessionTitle),
+      preview,
+      completedAt: new Date().toISOString()
+    }
+  });
+  return notificationId;
+}
+
 async function contentScriptIsLive(tabId) {
   try {
     const response = await chrome.tabs.sendMessage(tabId, { type: 'GET_CHATGPT_CAPTURE_DIAGNOSTIC' });
@@ -218,10 +391,6 @@ async function injectCurrentContentScripts(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId },
     func: () => {
-      // A disabled/re-enabled extension can leave same-version globals in the
-      // existing isolated page world after the old runtime listeners are dead.
-      // Invalidate the old generation before reinjecting so stale listeners
-      // cannot become current again, then clear version guards for both scripts.
       globalThis.__chatgptNativeNotifierGeneration =
         (Number(globalThis.__chatgptNativeNotifierGeneration) || 0) + 1;
       globalThis.__chatgptNativeNotifierVersion = '';
@@ -256,21 +425,92 @@ async function signalConversationRequestCompleted(tabId) {
   const message = { type: 'CHATGPT_CONVERSATION_REQUEST_COMPLETED' };
   try {
     await chrome.tabs.sendMessage(tabId, message);
-    return;
+    return true;
   } catch {}
 
   try {
     await injectCurrentContentScripts(tabId);
     await chrome.tabs.sendMessage(tabId, message);
+    return true;
   } catch (error) {
     console.warn('Could not arm completion watcher', error);
+    return false;
   }
 }
 
+async function resolveConversationIdentity(initialUrl, tabId) {
+  let identity = conversationFromUrl(initialUrl);
+  if (identity) return identity;
+
+  for (let attempt = 0; attempt < 10; attempt += 1) {
+    await sleep(250);
+    try {
+      const tab = await chrome.tabs.get(tabId);
+      identity = conversationFromUrl(tab.url);
+      if (identity) return identity;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+async function handleCompletedAnswerRequest(details) {
+  const context = takeAnswerRequestContext(details) || {
+    tabId: details.tabId,
+    startedAt: Number(details.timeStamp) || Date.now(),
+    headers: {}
+  };
+
+  let tab = null;
+  try { tab = await chrome.tabs.get(details.tabId); } catch {}
+  const identity = await resolveConversationIdentity(tab?.url || '', details.tabId);
+  if (!identity) {
+    await signalConversationRequestCompleted(details.tabId);
+    return;
+  }
+
+  const result = await readCompletedConversation(identity, context);
+  if (result.ok && result.capture?.response) {
+    showCompletionToast(
+      identity,
+      result.capture.response,
+      result.capture.title || tab?.title || 'ChatGPT',
+      ''
+    );
+    return;
+  }
+
+  showCompletionToast(identity, SERVER_CAPTURE_GENERIC_PREVIEW, tab?.title || 'ChatGPT', '');
+  console.warn('Background-safe ChatGPT response capture fell back to a generic completion alert', {
+    conversationId: identity.id,
+    frozen: Boolean(tab?.frozen),
+    discarded: Boolean(tab?.discarded),
+    reason: result.reason || 'unknown',
+    status: result.status || 0
+  });
+}
+
+chrome.webRequest.onBeforeSendHeaders.addListener(
+  captureAnswerRequestContext,
+  CHATGPT_REQUEST_FILTER,
+  ['requestHeaders', 'extraHeaders']
+);
+
+chrome.webRequest.onErrorOccurred.addListener((details) => {
+  if (!isAnswerStreamRequest(details)) return;
+  takeAnswerRequestContext(details);
+}, CHATGPT_REQUEST_FILTER);
+
 chrome.webRequest.onCompleted.addListener((details) => {
   if (!isAnswerStreamRequest(details)) return;
-  if (details.statusCode < 200 || details.statusCode >= 300) return;
-  signalConversationRequestCompleted(details.tabId).catch(() => {});
+  if (details.statusCode < 200 || details.statusCode >= 300) {
+    takeAnswerRequestContext(details);
+    return;
+  }
+  handleCompletedAnswerRequest(details).catch((error) => {
+    console.warn('Background-safe ChatGPT completion handling failed', error);
+  });
 }, CHATGPT_REQUEST_FILTER);
 
 async function dismissReportedUserInteraction(message, sender) {
@@ -286,23 +526,6 @@ async function dismissReportedUserInteraction(message, sender) {
   } catch {
     return false;
   }
-}
-
-async function resolveConversationIdentity(initialUrl, tabId) {
-  let identity = conversationFromUrl(initialUrl);
-  if (identity) return identity;
-
-  for (let attempt = 0; attempt < 10; attempt += 1) {
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    try {
-      const tab = await chrome.tabs.get(tabId);
-      identity = conversationFromUrl(tab.url);
-      if (identity) return identity;
-    } catch {
-      return null;
-    }
-  }
-  return null;
 }
 
 async function foregroundChromeWindow(windowId) {
@@ -326,8 +549,7 @@ function finiteWindowCoordinate(value) {
 async function requestNativeChromeForeground(tabId, windowId) {
   if (typeof tabId !== 'number' || typeof windowId !== 'number') return false;
   try {
-    // Give Chrome a moment to update the native window title after activating the tab.
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await sleep(50);
     const [tabInfo, windowInfo] = await Promise.all([
       chrome.tabs.get(tabId),
       chrome.windows.get(windowId)
@@ -443,25 +665,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
-      const preview = truncatePreview(message.response);
-      if (!preview) {
-        sendResponse?.({ ok: false, error: 'No readable assistant response was captured.' });
-        return;
-      }
-
-      const notificationId = crypto.randomUUID();
-      sendNative({
-        type: 'toast.show',
-        notification: {
-          id: notificationId,
-          conversationId: identity.id,
-          conversationUrl: identity.url,
-          title: formatNotificationTitle(message.projectTitle, message.sessionTitle),
-          preview,
-          completedAt: new Date().toISOString()
-        }
-      });
-      sendResponse?.({ ok: true, notificationId });
+      const notificationId = showCompletionToast(
+        identity,
+        message.response,
+        message.sessionTitle,
+        message.projectTitle
+      );
+      sendResponse?.(notificationId
+        ? { ok: true, notificationId }
+        : { ok: false, error: 'No readable assistant response was captured.' });
     }).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
     return true;
   }
