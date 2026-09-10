@@ -51,20 +51,39 @@ test('capture is restricted to the canonical newest conversation turn', () => {
   assert.doesNotMatch(contentScript, /for \(let index = turns\.length - 1; index >= 0/);
 });
 
-test('real completion requires the final response action in that newest turn', () => {
+test('real completion follows live ChatGPT streaming state instead of requiring a Copy action', () => {
+  assert.match(contentScript, /function hasVisibleStopButton\(\)/);
+  assert.match(contentScript, /button\[data-testid="stop-button"\]/);
+  assert.match(contentScript, /button\[data-testid="fruitjuice-stop-button"\]/);
+  assert.match(contentScript, /function hasBusyAssistantSignal\(turn\)/);
+  assert.match(contentScript, /aria-busy="true"/);
+  assert.match(contentScript, /generationActive: stopButtonActive \|\| assistantBusy/);
+  assert.match(contentScript, /ANSWER_STABLE_AFTER_GENERATION_MS\s*=\s*1200/);
+  assert.match(contentScript, /ANSWER_STABLE_WITHOUT_GENERATION_MARKER_MS\s*=\s*2500/);
+  assert.match(contentScript, /waitForCompletedLatestAnswer/);
+  assert.doesNotMatch(contentScript, /if \(!text \|\| !snapshot\?\.finalActionReady\)/);
+});
+
+test('final response action remains an optional fast confirmation', () => {
   assert.match(contentScript, /function hasFinalResponseAction\(turn\)/);
   assert.match(contentScript, /copy-turn-action-button/);
   assert.match(contentScript, /Copy response/);
-  assert.match(contentScript, /finalActionReady: hasFinalResponseAction\(assistantTurn\)/);
-  assert.match(contentScript, /if \(!text \|\| !snapshot\?\.finalActionReady\)/);
-  assert.match(contentScript, /ANSWER_STABLE_AFTER_ACTION_MS\s*=\s*500/);
-  assert.match(contentScript, /FINAL_ACTION_TIMEOUT_MS\s*=\s*12000/);
-  assert.match(contentScript, /snapshot\.finalActionReady\) sendCompletion/);
+  assert.match(contentScript, /ANSWER_STABLE_AFTER_FINAL_ACTION_MS\s*=\s*500/);
+  assert.match(contentScript, /if \(snapshot\?\.finalActionReady\) return ANSWER_STABLE_AFTER_FINAL_ACTION_MS/);
+  assert.match(contentScript, /if \(snapshot\.generationActive && !snapshot\.finalActionReady\) return;/);
 });
 
-test('timeout fails closed instead of emitting a partial response without a final action', () => {
-  assert.match(contentScript, /timeout-no-final-action/);
-  assert.match(contentScript, /finalSnapshot\?\.response && finalSnapshot\.finalActionReady \? finalSnapshot : null/);
+test('completion watcher observes page-wide stop-button and turn-local busy transitions', () => {
+  assert.match(contentScript, /const observedRoot = document\.body \|\| document\.documentElement \|\| root/);
+  assert.match(contentScript, /observer\.observe\(observedRoot/);
+  assert.match(contentScript, /'aria-busy'/);
+  assert.match(contentScript, /generationObserved = true/);
+  assert.match(contentScript, /cancelActiveCompletionWait/);
+});
+
+test('timeout fails closed while generation remains active or response is empty', () => {
+  assert.match(contentScript, /timeout-still-generating-or-empty/);
+  assert.match(contentScript, /!finalSnapshot\.generationActive \|\| finalSnapshot\.finalActionReady/);
   assert.doesNotMatch(contentScript, /Response finished\./);
   assert.match(serviceWorker, /No readable assistant response was captured/);
 });
@@ -77,13 +96,16 @@ test('project-aware notification metadata cleans the current Open <name> project
   assert.match(serviceWorker, /formatNotificationTitle\(message\.projectTitle, message\.sessionTitle\)/);
 });
 
-test('popup exposes a bounded local capture diagnostic without logging response text', () => {
+test('popup exposes bounded local capture diagnostics without logging response text', () => {
   assert.match(contentScript, /lastCaptureDiagnostic/);
   assert.match(contentScript, /responseLength/);
+  assert.match(contentScript, /generationActive/);
+  assert.match(contentScript, /generationObserved/);
   assert.match(contentScript, /finalActionReady/);
   assert.match(contentScript, /GET_CHATGPT_CAPTURE_DIAGNOSTIC/);
   assert.match(popupHtml, /id="captureStatus"/);
   assert.match(popupJs, /GET_CHATGPT_CAPTURE_DIAGNOSTIC/);
+  assert.match(popupJs, /streaming seen/);
   assert.match(popupJs, /final marker/);
   assert.doesNotMatch(popupJs, /capture\.response\b/);
 });
