@@ -51,7 +51,7 @@ async function refreshCaptureStatus() {
       captureStatus.textContent = 'Last capture: none recorded in this tab yet.';
       return;
     }
-    captureStatus.textContent = `Last capture: ${capture.status}; ${capture.responseLength || 0} chars; source ${capture.captureSource || 'none'}; turn ${capture.turnTextLength || 0}; surfaces ${capture.responseSurfaceCount || 0}/${capture.responseSurfaceTextLength || 0}; assistant nodes ${capture.assistantRoleNodeCount || 0}/${capture.assistantRoleTextLength || 0}; streaming ${capture.generationActive ? 'yes' : 'no'}; streaming seen ${capture.generationObserved ? 'yes' : 'no'}; final marker ${capture.finalActionReady ? 'yes' : 'no'}; ${capture.elapsedMs || 0} ms.`;
+    captureStatus.textContent = `Last capture: ${capture.status}; ${capture.responseLength || 0} chars; source ${capture.captureSource || 'none'}; turn ${capture.turnTextLength || 0}; surfaces ${capture.responseSurfaceCount || 0}/${capture.responseSurfaceTextLength || 0}; assistant nodes ${capture.assistantRoleNodeCount || 0}/${capture.assistantRoleTextLength || 0}; render ${capture.renderSignatureLength || 0}; streaming ${capture.generationActive ? 'yes' : 'no'}; streaming seen ${capture.generationObserved ? 'yes' : 'no'}; result streaming ${capture.resultStreamingActive ? 'yes' : 'no'}; final marker ${capture.finalActionReady ? 'yes' : 'no'}; ${capture.elapsedMs || 0} ms.`;
   } catch {
     captureStatus.textContent = 'Last capture: unavailable for the current tab.';
   }

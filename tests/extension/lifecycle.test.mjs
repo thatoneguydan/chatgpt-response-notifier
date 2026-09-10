@@ -66,11 +66,22 @@ test('real completion follows live ChatGPT streaming state instead of requiring 
   assert.match(contentScript, /button\[data-testid="fruitjuice-stop-button"\]/);
   assert.match(contentScript, /function hasBusyAssistantSignal\(turn\)/);
   assert.match(contentScript, /aria-busy="true"/);
-  assert.match(contentScript, /generationActive: stopButtonActive \|\| assistantBusy/);
+  assert.match(contentScript, /function hasResultStreamingSignal\(turn\)/);
+  assert.match(contentScript, /\.result-streaming/);
+  assert.match(contentScript, /generationActive: stopButtonActive \|\| assistantBusy \|\| resultStreamingActive/);
   assert.match(contentScript, /ANSWER_STABLE_AFTER_GENERATION_MS\s*=\s*1200/);
-  assert.match(contentScript, /ANSWER_STABLE_WITHOUT_GENERATION_MARKER_MS\s*=\s*2500/);
+  assert.match(contentScript, /ANSWER_STABLE_WITHOUT_GENERATION_MARKER_MS\s*=\s*4000/);
   assert.match(contentScript, /waitForCompletedLatestAnswer/);
   assert.doesNotMatch(contentScript, /if \(!text \|\| !snapshot\?\.finalActionReady\)/);
+});
+
+test('formatted response DOM participates in the stability fingerprint', () => {
+  assert.match(contentScript, /function responseRenderSignature\(turn, response\)/);
+  assert.match(contentScript, /String\(node\.innerHTML \|\| ''\)\.length/);
+  assert.match(contentScript, /renderSignature/);
+  assert.match(contentScript, /lastSignature/);
+  assert.match(contentScript, /finalSnapshot\.renderSignature !== signature/);
+  assert.doesNotMatch(contentScript, /let lastText = ''/);
 });
 
 test('busy-state detection checks the whole latest turn', () => {
@@ -118,8 +129,10 @@ test('popup exposes bounded local capture diagnostics without logging response t
   assert.match(contentScript, /turnTextLength/);
   assert.match(contentScript, /responseSurfaceCount/);
   assert.match(contentScript, /assistantRoleNodeCount/);
+  assert.match(contentScript, /renderSignatureLength/);
   assert.match(contentScript, /generationActive/);
   assert.match(contentScript, /generationObserved/);
+  assert.match(contentScript, /resultStreamingActive/);
   assert.match(contentScript, /finalActionReady/);
   assert.match(contentScript, /GET_CHATGPT_CAPTURE_DIAGNOSTIC/);
   assert.match(popupHtml, /id="captureStatus"/);
@@ -127,7 +140,9 @@ test('popup exposes bounded local capture diagnostics without logging response t
   assert.match(popupJs, /source /);
   assert.match(popupJs, /surfaces /);
   assert.match(popupJs, /assistant nodes /);
+  assert.match(popupJs, /render /);
   assert.match(popupJs, /streaming seen/);
+  assert.match(popupJs, /result streaming/);
   assert.match(popupJs, /final marker/);
   assert.doesNotMatch(popupJs, /capture\.response\b/);
 });
