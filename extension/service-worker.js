@@ -205,6 +205,22 @@ function isAnswerStreamRequest(details) {
   }
 }
 
+async function ensureContentScriptsInChatgptTabs() {
+  let tabs = [];
+  try {
+    tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] });
+  } catch {
+    return;
+  }
+
+  for (const tab of tabs) {
+    if (typeof tab.id !== 'number') continue;
+    try {
+      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content-script.js'] });
+    } catch {}
+  }
+}
+
 async function signalConversationRequestCompleted(tabId) {
   const message = { type: 'CHATGPT_CONVERSATION_REQUEST_COMPLETED' };
   try {
@@ -318,6 +334,7 @@ async function handleNativeMessage(message) {
   }
 
   if (message.type === 'host.ready') {
+    await ensureContentScriptsInChatgptTabs();
     await dismissCurrentlyViewedConversations();
     return;
   }
@@ -422,3 +439,4 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 connectNativeHost();
+ensureContentScriptsInChatgptTabs().catch(() => {});
