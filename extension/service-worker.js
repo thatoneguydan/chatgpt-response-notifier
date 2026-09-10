@@ -216,7 +216,10 @@ async function ensureContentScriptsInChatgptTabs() {
   for (const tab of tabs) {
     if (typeof tab.id !== 'number') continue;
     try {
-      await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['content-script.js'] });
+      await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: ['content-script.js', 'recovery-watchdog.js']
+      });
     } catch {}
   }
 }
@@ -229,7 +232,7 @@ async function signalConversationRequestCompleted(tabId) {
   } catch {}
 
   try {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['content-script.js'] });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['content-script.js', 'recovery-watchdog.js'] });
     await chrome.tabs.sendMessage(tabId, message);
   } catch (error) {
     console.warn('Could not arm completion watcher', error);
@@ -242,7 +245,7 @@ chrome.webRequest.onCompleted.addListener((details) => {
   signalConversationRequestCompleted(details.tabId).catch(() => {});
 }, CHATGPT_REQUEST_FILTER);
 
-async function dismissReportedInteractedConversation(message, sender) {
+async function dismissReportedUserInteraction(message, sender) {
   const tabId = sender.tab?.id;
   if (typeof tabId !== 'number') return false;
 
@@ -302,6 +305,31 @@ async function focusOrOpenConversation(conversationId, conversationUrl) {
   sendNative({ type: 'toast.dismissConversation', conversationId });
 }
 
+async function showRecoveryAttention(message, sender) {
+  const tabId = sender.tab?.id;
+  if (typeof tabId !== 'number') return null;
+  const identity = await resolveConversationIdentity(message.conversationUrl || sender.tab?.url, tabId);
+  if (!identity) return null;
+
+  const preview = truncatePreview(message.preview || 'This ChatGPT conversation needs attention after automatic recovery attempts.');
+  if (!preview) return null;
+
+  const contextTitle = formatNotificationTitle('', message.sessionTitle || sender.tab?.title || 'ChatGPT');
+  const notificationId = crypto.randomUUID();
+  sendNative({
+    type: 'toast.show',
+    notification: {
+      id: notificationId,
+      conversationId: identity.id,
+      conversationUrl: identity.url,
+      title: `ChatGPT needs attention — ${contextTitle}`,
+      preview,
+      completedAt: new Date().toISOString()
+    }
+  });
+  return notificationId;
+}
+
 async function handleNativeMessage(message) {
   if (!message || typeof message !== 'object') return;
   settleNativeRequest(message);
@@ -324,9 +352,18 @@ async function handleNativeMessage(message) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type === 'CHATGPT_CONVERSATION_INTERACTED') {
-    dismissReportedInteractedConversation(message, sender).then((dismissed) => {
+  if (message?.type === 'CHATGPT_CONVERSATION_USER_INTERACTED') {
+    dismissReportedUserInteraction(message, sender).then((dismissed) => {
       sendResponse?.({ ok: dismissed });
+    }).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
+    return true;
+  }
+
+  if (message?.type === 'CHATGPT_RECOVERY_ATTENTION') {
+    showRecoveryAttention(message, sender).then((notificationId) => {
+      sendResponse?.(notificationId
+        ? { ok: true, notificationId }
+        : { ok: false, error: 'Could not resolve this conversation for a recovery alert.' });
     }).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
     return true;
   }
