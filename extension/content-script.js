@@ -13,11 +13,14 @@
   const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
   const COMPLETION_TIMEOUT_MS = 1800000;
   const ANSWER_STABLE_AFTER_FINAL_ACTION_MS = 500;
+  const ANSWER_STABLE_AFTER_UNOBSERVED_FINAL_ACTION_MS = 3000;
   const ANSWER_STABLE_AFTER_GENERATION_MS = 1200;
   const ANSWER_STABLE_WITHOUT_GENERATION_MARKER_MS = 45000;
   const ANSWER_CHECK_THROTTLE_MS = 100;
   const REQUEST_RENDER_GRACE_MS = 100;
   const INTERACTION_SIGNAL_DEDUPE_MS = 750;
+  const CAPTURE_DIAGNOSTIC_HISTORY_LIMIT = 8;
+  const CAPTURE_DIAGNOSTIC_HISTORY_KEY = '__chatgptNativeNotifierCaptureHistoryV1';
   let watchToken = 0;
   let completionGeneration = 0;
   let lastSentFingerprint = '';
@@ -26,7 +29,8 @@
   let lastInteractionAt = 0;
   let completionTimer = null;
   let cancelActiveCompletionWait = null;
-  let lastCaptureDiagnostic = null;
+  let captureDiagnosticHistory = readCaptureDiagnosticHistory();
+  let lastCaptureDiagnostic = captureDiagnosticHistory[0] || null;
 
   function isCurrentGeneration() {
     return globalThis.__chatgptNativeNotifierGeneration === generation;
@@ -43,6 +47,27 @@
     } catch {
       return Promise.resolve(null);
     }
+  }
+
+  function readCaptureDiagnosticHistory() {
+    try {
+      const parsed = JSON.parse(sessionStorage.getItem(CAPTURE_DIAGNOSTIC_HISTORY_KEY) || '[]');
+      if (!Array.isArray(parsed)) return [];
+      return parsed
+        .filter((entry) => entry && typeof entry === 'object')
+        .slice(0, CAPTURE_DIAGNOSTIC_HISTORY_LIMIT);
+    } catch {
+      return [];
+    }
+  }
+
+  function persistCaptureDiagnosticHistory() {
+    try {
+      sessionStorage.setItem(
+        CAPTURE_DIAGNOSTIC_HISTORY_KEY,
+        JSON.stringify(captureDiagnosticHistory.slice(0, CAPTURE_DIAGNOSTIC_HISTORY_LIMIT))
+      );
+    } catch {}
   }
 
   function conversationRoot() {
@@ -276,8 +301,6 @@
     const turns = turnNodes();
     if (turns.length === 0) return null;
 
-    // Never scan backwards to an older assistant answer. The current response
-    // must live in the newest canonical conversation turn; otherwise we wait.
     const assistantIndex = turns.length - 1;
     const assistantTurn = turns[assistantIndex];
     const capture = assistantCapture(assistantTurn);
@@ -290,10 +313,7 @@
     const renderSignature = responseRenderSignature(assistantTurn, response);
 
     return {
-      promptKey: [
-        location.pathname,
-        promptTurn?.getAttribute('data-testid') || `prompt-before-${assistantIndex}`
-      ].join('|'),
+      promptKey: [location.pathname, promptTurn?.getAttribute('data-testid') || `prompt-before-${assistantIndex}`].join('|'),
       assistantKey: assistantTurn?.getAttribute('data-testid') || `assistant-${assistantIndex}`,
       response,
       captureSource: capture.source,
@@ -312,8 +332,18 @@
     };
   }
 
+  function currentProjectId() {
+    try {
+      const segments = location.pathname.split('/').filter(Boolean);
+      for (let index = 0; index < segments.length - 1; index += 1) {
+        if (segments[index] === 'g' && segments[index + 1]?.startsWith('g-p-')) return segments[index + 1];
+      }
+    } catch {}
+    return '';
+  }
+
   function captureDiagnostic(status, snapshot, requestObservedAt, generationObserved = false) {
-    lastCaptureDiagnostic = {
+    const diagnostic = {
       status,
       responseLength: Number(snapshot?.response?.length || 0),
       captureSource: String(snapshot?.captureSource || 'none'),
@@ -332,8 +362,12 @@
       resultStreamingActive: Boolean(snapshot?.resultStreamingActive),
       elapsedMs: Math.max(0, Date.now() - requestObservedAt),
       extensionVersion: scriptVersion,
-      observedAt: new Date().toISOString()
+      observedAt: new Date().toISOString(),
+      projectContext: Boolean(currentProjectId())
     };
+    lastCaptureDiagnostic = diagnostic;
+    captureDiagnosticHistory = [diagnostic, ...captureDiagnosticHistory].slice(0, CAPTURE_DIAGNOSTIC_HISTORY_LIMIT);
+    persistCaptureDiagnosticHistory();
   }
 
   function waitForCompletedLatestAnswer() {
@@ -381,7 +415,11 @@
       };
 
       const stableDelayFor = (snapshot) => {
-        if (snapshot?.finalActionReady) return ANSWER_STABLE_AFTER_FINAL_ACTION_MS;
+        if (snapshot?.finalActionReady) {
+          return generationObserved
+            ? ANSWER_STABLE_AFTER_FINAL_ACTION_MS
+            : ANSWER_STABLE_AFTER_UNOBSERVED_FINAL_ACTION_MS;
+        }
         if (generationObserved) return ANSWER_STABLE_AFTER_GENERATION_MS;
         return ANSWER_STABLE_WITHOUT_GENERATION_MARKER_MS;
       };
@@ -451,9 +489,7 @@
       timeoutId = setTimeout(() => {
         const finalSnapshot = latestPromptSnapshot();
         finish(
-          finalSnapshot?.response && (!finalSnapshot.generationActive || finalSnapshot.finalActionReady)
-            ? finalSnapshot
-            : null,
+          finalSnapshot?.response && (!finalSnapshot.generationActive || finalSnapshot.finalActionReady) ? finalSnapshot : null,
           finalSnapshot?.response && (!finalSnapshot.generationActive || finalSnapshot.finalActionReady)
             ? 'completion-timeout-idle-verified'
             : 'timeout-still-generating-or-empty'
@@ -461,16 +497,6 @@
       }, COMPLETION_TIMEOUT_MS);
       check();
     });
-  }
-
-  function currentProjectId() {
-    try {
-      const segments = location.pathname.split('/').filter(Boolean);
-      for (let index = 0; index < segments.length - 1; index += 1) {
-        if (segments[index] === 'g' && segments[index + 1]?.startsWith('g-p-')) return segments[index + 1];
-      }
-    } catch {}
-    return '';
   }
 
   function cleanProjectLabel(rawLabel) {
@@ -511,7 +537,6 @@
     if (snapshot.generationActive && !snapshot.finalActionReady) return;
     const fingerprint = `${snapshot.promptKey}|${snapshot.assistantKey}|${snapshot.response.slice(0, 1000)}`;
     if (fingerprint === lastSentFingerprint) return;
-
     lastSentFingerprint = fingerprint;
     safeRuntimeSendMessage({
       type: 'CHATGPT_RESPONSE_COMPLETE',
@@ -535,12 +560,7 @@
       waitForCompletedLatestAnswer().then((result) => {
         if (!isCurrentGeneration()) return;
         if (requestGeneration !== completionGeneration || token !== watchToken) return;
-        captureDiagnostic(
-          result?.status || 'unknown',
-          result?.snapshot || latestPromptSnapshot(),
-          requestObservedAt,
-          result?.generationObserved
-        );
+        captureDiagnostic(result?.status || 'unknown', result?.snapshot || latestPromptSnapshot(), requestObservedAt, result?.generationObserved);
         if (result?.snapshot?.response) sendCompletion(result.snapshot);
       }).catch(() => {
         captureDiagnostic('capture-error', latestPromptSnapshot(), requestObservedAt, false);
@@ -583,7 +603,7 @@
         return false;
       }
       if (message?.type === 'GET_CHATGPT_CAPTURE_DIAGNOSTIC') {
-        sendResponse?.({ ok: true, capture: lastCaptureDiagnostic });
+        sendResponse?.({ ok: true, capture: lastCaptureDiagnostic, history: captureDiagnosticHistory });
         return false;
       }
       return false;
