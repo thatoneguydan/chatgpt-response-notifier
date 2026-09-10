@@ -11,12 +11,14 @@
   globalThis.__chatgptNativeNotifierInstalled = true;
 
   const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
-  const FINAL_TURN_WAIT_MS = 30000;
-  const ANSWER_CHECK_THROTTLE_MS = 150;
-  const RENDER_GRACE_MS = 650;
+  const FINAL_RENDER_TIMEOUT_MS = 8000;
+  const ANSWER_STABLE_MS = 700;
+  const ANSWER_CHECK_THROTTLE_MS = 100;
+  const REQUEST_RENDER_GRACE_MS = 250;
   const VIEW_SIGNAL_DELAY_MS = 80;
   const VIEW_SIGNAL_DEDUPE_MS = 750;
   let watchToken = 0;
+  let completionGeneration = 0;
   let lastSentFingerprint = '';
   let suppressUntilEpoch = 0;
   let viewSignalTimer = null;
@@ -41,12 +43,16 @@
     }
   }
 
+  function conversationRoot() {
+    try { return document.querySelector('main'); } catch { return null; }
+  }
+
   function turnNodes() {
+    const root = conversationRoot();
+    if (!root) return [];
     try {
-      const nodes = Array.from(document.querySelectorAll(
-        'article[data-testid*="conversation-turn"], [data-testid^="conversation-turn-"]'
-      ));
-      return nodes.filter((node, index) => nodes.findIndex((candidate) => candidate === node) === index);
+      return Array.from(root.querySelectorAll('[data-testid^="conversation-turn-"]'))
+        .filter((node) => node instanceof HTMLElement);
     } catch {
       return [];
     }
@@ -77,41 +83,50 @@
         .join(' ')).toLowerCase();
       if (/\b(chatgpt|assistant)\s+said\b/.test(labelText)) return 'assistant';
       if (/\b(you|user)\s+said\b/.test(labelText)) return 'user';
-
       if (turn.querySelector('.markdown, [class*="prose"]')) return 'assistant';
     } catch {}
     return '';
   }
 
+  function isRenderedElement(node) {
+    if (!(node instanceof HTMLElement)) return false;
+    try {
+      const style = getComputedStyle(node);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+      const rect = node.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
+    } catch {
+      return true;
+    }
+  }
+
   function readableNodeText(node) {
     if (!node) return '';
-    try {
-      return normalize(node.innerText || node.textContent || '');
-    } catch {
-      return '';
-    }
+    try { return normalize(node.innerText || node.textContent || ''); } catch { return ''; }
   }
 
   function assistantText(turn) {
     if (!turn) return '';
     try {
+      if (roleOf(turn) === 'user') return '';
       const directAssistant = turn.matches?.('[data-message-author-role="assistant"], [data-author="assistant"]')
         ? turn
         : turn.querySelector('[data-message-author-role="assistant"], [data-author="assistant"]');
       const scope = directAssistant || turn;
-
-      const renderedNodes = Array.from(scope.querySelectorAll('.markdown, [class*="prose"]'));
-      if (renderedNodes.length > 0) {
-        const rendered = normalize(renderedNodes.map(readableNodeText).filter(Boolean).join(' '));
-        if (rendered) return rendered;
+      const renderedTexts = Array.from(scope.querySelectorAll('.markdown, [class*="prose"]'))
+        .filter(isRenderedElement)
+        .map(readableNodeText)
+        .filter(Boolean);
+      if (renderedTexts.length > 0) {
+        const unique = [...new Set(renderedTexts)];
+        unique.sort((left, right) => right.length - left.length);
+        if (unique[0]) return unique[0];
       }
-
       if (directAssistant || roleOf(turn) === 'assistant') {
-        const fallback = readableNodeText(scope)
+        return normalize(readableNodeText(scope)
           .replace(/^\s*(ChatGPT|Assistant)\s+said:\s*/i, '')
           .replace(/\s+(Copy|Good response|Bad response|Read aloud|Share|Regenerate)\s*$/i, '')
-          .trim();
-        return normalize(fallback);
+          .trim());
       }
     } catch {}
     return '';
@@ -120,129 +135,70 @@
   function latestPromptSnapshot() {
     const turns = turnNodes();
     if (turns.length === 0) return null;
-
-    let assistantIndex = -1;
-    let response = '';
-    for (let index = turns.length - 1; index >= 0; index -= 1) {
-      const text = assistantText(turns[index]);
-      if (!text) continue;
-      assistantIndex = index;
-      response = text;
-      break;
-    }
-
-    let latestUserIndex = -1;
-    const userSearchEnd = assistantIndex >= 0 ? assistantIndex - 1 : turns.length - 1;
-    for (let index = userSearchEnd; index >= 0; index -= 1) {
-      if (roleOf(turns[index]) === 'user') {
-        latestUserIndex = index;
-        break;
-      }
-    }
-
-    if (latestUserIndex < 0 && assistantIndex > 0) {
-      for (let index = assistantIndex - 1; index >= 0; index -= 1) {
-        if (roleOf(turns[index]) !== 'assistant') {
-          latestUserIndex = index;
-          break;
-        }
-      }
-    }
-
-    const userTurn = latestUserIndex >= 0 ? turns[latestUserIndex] : null;
-    const promptKey = [
-      location.pathname,
-      userTurn?.getAttribute('data-testid') || `prompt-before-${assistantIndex}`
-    ].join('|');
-
-    if (!response || assistantIndex < 0) {
-      return { promptKey, assistantKey: '', response: '' };
-    }
-
+    const assistantIndex = turns.length - 1;
     const assistantTurn = turns[assistantIndex];
+    const response = assistantText(assistantTurn);
+    const promptTurn = assistantIndex > 0 ? turns[assistantIndex - 1] : null;
     return {
-      promptKey,
+      promptKey: [location.pathname, promptTurn?.getAttribute('data-testid') || `prompt-before-${assistantIndex}`].join('|'),
       assistantKey: assistantTurn?.getAttribute('data-testid') || `assistant-${assistantIndex}`,
       response
     };
   }
 
-  function answerBoundToLatestPrompt() {
-    return latestPromptSnapshot()?.response || '';
-  }
-
-  function conversationObserverRoot() {
-    const turns = turnNodes();
-    const latestTurn = turns[turns.length - 1];
-    if (latestTurn) {
-      const main = latestTurn.closest?.('main');
-      if (main) return main;
-      if (latestTurn.parentElement) return latestTurn.parentElement;
-    }
-    return document.querySelector('main') || document.body || document.documentElement;
-  }
-
-  function waitForAnswerBoundToLatestPrompt() {
-    const immediate = answerBoundToLatestPrompt();
-    if (immediate) return Promise.resolve(immediate);
-
+  function waitForStableLatestAnswer() {
     return new Promise((resolve) => {
-      let settled = false;
-      let observer = null;
-      let timeoutId = null;
-      let throttleId = null;
-      let frameId = null;
-      let lastCheckAt = 0;
-
-      const cleanupScheduledCheck = () => {
-        if (throttleId !== null) {
-          clearTimeout(throttleId);
-          throttleId = null;
-        }
-        if (frameId !== null && typeof cancelAnimationFrame === 'function') {
-          cancelAnimationFrame(frameId);
-          frameId = null;
-        }
+      const root = conversationRoot();
+      if (!root) return resolve(null);
+      let settled = false, observer = null, timeoutId = null, throttleId = null, stableId = null, lastText = '';
+      const cleanup = () => {
+        observer?.disconnect();
+        if (timeoutId !== null) clearTimeout(timeoutId);
+        if (throttleId !== null) clearTimeout(throttleId);
+        if (stableId !== null) clearTimeout(stableId);
       };
-
-      const finish = (text) => {
+      const finish = (snapshot) => {
         if (settled) return;
         settled = true;
-        if (observer) observer.disconnect();
-        if (timeoutId !== null) clearTimeout(timeoutId);
-        cleanupScheduledCheck();
-        resolve(text);
+        cleanup();
+        resolve(snapshot?.response ? snapshot : null);
       };
-
+      const scheduleStableFinish = (text) => {
+        if (stableId !== null) clearTimeout(stableId);
+        stableId = setTimeout(() => {
+          stableId = null;
+          if (!isCurrentGeneration()) return finish(null);
+          const finalSnapshot = latestPromptSnapshot();
+          if (!finalSnapshot?.response) return;
+          if (finalSnapshot.response !== text) {
+            lastText = finalSnapshot.response;
+            scheduleStableFinish(lastText);
+            return;
+          }
+          finish(finalSnapshot);
+        }, ANSWER_STABLE_MS);
+      };
       const check = () => {
+        throttleId = null;
         if (settled || !isCurrentGeneration()) return;
-        lastCheckAt = performance.now();
-        const text = answerBoundToLatestPrompt();
-        if (text) finish(text);
+        const snapshot = latestPromptSnapshot();
+        const text = snapshot?.response || '';
+        if (!text) {
+          lastText = '';
+          if (stableId !== null) { clearTimeout(stableId); stableId = null; }
+          return;
+        }
+        if (text === lastText && stableId !== null) return;
+        lastText = text;
+        scheduleStableFinish(text);
       };
-
       const scheduleCheck = () => {
-        if (settled || !isCurrentGeneration() || throttleId !== null || frameId !== null) return;
-        const elapsed = performance.now() - lastCheckAt;
-        const delay = Math.max(0, ANSWER_CHECK_THROTTLE_MS - elapsed);
-        throttleId = setTimeout(() => {
-          throttleId = null;
-          const run = () => {
-            frameId = null;
-            check();
-          };
-          if (typeof requestAnimationFrame === 'function') frameId = requestAnimationFrame(run);
-          else run();
-        }, delay);
+        if (settled || throttleId !== null) return;
+        throttleId = setTimeout(check, ANSWER_CHECK_THROTTLE_MS);
       };
-
-      const root = conversationObserverRoot();
-      if (root && typeof MutationObserver === 'function') {
-        observer = new MutationObserver(scheduleCheck);
-        observer.observe(root, { childList: true, subtree: true, characterData: true, attributes: true });
-      }
-
-      timeoutId = setTimeout(() => finish(answerBoundToLatestPrompt()), FINAL_TURN_WAIT_MS);
+      observer = new MutationObserver(scheduleCheck);
+      observer.observe(root, { childList: true, subtree: true, characterData: true, attributes: true });
+      timeoutId = setTimeout(() => finish(latestPromptSnapshot()), FINAL_RENDER_TIMEOUT_MS);
       check();
     });
   }
@@ -257,33 +213,41 @@
     return '';
   }
 
+  function cleanProjectLabel(rawLabel) {
+    const label = normalize(rawLabel);
+    if (!label) return '';
+    const optionMatch = label.match(/^Open project options for\s+(.+)$/i);
+    if (optionMatch?.[1]) return normalize(optionMatch[1]);
+    const openProjectMatch = label.match(/^Open\s+(.+?)\s+project(?:\b.*)?$/i);
+    if (openProjectMatch?.[1]) return normalize(openProjectMatch[1]);
+    return label;
+  }
+
   function currentProjectTitle() {
     const projectId = currentProjectId();
     if (!projectId) return '';
     try {
       const wantedPath = `/g/${projectId}/project`;
-      let best = '';
+      const candidates = [];
       for (const node of document.querySelectorAll('[href]')) {
         const href = node.getAttribute('href') || '';
         let path = '';
         try { path = new URL(href, location.origin).pathname.replace(/\/+$/, ''); } catch { continue; }
         if (path !== wantedPath) continue;
-        const label = normalize(
-          node.getAttribute('aria-label') || node.getAttribute('title') || node.textContent || ''
-        ).replace(/^Open project options for\s+/i, '').trim();
-        if (label && label.length > best.length) best = label;
+        for (const raw of [node.getAttribute('aria-label'), node.getAttribute('title'), node.textContent]) {
+          const cleaned = cleanProjectLabel(raw);
+          if (cleaned) candidates.push(cleaned);
+        }
       }
-      return best;
-    } catch {
-      return '';
-    }
+      candidates.sort((left, right) => left.length - right.length);
+      return candidates[0] || '';
+    } catch { return ''; }
   }
 
   function sendCompletion(snapshot) {
     if (!isCurrentGeneration() || !snapshot?.response) return;
     const fingerprint = `${snapshot.promptKey}|${snapshot.assistantKey}|${snapshot.response.slice(0, 1000)}`;
     if (fingerprint === lastSentFingerprint) return;
-
     lastSentFingerprint = fingerprint;
     safeRuntimeSendMessage({
       type: 'CHATGPT_RESPONSE_COMPLETE',
@@ -295,28 +259,19 @@
     });
   }
 
-  function armForCurrentPrompt() {
-    if (!isCurrentGeneration() || Date.now() < suppressUntilEpoch) return;
-    const snapshot = latestPromptSnapshot();
-    if (snapshot?.response) {
-      sendCompletion(snapshot);
-      return;
-    }
-
-    const token = watchToken;
-    waitForAnswerBoundToLatestPrompt().then(() => {
-      if (!isCurrentGeneration() || token !== watchToken) return;
-      const resolved = latestPromptSnapshot();
-      if (resolved?.response) sendCompletion(resolved);
-    }).catch(() => {});
-  }
-
   function scheduleCompletionFromRequest() {
+    const requestGeneration = ++completionGeneration;
     if (completionTimer !== null) clearTimeout(completionTimer);
     completionTimer = setTimeout(() => {
       completionTimer = null;
-      armForCurrentPrompt();
-    }, RENDER_GRACE_MS);
+      if (!isCurrentGeneration() || Date.now() < suppressUntilEpoch) return;
+      const token = watchToken;
+      waitForStableLatestAnswer().then((snapshot) => {
+        if (!isCurrentGeneration()) return;
+        if (requestGeneration !== completionGeneration || token !== watchToken) return;
+        if (snapshot?.response) sendCompletion(snapshot);
+      }).catch(() => {});
+    }, REQUEST_RENDER_GRACE_MS);
   }
 
   function isStopButton(node) {
@@ -332,13 +287,11 @@
       if (!isCurrentGeneration()) return;
       if (document.visibilityState !== 'visible') return;
       if (typeof document.hasFocus === 'function' && !document.hasFocus()) return;
-
       const conversationUrl = location.href;
       const now = Date.now();
       if (conversationUrl === lastViewedUrl && now - lastViewedAt < VIEW_SIGNAL_DEDUPE_MS) return;
       lastViewedUrl = conversationUrl;
       lastViewedAt = now;
-
       safeRuntimeSendMessage({ type: 'CHATGPT_CONVERSATION_VIEWED', conversationUrl });
     }, VIEW_SIGNAL_DELAY_MS);
   }
@@ -346,29 +299,20 @@
   document.addEventListener('click', (event) => {
     if (!isCurrentGeneration() || !isStopButton(event.target)) return;
     watchToken += 1;
+    completionGeneration += 1;
     suppressUntilEpoch = Date.now() + 1500;
   }, true);
-
   document.addEventListener('visibilitychange', () => {
-    if (!isCurrentGeneration()) return;
-    if (document.visibilityState === 'visible') scheduleViewedSignal();
+    if (isCurrentGeneration() && document.visibilityState === 'visible') scheduleViewedSignal();
   }, true);
-  window.addEventListener('focus', () => {
-    if (isCurrentGeneration()) scheduleViewedSignal();
-  }, true);
-  window.addEventListener('pageshow', () => {
-    if (isCurrentGeneration()) scheduleViewedSignal();
-  }, true);
-  document.addEventListener('DOMContentLoaded', () => {
-    if (isCurrentGeneration()) scheduleViewedSignal();
-  }, { once: true });
-
+  window.addEventListener('focus', () => { if (isCurrentGeneration()) scheduleViewedSignal(); }, true);
+  window.addEventListener('pageshow', () => { if (isCurrentGeneration()) scheduleViewedSignal(); }, true);
+  document.addEventListener('DOMContentLoaded', () => { if (isCurrentGeneration()) scheduleViewedSignal(); }, { once: true });
   try {
     chrome.runtime.onMessage.addListener((message) => {
       if (!isCurrentGeneration()) return;
       if (message?.type === 'CHATGPT_CONVERSATION_REQUEST_COMPLETED') scheduleCompletionFromRequest();
     });
   } catch {}
-
   scheduleViewedSignal();
 })();
