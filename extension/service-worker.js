@@ -1,8 +1,8 @@
 'use strict';
 
 import {
-  cleanSessionTitle,
   conversationFromUrl,
+  formatNotificationTitle,
   truncatePreview
 } from './lib/conversation.js';
 
@@ -368,6 +368,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
 
+      const preview = truncatePreview(message.response);
+      if (!preview) {
+        sendResponse?.({ ok: false, error: 'No readable assistant response was captured.' });
+        return;
+      }
+
       const notificationId = crypto.randomUUID();
       sendNative({
         type: 'toast.show',
@@ -375,8 +381,8 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           id: notificationId,
           conversationId: identity.id,
           conversationUrl: identity.url,
-          title: cleanSessionTitle(message.sessionTitle),
-          preview: truncatePreview(message.response),
+          title: formatNotificationTitle(message.projectTitle, message.sessionTitle),
+          preview,
           completedAt: new Date().toISOString()
         }
       });
@@ -400,7 +406,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           id: notificationId,
           conversationId: `test-${notificationId}`,
           conversationUrl: 'https://chatgpt.com/',
-          title: 'ChatGPT notifier test',
+          title: 'Notifier test',
           preview: 'Local Windows helper connection works. This is an independent persistent toast window.',
           completedAt: new Date().toISOString()
         }
