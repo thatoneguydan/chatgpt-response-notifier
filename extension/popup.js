@@ -51,7 +51,7 @@ async function refreshCaptureStatus() {
       captureStatus.textContent = 'Last capture: none recorded in this tab yet.';
       return;
     }
-    captureStatus.textContent = `Last capture: ${capture.status}; ${capture.responseLength || 0} chars; final marker ${capture.finalActionReady ? 'yes' : 'no'}; ${capture.elapsedMs || 0} ms.`;
+    captureStatus.textContent = `Last capture: ${capture.status}; ${capture.responseLength || 0} chars; streaming ${capture.generationActive ? 'yes' : 'no'}; streaming seen ${capture.generationObserved ? 'yes' : 'no'}; final marker ${capture.finalActionReady ? 'yes' : 'no'}; ${capture.elapsedMs || 0} ms.`;
   } catch {
     captureStatus.textContent = 'Last capture: unavailable for the current tab.';
   }
