@@ -13,18 +13,26 @@
   const MAX_AUTO_RELOADS = 5;
   const MAX_RECOVERY_WINDOW_MS = 6 * 60 * 1000;
   const CHECK_THROTTLE_MS = 250;
+  const RECOVERY_REQUEST_EVENT = 'chatgpt-native-notifier-recovery-needed';
 
   const FAILURE_PATTERNS = [
-    { id: 'connection-interrupted', label: 'Connection interrupted', needle: 'connection interrupted', initialDelayMs: HARD_ERROR_GRACE_MS },
-    { id: 'delivery-failed', label: 'Delivery failed', needle: 'delivery failed', initialDelayMs: HARD_ERROR_GRACE_MS },
-    { id: 'systems-taking-longer', label: 'Our systems are taking longer', needle: 'our systems are taking longer', initialDelayMs: SLOW_ERROR_GRACE_MS }
+    { id: 'conversation-max-length', label: 'Maximum conversation length reached', needle: 'maximum length for this conversation', terminal: true, initialDelayMs: 0 },
+    { id: 'conversation-too-long', label: 'Conversation is too long', needle: 'the conversation is too long', terminal: true, initialDelayMs: 0 },
+    { id: 'conversation-max-length-alt', label: 'Conversation maximum length reached', needle: 'conversation has reached its maximum length', terminal: true, initialDelayMs: 0 },
+    { id: 'connection-interrupted', label: 'Connection interrupted', needle: 'connection interrupted', terminal: false, initialDelayMs: HARD_ERROR_GRACE_MS },
+    { id: 'delivery-failed', label: 'Delivery failed', needle: 'delivery failed', terminal: false, initialDelayMs: HARD_ERROR_GRACE_MS },
+    { id: 'systems-taking-longer', label: 'Our systems are taking longer', needle: 'our systems are taking longer', terminal: false, initialDelayMs: SLOW_ERROR_GRACE_MS }
   ];
 
   let reloadTimer = null;
   let checkTimer = null;
   let observer = null;
 
-  const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  const normalize = (value) => String(value || '')
+    .replace(/[\u2018\u2019]/g, "'")
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
   const conversationKey = () => `${location.origin}${location.pathname}`;
 
   function loadState() {
@@ -36,9 +44,7 @@
         return null;
       }
       return parsed;
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }
 
   function saveState(state) {
@@ -53,19 +59,10 @@
 
   function roleOfTurn(turn) {
     if (!turn) return '';
-    const direct = normalize(
-      turn.getAttribute?.('data-turn') ||
-      turn.getAttribute?.('data-message-author-role') ||
-      turn.getAttribute?.('data-author') ||
-      ''
-    );
+    const direct = normalize(turn.getAttribute?.('data-turn') || turn.getAttribute?.('data-message-author-role') || turn.getAttribute?.('data-author') || '');
     if (direct === 'user' || direct === 'assistant') return direct;
     const roleNode = turn.querySelector?.('[data-message-author-role], [data-author]');
-    const nested = normalize(
-      roleNode?.getAttribute?.('data-message-author-role') ||
-      roleNode?.getAttribute?.('data-author') ||
-      ''
-    );
+    const nested = normalize(roleNode?.getAttribute?.('data-message-author-role') || roleNode?.getAttribute?.('data-author') || '');
     if (nested === 'user' || nested === 'assistant') return nested;
     if (turn.querySelector?.('.markdown, [class*="prose"]')) return 'assistant';
     return '';
@@ -75,9 +72,7 @@
     try {
       const turns = Array.from(document.querySelectorAll('main [data-testid^="conversation-turn-"]'));
       return turns.length ? turns[turns.length - 1] : null;
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }
 
   function finalActionKind() {
@@ -95,9 +90,7 @@
         'button[aria-label*="Read aloud" i]'
       ];
       return turn.querySelector(selectors.join(', ')) ? 'final-action' : '';
-    } catch {
-      return '';
-    }
+    } catch { return ''; }
   }
 
   function textNodesUnder(root) {
@@ -125,7 +118,6 @@
     const turn = root.closest?.('[data-testid^="conversation-turn-"]') || (root.matches?.('[data-testid^="conversation-turn-"]') ? root : null);
     if (turn && roleOfTurn(turn) === 'user') return null;
     if (requireNewestTurn && turn !== newestTurn()) return null;
-
     for (const textNode of textNodesUnder(root)) {
       if (isAssistantAuthoredText(textNode)) continue;
       const value = normalize(textNode.nodeValue);
@@ -143,7 +135,6 @@
       const fromTurn = failureFromRoot(turn, true);
       if (fromTurn) return fromTurn;
     }
-
     try {
       const globalStatusNodes = Array.from(document.querySelectorAll('[role="alert"], [aria-live="assertive"], [aria-live="polite"]'));
       for (const node of globalStatusNodes) {
@@ -158,17 +149,17 @@
   function responseStillIncomplete() {
     if (finalActionKind()) return false;
     const turn = newestTurn();
-    if (!turn) return true;
-    if (roleOfTurn(turn) === 'user') return true;
+    if (!turn || roleOfTurn(turn) === 'user') return true;
     try {
       const text = normalize(turn.innerText || turn.textContent || '');
       return text.length < 1 || !finalActionKind();
-    } catch {
-      return true;
-    }
+    } catch { return true; }
   }
 
   function attentionPreview(state, failure) {
+    if (failure?.terminal) {
+      return `ChatGPT reports “${failure.label}”. This conversation cannot continue here; open it and start a new chat.`;
+    }
     if (failure) {
       return `Automatic recovery tried ${state.attempts} refresh${state.attempts === 1 ? '' : 'es'}, but this chat still shows “${failure.label}”. Open the chat to intervene.`;
     }
@@ -214,6 +205,10 @@
       reloadTimer = null;
       const current = loadState() || state;
       const failure = findKnownFailure();
+      if (failure?.terminal) {
+        notifyAttention(current, failure);
+        return;
+      }
       if (!failure && finalActionKind()) {
         clearState();
         return;
@@ -240,8 +235,11 @@
       };
       saveState(state);
     }
-
     if (state.attentionSent) return;
+    if (failure?.terminal) {
+      notifyAttention(state, failure);
+      return;
+    }
     if (!failure && finalActionKind()) {
       clearState();
       return;
@@ -250,7 +248,6 @@
       notifyAttention(state, failure);
       return;
     }
-
     const firstAttempt = state.attempts === 0;
     const delayMs = firstAttempt && failure ? failure.initialDelayMs : RETRY_INTERVAL_MS;
     scheduleReload(state, delayMs, failure?.id || 'still-incomplete');
@@ -260,7 +257,6 @@
     checkTimer = null;
     const failure = findKnownFailure();
     const state = loadState();
-
     if (failure) {
       beginOrContinueRecovery(failure);
       return;
@@ -277,17 +273,20 @@
     checkTimer = setTimeout(checkPage, CHECK_THROTTLE_MS);
   }
 
+  function signalUntrustedCaptureRecovery() {
+    const failure = findKnownFailure();
+    beginOrContinueRecovery(failure);
+  }
+
   function signalDeliberateInteraction(event) {
     if (event?.isTrusted === false) return;
     if (loadState()) clearState();
     try {
-      chrome.runtime.sendMessage({
-        type: 'CHATGPT_CONVERSATION_USER_INTERACTED',
-        conversationUrl: location.href
-      }).catch?.(() => {});
+      chrome.runtime.sendMessage({ type: 'CHATGPT_CONVERSATION_USER_INTERACTED', conversationUrl: location.href }).catch?.(() => {});
     } catch {}
   }
 
+  document.addEventListener(RECOVERY_REQUEST_EVENT, signalUntrustedCaptureRecovery, true);
   document.addEventListener('pointerdown', signalDeliberateInteraction, true);
   document.addEventListener('keydown', signalDeliberateInteraction, true);
 
@@ -301,6 +300,5 @@
       attributeFilter: ['data-testid', 'aria-label', 'aria-live', 'role', 'class']
     });
   } catch {}
-
   scheduleCheck();
 })();
