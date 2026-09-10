@@ -11,10 +11,10 @@
   globalThis.__chatgptNativeNotifierInstalled = true;
 
   const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
-  const FINAL_RENDER_TIMEOUT_MS = 8000;
-  const ANSWER_STABLE_MS = 700;
+  const FINAL_ACTION_TIMEOUT_MS = 12000;
+  const ANSWER_STABLE_AFTER_ACTION_MS = 500;
   const ANSWER_CHECK_THROTTLE_MS = 100;
-  const REQUEST_RENDER_GRACE_MS = 250;
+  const REQUEST_RENDER_GRACE_MS = 100;
   const VIEW_SIGNAL_DELAY_MS = 80;
   const VIEW_SIGNAL_DEDUPE_MS = 750;
   let watchToken = 0;
@@ -25,6 +25,7 @@
   let lastViewedUrl = '';
   let lastViewedAt = 0;
   let completionTimer = null;
+  let lastCaptureDiagnostic = null;
 
   function isCurrentGeneration() {
     return globalThis.__chatgptNativeNotifierGeneration === generation;
@@ -83,6 +84,7 @@
         .join(' ')).toLowerCase();
       if (/\b(chatgpt|assistant)\s+said\b/.test(labelText)) return 'assistant';
       if (/\b(you|user)\s+said\b/.test(labelText)) return 'user';
+
       if (turn.querySelector('.markdown, [class*="prose"]')) return 'assistant';
     } catch {}
     return '';
@@ -102,17 +104,23 @@
 
   function readableNodeText(node) {
     if (!node) return '';
-    try { return normalize(node.innerText || node.textContent || ''); } catch { return ''; }
+    try {
+      return normalize(node.innerText || node.textContent || '');
+    } catch {
+      return '';
+    }
   }
 
   function assistantText(turn) {
     if (!turn) return '';
     try {
       if (roleOf(turn) === 'user') return '';
+
       const directAssistant = turn.matches?.('[data-message-author-role="assistant"], [data-author="assistant"]')
         ? turn
         : turn.querySelector('[data-message-author-role="assistant"], [data-author="assistant"]');
       const scope = directAssistant || turn;
+
       const renderedTexts = Array.from(scope.querySelectorAll('.markdown, [class*="prose"]'))
         .filter(isRenderedElement)
         .map(readableNodeText)
@@ -122,83 +130,152 @@
         unique.sort((left, right) => right.length - left.length);
         if (unique[0]) return unique[0];
       }
+
       if (directAssistant || roleOf(turn) === 'assistant') {
-        return normalize(readableNodeText(scope)
+        const fallback = readableNodeText(scope)
           .replace(/^\s*(ChatGPT|Assistant)\s+said:\s*/i, '')
           .replace(/\s+(Copy|Good response|Bad response|Read aloud|Share|Regenerate)\s*$/i, '')
-          .trim());
+          .trim();
+        return normalize(fallback);
       }
     } catch {}
     return '';
   }
 
+  function hasFinalResponseAction(turn) {
+    if (!turn) return false;
+    try {
+      const buttons = Array.from(turn.querySelectorAll(
+        'button[data-testid="copy-turn-action-button"], button[aria-label*="Copy response" i]'
+      ));
+      return buttons.some((button) => !button.disabled && isRenderedElement(button));
+    } catch {
+      return false;
+    }
+  }
+
   function latestPromptSnapshot() {
     const turns = turnNodes();
     if (turns.length === 0) return null;
+
+    // Never scan backwards to an older assistant answer. The current response
+    // must live in the newest canonical conversation turn; otherwise we wait.
     const assistantIndex = turns.length - 1;
     const assistantTurn = turns[assistantIndex];
     const response = assistantText(assistantTurn);
     const promptTurn = assistantIndex > 0 ? turns[assistantIndex - 1] : null;
+
     return {
-      promptKey: [location.pathname, promptTurn?.getAttribute('data-testid') || `prompt-before-${assistantIndex}`].join('|'),
+      promptKey: [
+        location.pathname,
+        promptTurn?.getAttribute('data-testid') || `prompt-before-${assistantIndex}`
+      ].join('|'),
       assistantKey: assistantTurn?.getAttribute('data-testid') || `assistant-${assistantIndex}`,
-      response
+      response,
+      finalActionReady: hasFinalResponseAction(assistantTurn)
     };
   }
 
-  function waitForStableLatestAnswer() {
+  function captureDiagnostic(status, snapshot, requestObservedAt) {
+    lastCaptureDiagnostic = {
+      status,
+      responseLength: Number(snapshot?.response?.length || 0),
+      finalActionReady: Boolean(snapshot?.finalActionReady),
+      elapsedMs: Math.max(0, Date.now() - requestObservedAt),
+      extensionVersion: scriptVersion,
+      observedAt: new Date().toISOString()
+    };
+  }
+
+  function waitForFinalLatestAnswer() {
     return new Promise((resolve) => {
       const root = conversationRoot();
-      if (!root) return resolve(null);
-      let settled = false, observer = null, timeoutId = null, throttleId = null, stableId = null, lastText = '';
+      if (!root) {
+        resolve({ snapshot: null, status: 'no-conversation-root' });
+        return;
+      }
+
+      let settled = false;
+      let observer = null;
+      let timeoutId = null;
+      let throttleId = null;
+      let stableId = null;
+      let lastText = '';
+
       const cleanup = () => {
         observer?.disconnect();
         if (timeoutId !== null) clearTimeout(timeoutId);
         if (throttleId !== null) clearTimeout(throttleId);
         if (stableId !== null) clearTimeout(stableId);
       };
-      const finish = (snapshot) => {
+
+      const finish = (snapshot, status) => {
         if (settled) return;
         settled = true;
         cleanup();
-        resolve(snapshot?.response ? snapshot : null);
+        resolve({ snapshot: snapshot?.response ? snapshot : null, status });
       };
+
+      const resetStableTimer = () => {
+        if (stableId !== null) {
+          clearTimeout(stableId);
+          stableId = null;
+        }
+      };
+
       const scheduleStableFinish = (text) => {
-        if (stableId !== null) clearTimeout(stableId);
+        resetStableTimer();
         stableId = setTimeout(() => {
           stableId = null;
-          if (!isCurrentGeneration()) return finish(null);
+          if (!isCurrentGeneration()) return finish(null, 'superseded-extension-generation');
           const finalSnapshot = latestPromptSnapshot();
-          if (!finalSnapshot?.response) return;
+          if (!finalSnapshot?.response || !finalSnapshot.finalActionReady) return;
           if (finalSnapshot.response !== text) {
             lastText = finalSnapshot.response;
             scheduleStableFinish(lastText);
             return;
           }
-          finish(finalSnapshot);
-        }, ANSWER_STABLE_MS);
+          finish(finalSnapshot, 'final-action-stable');
+        }, ANSWER_STABLE_AFTER_ACTION_MS);
       };
+
       const check = () => {
         throttleId = null;
         if (settled || !isCurrentGeneration()) return;
         const snapshot = latestPromptSnapshot();
         const text = snapshot?.response || '';
-        if (!text) {
-          lastText = '';
-          if (stableId !== null) { clearTimeout(stableId); stableId = null; }
+        if (!text || !snapshot?.finalActionReady) {
+          lastText = text;
+          resetStableTimer();
           return;
         }
         if (text === lastText && stableId !== null) return;
         lastText = text;
         scheduleStableFinish(text);
       };
+
       const scheduleCheck = () => {
         if (settled || throttleId !== null) return;
         throttleId = setTimeout(check, ANSWER_CHECK_THROTTLE_MS);
       };
+
       observer = new MutationObserver(scheduleCheck);
-      observer.observe(root, { childList: true, subtree: true, characterData: true, attributes: true });
-      timeoutId = setTimeout(() => finish(latestPromptSnapshot()), FINAL_RENDER_TIMEOUT_MS);
+      observer.observe(root, {
+        childList: true,
+        subtree: true,
+        characterData: true,
+        attributes: true,
+        attributeFilter: ['data-testid', 'aria-label', 'disabled', 'class', 'style']
+      });
+      timeoutId = setTimeout(() => {
+        const finalSnapshot = latestPromptSnapshot();
+        finish(
+          finalSnapshot?.response && finalSnapshot.finalActionReady ? finalSnapshot : null,
+          finalSnapshot?.response && finalSnapshot.finalActionReady
+            ? 'final-action-timeout-verified'
+            : 'timeout-no-final-action'
+        );
+      }, FINAL_ACTION_TIMEOUT_MS);
       check();
     });
   }
@@ -241,13 +318,16 @@
       }
       candidates.sort((left, right) => left.length - right.length);
       return candidates[0] || '';
-    } catch { return ''; }
+    } catch {
+      return '';
+    }
   }
 
   function sendCompletion(snapshot) {
-    if (!isCurrentGeneration() || !snapshot?.response) return;
+    if (!isCurrentGeneration() || !snapshot?.response || !snapshot.finalActionReady) return;
     const fingerprint = `${snapshot.promptKey}|${snapshot.assistantKey}|${snapshot.response.slice(0, 1000)}`;
     if (fingerprint === lastSentFingerprint) return;
+
     lastSentFingerprint = fingerprint;
     safeRuntimeSendMessage({
       type: 'CHATGPT_RESPONSE_COMPLETE',
@@ -261,16 +341,20 @@
 
   function scheduleCompletionFromRequest() {
     const requestGeneration = ++completionGeneration;
+    const requestObservedAt = Date.now();
     if (completionTimer !== null) clearTimeout(completionTimer);
     completionTimer = setTimeout(() => {
       completionTimer = null;
       if (!isCurrentGeneration() || Date.now() < suppressUntilEpoch) return;
       const token = watchToken;
-      waitForStableLatestAnswer().then((snapshot) => {
+      waitForFinalLatestAnswer().then((result) => {
         if (!isCurrentGeneration()) return;
         if (requestGeneration !== completionGeneration || token !== watchToken) return;
-        if (snapshot?.response) sendCompletion(snapshot);
-      }).catch(() => {});
+        captureDiagnostic(result?.status || 'unknown', result?.snapshot || latestPromptSnapshot(), requestObservedAt);
+        if (result?.snapshot?.response && result.snapshot.finalActionReady) sendCompletion(result.snapshot);
+      }).catch(() => {
+        captureDiagnostic('capture-error', latestPromptSnapshot(), requestObservedAt);
+      });
     }, REQUEST_RENDER_GRACE_MS);
   }
 
@@ -287,11 +371,13 @@
       if (!isCurrentGeneration()) return;
       if (document.visibilityState !== 'visible') return;
       if (typeof document.hasFocus === 'function' && !document.hasFocus()) return;
+
       const conversationUrl = location.href;
       const now = Date.now();
       if (conversationUrl === lastViewedUrl && now - lastViewedAt < VIEW_SIGNAL_DEDUPE_MS) return;
       lastViewedUrl = conversationUrl;
       lastViewedAt = now;
+
       safeRuntimeSendMessage({ type: 'CHATGPT_CONVERSATION_VIEWED', conversationUrl });
     }, VIEW_SIGNAL_DELAY_MS);
   }
@@ -302,17 +388,35 @@
     completionGeneration += 1;
     suppressUntilEpoch = Date.now() + 1500;
   }, true);
+
   document.addEventListener('visibilitychange', () => {
-    if (isCurrentGeneration() && document.visibilityState === 'visible') scheduleViewedSignal();
+    if (!isCurrentGeneration()) return;
+    if (document.visibilityState === 'visible') scheduleViewedSignal();
   }, true);
-  window.addEventListener('focus', () => { if (isCurrentGeneration()) scheduleViewedSignal(); }, true);
-  window.addEventListener('pageshow', () => { if (isCurrentGeneration()) scheduleViewedSignal(); }, true);
-  document.addEventListener('DOMContentLoaded', () => { if (isCurrentGeneration()) scheduleViewedSignal(); }, { once: true });
+  window.addEventListener('focus', () => {
+    if (isCurrentGeneration()) scheduleViewedSignal();
+  }, true);
+  window.addEventListener('pageshow', () => {
+    if (isCurrentGeneration()) scheduleViewedSignal();
+  }, true);
+  document.addEventListener('DOMContentLoaded', () => {
+    if (isCurrentGeneration()) scheduleViewedSignal();
+  }, { once: true });
+
   try {
-    chrome.runtime.onMessage.addListener((message) => {
-      if (!isCurrentGeneration()) return;
-      if (message?.type === 'CHATGPT_CONVERSATION_REQUEST_COMPLETED') scheduleCompletionFromRequest();
+    chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+      if (!isCurrentGeneration()) return false;
+      if (message?.type === 'CHATGPT_CONVERSATION_REQUEST_COMPLETED') {
+        scheduleCompletionFromRequest();
+        return false;
+      }
+      if (message?.type === 'GET_CHATGPT_CAPTURE_DIAGNOSTIC') {
+        sendResponse?.({ ok: true, capture: lastCaptureDiagnostic });
+        return false;
+      }
+      return false;
     });
   } catch {}
+
   scheduleViewedSignal();
 })();
