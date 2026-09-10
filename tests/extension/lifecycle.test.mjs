@@ -103,7 +103,7 @@ test('busy-state detection checks the whole latest turn', () => {
   assert.doesNotMatch(contentScript, /const scope = directAssistant \|\| turn/);
 });
 
-test('current final response actions provide optional fast completion confirmation', () => {
+test('current final response actions provide fast completion only after trustworthy generation evidence', () => {
   assert.match(contentScript, /function finalResponseActionKind\(turn\)/);
   assert.match(contentScript, /good-response-turn-action-button/);
   assert.match(contentScript, /bad-response-turn-action-button/);
@@ -113,7 +113,8 @@ test('current final response actions provide optional fast completion confirmati
   assert.match(contentScript, /Copy response/);
   assert.match(contentScript, /finalActionReady: Boolean\(finalActionKind\)/);
   assert.match(contentScript, /ANSWER_STABLE_AFTER_FINAL_ACTION_MS\s*=\s*500/);
-  assert.match(contentScript, /if \(snapshot\?\.finalActionReady\) return ANSWER_STABLE_AFTER_FINAL_ACTION_MS/);
+  assert.match(contentScript, /ANSWER_STABLE_AFTER_UNOBSERVED_FINAL_ACTION_MS\s*=\s*3000/);
+  assert.match(contentScript, /return generationObserved\s*\?\s*ANSWER_STABLE_AFTER_FINAL_ACTION_MS\s*:\s*ANSWER_STABLE_AFTER_UNOBSERVED_FINAL_ACTION_MS/);
   assert.doesNotMatch(contentScript, /buttons\.some\(\(button\) => !button\.disabled && isRenderedElement\(button\)\)/);
 });
 
@@ -141,8 +142,14 @@ test('project-aware notification metadata cleans the current Open <name> project
   assert.match(serviceWorker, /formatNotificationTitle\(message\.projectTitle, message\.sessionTitle\)/);
 });
 
-test('popup exposes bounded local capture diagnostics without logging response text', () => {
-  assert.match(contentScript, /lastCaptureDiagnostic/);
+test('popup retains bounded per-tab capture history without storing response text', () => {
+  assert.match(contentScript, /CAPTURE_DIAGNOSTIC_HISTORY_LIMIT\s*=\s*8/);
+  assert.match(contentScript, /CAPTURE_DIAGNOSTIC_HISTORY_KEY/);
+  assert.match(contentScript, /sessionStorage\.getItem/);
+  assert.match(contentScript, /sessionStorage\.setItem/);
+  assert.match(contentScript, /captureDiagnosticHistory = \[diagnostic, \.\.\.captureDiagnosticHistory\]/);
+  assert.match(contentScript, /projectContext: Boolean\(currentProjectId\(\)\)/);
+  assert.match(contentScript, /history: captureDiagnosticHistory/);
   assert.match(contentScript, /responseLength/);
   assert.match(contentScript, /captureSource/);
   assert.match(contentScript, /turnTextLength/);
@@ -155,7 +162,11 @@ test('popup exposes bounded local capture diagnostics without logging response t
   assert.match(contentScript, /finalActionKind/);
   assert.match(contentScript, /GET_CHATGPT_CAPTURE_DIAGNOSTIC/);
   assert.match(popupHtml, /id="captureStatus"/);
+  assert.match(popupHtml, /id="captureHistory"/);
   assert.match(popupJs, /GET_CHATGPT_CAPTURE_DIAGNOSTIC/);
+  assert.match(popupJs, /result\?\.history/);
+  assert.match(popupJs, /Recent captures \(newest first\)/);
+  assert.match(popupJs, /projectContext/);
   assert.match(popupJs, /source /);
   assert.match(popupJs, /surfaces /);
   assert.match(popupJs, /assistant nodes /);
