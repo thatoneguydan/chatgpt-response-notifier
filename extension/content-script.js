@@ -11,8 +11,10 @@
   globalThis.__chatgptNativeNotifierInstalled = true;
 
   const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
-  const FINAL_ACTION_TIMEOUT_MS = 12000;
-  const ANSWER_STABLE_AFTER_ACTION_MS = 500;
+  const COMPLETION_TIMEOUT_MS = 1800000;
+  const ANSWER_STABLE_AFTER_FINAL_ACTION_MS = 500;
+  const ANSWER_STABLE_AFTER_GENERATION_MS = 1200;
+  const ANSWER_STABLE_WITHOUT_GENERATION_MARKER_MS = 2500;
   const ANSWER_CHECK_THROTTLE_MS = 100;
   const REQUEST_RENDER_GRACE_MS = 100;
   const VIEW_SIGNAL_DELAY_MS = 80;
@@ -25,6 +27,7 @@
   let lastViewedUrl = '';
   let lastViewedAt = 0;
   let completionTimer = null;
+  let cancelActiveCompletionWait = null;
   let lastCaptureDiagnostic = null;
 
   function isCurrentGeneration() {
@@ -154,6 +157,30 @@
     }
   }
 
+  function hasVisibleStopButton() {
+    try {
+      return Array.from(document.querySelectorAll(
+        'button[data-testid="stop-button"], button[data-testid="fruitjuice-stop-button"]'
+      )).some((button) => !button.disabled && isRenderedElement(button));
+    } catch {
+      return false;
+    }
+  }
+
+  function hasBusyAssistantSignal(turn) {
+    if (!turn) return false;
+    try {
+      const directAssistant = turn.matches?.('[data-message-author-role="assistant"], [data-author="assistant"]')
+        ? turn
+        : turn.querySelector('[data-message-author-role="assistant"], [data-author="assistant"]');
+      const scope = directAssistant || turn;
+      if (scope.getAttribute?.('aria-busy') === 'true') return true;
+      return Boolean(scope.querySelector?.('[aria-busy="true"]'));
+    } catch {
+      return false;
+    }
+  }
+
   function latestPromptSnapshot() {
     const turns = turnNodes();
     if (turns.length === 0) return null;
@@ -164,6 +191,8 @@
     const assistantTurn = turns[assistantIndex];
     const response = assistantText(assistantTurn);
     const promptTurn = assistantIndex > 0 ? turns[assistantIndex - 1] : null;
+    const stopButtonActive = hasVisibleStopButton();
+    const assistantBusy = hasBusyAssistantSignal(assistantTurn);
 
     return {
       promptKey: [
@@ -172,26 +201,34 @@
       ].join('|'),
       assistantKey: assistantTurn?.getAttribute('data-testid') || `assistant-${assistantIndex}`,
       response,
-      finalActionReady: hasFinalResponseAction(assistantTurn)
+      finalActionReady: hasFinalResponseAction(assistantTurn),
+      stopButtonActive,
+      assistantBusy,
+      generationActive: stopButtonActive || assistantBusy
     };
   }
 
-  function captureDiagnostic(status, snapshot, requestObservedAt) {
+  function captureDiagnostic(status, snapshot, requestObservedAt, generationObserved = false) {
     lastCaptureDiagnostic = {
       status,
       responseLength: Number(snapshot?.response?.length || 0),
       finalActionReady: Boolean(snapshot?.finalActionReady),
+      generationActive: Boolean(snapshot?.generationActive),
+      generationObserved: Boolean(generationObserved),
+      stopButtonActive: Boolean(snapshot?.stopButtonActive),
+      assistantBusy: Boolean(snapshot?.assistantBusy),
       elapsedMs: Math.max(0, Date.now() - requestObservedAt),
       extensionVersion: scriptVersion,
       observedAt: new Date().toISOString()
     };
   }
 
-  function waitForFinalLatestAnswer() {
+  function waitForCompletedLatestAnswer() {
     return new Promise((resolve) => {
       const root = conversationRoot();
-      if (!root) {
-        resolve({ snapshot: null, status: 'no-conversation-root' });
+      const observedRoot = document.body || document.documentElement || root;
+      if (!root || !observedRoot) {
+        resolve({ snapshot: null, status: 'no-conversation-root', generationObserved: false });
         return;
       }
 
@@ -201,20 +238,27 @@
       let throttleId = null;
       let stableId = null;
       let lastText = '';
+      let generationObserved = false;
+      let cancelThisWait = null;
 
       const cleanup = () => {
         observer?.disconnect();
         if (timeoutId !== null) clearTimeout(timeoutId);
         if (throttleId !== null) clearTimeout(throttleId);
         if (stableId !== null) clearTimeout(stableId);
+        if (cancelActiveCompletionWait === cancelThisWait) cancelActiveCompletionWait = null;
       };
 
       const finish = (snapshot, status) => {
         if (settled) return;
         settled = true;
         cleanup();
-        resolve({ snapshot: snapshot?.response ? snapshot : null, status });
+        resolve({ snapshot: snapshot?.response ? snapshot : null, status, generationObserved });
       };
+
+      cancelThisWait = () => finish(null, 'superseded-by-new-request');
+      if (cancelActiveCompletionWait) cancelActiveCompletionWait();
+      cancelActiveCompletionWait = cancelThisWait;
 
       const resetStableTimer = () => {
         if (stableId !== null) {
@@ -223,20 +267,36 @@
         }
       };
 
-      const scheduleStableFinish = (text) => {
+      const stableDelayFor = (snapshot) => {
+        if (snapshot?.finalActionReady) return ANSWER_STABLE_AFTER_FINAL_ACTION_MS;
+        if (generationObserved) return ANSWER_STABLE_AFTER_GENERATION_MS;
+        return ANSWER_STABLE_WITHOUT_GENERATION_MARKER_MS;
+      };
+
+      const scheduleStableFinish = (text, delayMs) => {
         resetStableTimer();
         stableId = setTimeout(() => {
           stableId = null;
           if (!isCurrentGeneration()) return finish(null, 'superseded-extension-generation');
           const finalSnapshot = latestPromptSnapshot();
-          if (!finalSnapshot?.response || !finalSnapshot.finalActionReady) return;
-          if (finalSnapshot.response !== text) {
+          if (!finalSnapshot?.response) return;
+          if (finalSnapshot.generationActive && !finalSnapshot.finalActionReady) {
+            generationObserved = true;
             lastText = finalSnapshot.response;
-            scheduleStableFinish(lastText);
             return;
           }
-          finish(finalSnapshot, 'final-action-stable');
-        }, ANSWER_STABLE_AFTER_ACTION_MS);
+          if (finalSnapshot.response !== text) {
+            lastText = finalSnapshot.response;
+            scheduleStableFinish(lastText, stableDelayFor(finalSnapshot));
+            return;
+          }
+          const status = finalSnapshot.finalActionReady
+            ? 'final-action-stable'
+            : generationObserved
+              ? 'generation-ended-stable'
+              : 'idle-stable-no-generation-marker';
+          finish(finalSnapshot, status);
+        }, delayMs);
       };
 
       const check = () => {
@@ -244,14 +304,20 @@
         if (settled || !isCurrentGeneration()) return;
         const snapshot = latestPromptSnapshot();
         const text = snapshot?.response || '';
-        if (!text || !snapshot?.finalActionReady) {
+        if (snapshot?.generationActive && !snapshot.finalActionReady) {
+          generationObserved = true;
           lastText = text;
+          resetStableTimer();
+          return;
+        }
+        if (!text) {
+          lastText = '';
           resetStableTimer();
           return;
         }
         if (text === lastText && stableId !== null) return;
         lastText = text;
-        scheduleStableFinish(text);
+        scheduleStableFinish(text, stableDelayFor(snapshot));
       };
 
       const scheduleCheck = () => {
@@ -260,22 +326,24 @@
       };
 
       observer = new MutationObserver(scheduleCheck);
-      observer.observe(root, {
+      observer.observe(observedRoot, {
         childList: true,
         subtree: true,
         characterData: true,
         attributes: true,
-        attributeFilter: ['data-testid', 'aria-label', 'disabled', 'class', 'style']
+        attributeFilter: ['data-testid', 'aria-label', 'aria-busy', 'disabled', 'class', 'style']
       });
       timeoutId = setTimeout(() => {
         const finalSnapshot = latestPromptSnapshot();
         finish(
-          finalSnapshot?.response && finalSnapshot.finalActionReady ? finalSnapshot : null,
-          finalSnapshot?.response && finalSnapshot.finalActionReady
-            ? 'final-action-timeout-verified'
-            : 'timeout-no-final-action'
+          finalSnapshot?.response && (!finalSnapshot.generationActive || finalSnapshot.finalActionReady)
+            ? finalSnapshot
+            : null,
+          finalSnapshot?.response && (!finalSnapshot.generationActive || finalSnapshot.finalActionReady)
+            ? 'completion-timeout-idle-verified'
+            : 'timeout-still-generating-or-empty'
         );
-      }, FINAL_ACTION_TIMEOUT_MS);
+      }, COMPLETION_TIMEOUT_MS);
       check();
     });
   }
@@ -324,7 +392,8 @@
   }
 
   function sendCompletion(snapshot) {
-    if (!isCurrentGeneration() || !snapshot?.response || !snapshot.finalActionReady) return;
+    if (!isCurrentGeneration() || !snapshot?.response) return;
+    if (snapshot.generationActive && !snapshot.finalActionReady) return;
     const fingerprint = `${snapshot.promptKey}|${snapshot.assistantKey}|${snapshot.response.slice(0, 1000)}`;
     if (fingerprint === lastSentFingerprint) return;
 
@@ -343,17 +412,23 @@
     const requestGeneration = ++completionGeneration;
     const requestObservedAt = Date.now();
     if (completionTimer !== null) clearTimeout(completionTimer);
+    if (cancelActiveCompletionWait) cancelActiveCompletionWait();
     completionTimer = setTimeout(() => {
       completionTimer = null;
       if (!isCurrentGeneration() || Date.now() < suppressUntilEpoch) return;
       const token = watchToken;
-      waitForFinalLatestAnswer().then((result) => {
+      waitForCompletedLatestAnswer().then((result) => {
         if (!isCurrentGeneration()) return;
         if (requestGeneration !== completionGeneration || token !== watchToken) return;
-        captureDiagnostic(result?.status || 'unknown', result?.snapshot || latestPromptSnapshot(), requestObservedAt);
-        if (result?.snapshot?.response && result.snapshot.finalActionReady) sendCompletion(result.snapshot);
+        captureDiagnostic(
+          result?.status || 'unknown',
+          result?.snapshot || latestPromptSnapshot(),
+          requestObservedAt,
+          result?.generationObserved
+        );
+        if (result?.snapshot?.response) sendCompletion(result.snapshot);
       }).catch(() => {
-        captureDiagnostic('capture-error', latestPromptSnapshot(), requestObservedAt);
+        captureDiagnostic('capture-error', latestPromptSnapshot(), requestObservedAt, false);
       });
     }, REQUEST_RENDER_GRACE_MS);
   }
@@ -386,6 +461,7 @@
     if (!isCurrentGeneration() || !isStopButton(event.target)) return;
     watchToken += 1;
     completionGeneration += 1;
+    if (cancelActiveCompletionWait) cancelActiveCompletionWait();
     suppressUntilEpoch = Date.now() + 1500;
   }, true);
 
