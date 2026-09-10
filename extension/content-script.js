@@ -14,7 +14,7 @@
   const COMPLETION_TIMEOUT_MS = 1800000;
   const ANSWER_STABLE_AFTER_FINAL_ACTION_MS = 500;
   const ANSWER_STABLE_AFTER_GENERATION_MS = 1200;
-  const ANSWER_STABLE_WITHOUT_GENERATION_MARKER_MS = 2500;
+  const ANSWER_STABLE_WITHOUT_GENERATION_MARKER_MS = 4000;
   const ANSWER_CHECK_THROTTLE_MS = 100;
   const REQUEST_RENDER_GRACE_MS = 100;
   const VIEW_SIGNAL_DELAY_MS = 80;
@@ -222,6 +222,35 @@
     }
   }
 
+  function hasResultStreamingSignal(turn) {
+    if (!turn) return false;
+    try {
+      if (turn.matches?.('.result-streaming') && isRenderedElement(turn)) return true;
+      return Array.from(turn.querySelectorAll('.result-streaming'))
+        .some((node) => isRenderedElement(node));
+    } catch {
+      return false;
+    }
+  }
+
+  function responseRenderSignature(turn, response) {
+    if (!turn) return String(response || '');
+    try {
+      const contentNodes = Array.from(turn.querySelectorAll(
+        '.markdown, [class*="prose"], p, pre, code, strong, b, em, i, ul, ol, li, table, thead, tbody, tr, th, td, blockquote, h1, h2, h3, h4, h5, h6, hr'
+      ));
+      const structure = contentNodes.map((node) => [
+        node.tagName,
+        node.childElementCount,
+        String(node.innerHTML || '').length,
+        readableNodeText(node).length
+      ].join(':')).join('|');
+      return `${String(response || '')}::${contentNodes.length}::${structure}`;
+    } catch {
+      return String(response || '');
+    }
+  }
+
   function latestPromptSnapshot() {
     const turns = turnNodes();
     if (turns.length === 0) return null;
@@ -235,6 +264,8 @@
     const promptTurn = assistantIndex > 0 ? turns[assistantIndex - 1] : null;
     const stopButtonActive = hasVisibleStopButton();
     const assistantBusy = hasBusyAssistantSignal(assistantTurn);
+    const resultStreamingActive = hasResultStreamingSignal(assistantTurn);
+    const renderSignature = responseRenderSignature(assistantTurn, response);
 
     return {
       promptKey: [
@@ -249,10 +280,12 @@
       responseSurfaceTextLength: capture.responseSurfaceTextLength,
       assistantRoleNodeCount: capture.assistantRoleNodeCount,
       assistantRoleTextLength: capture.assistantRoleTextLength,
+      renderSignature,
       finalActionReady: hasFinalResponseAction(assistantTurn),
       stopButtonActive,
       assistantBusy,
-      generationActive: stopButtonActive || assistantBusy
+      resultStreamingActive,
+      generationActive: stopButtonActive || assistantBusy || resultStreamingActive
     };
   }
 
@@ -266,11 +299,13 @@
       responseSurfaceTextLength: Number(snapshot?.responseSurfaceTextLength || 0),
       assistantRoleNodeCount: Number(snapshot?.assistantRoleNodeCount || 0),
       assistantRoleTextLength: Number(snapshot?.assistantRoleTextLength || 0),
+      renderSignatureLength: Number(snapshot?.renderSignature?.length || 0),
       finalActionReady: Boolean(snapshot?.finalActionReady),
       generationActive: Boolean(snapshot?.generationActive),
       generationObserved: Boolean(generationObserved),
       stopButtonActive: Boolean(snapshot?.stopButtonActive),
       assistantBusy: Boolean(snapshot?.assistantBusy),
+      resultStreamingActive: Boolean(snapshot?.resultStreamingActive),
       elapsedMs: Math.max(0, Date.now() - requestObservedAt),
       extensionVersion: scriptVersion,
       observedAt: new Date().toISOString()
@@ -291,7 +326,7 @@
       let timeoutId = null;
       let throttleId = null;
       let stableId = null;
-      let lastText = '';
+      let lastSignature = '';
       let generationObserved = false;
       let cancelThisWait = null;
 
@@ -327,7 +362,7 @@
         return ANSWER_STABLE_WITHOUT_GENERATION_MARKER_MS;
       };
 
-      const scheduleStableFinish = (text, delayMs) => {
+      const scheduleStableFinish = (signature, delayMs) => {
         resetStableTimer();
         stableId = setTimeout(() => {
           stableId = null;
@@ -336,12 +371,12 @@
           if (!finalSnapshot?.response) return;
           if (finalSnapshot.generationActive && !finalSnapshot.finalActionReady) {
             generationObserved = true;
-            lastText = finalSnapshot.response;
+            lastSignature = finalSnapshot.renderSignature;
             return;
           }
-          if (finalSnapshot.response !== text) {
-            lastText = finalSnapshot.response;
-            scheduleStableFinish(lastText, stableDelayFor(finalSnapshot));
+          if (finalSnapshot.renderSignature !== signature) {
+            lastSignature = finalSnapshot.renderSignature;
+            scheduleStableFinish(lastSignature, stableDelayFor(finalSnapshot));
             return;
           }
           const status = finalSnapshot.finalActionReady
@@ -358,20 +393,21 @@
         if (settled || !isCurrentGeneration()) return;
         const snapshot = latestPromptSnapshot();
         const text = snapshot?.response || '';
+        const signature = snapshot?.renderSignature || '';
         if (snapshot?.generationActive && !snapshot.finalActionReady) {
           generationObserved = true;
-          lastText = text;
+          lastSignature = signature;
           resetStableTimer();
           return;
         }
         if (!text) {
-          lastText = '';
+          lastSignature = '';
           resetStableTimer();
           return;
         }
-        if (text === lastText && stableId !== null) return;
-        lastText = text;
-        scheduleStableFinish(text, stableDelayFor(snapshot));
+        if (signature === lastSignature && stableId !== null) return;
+        lastSignature = signature;
+        scheduleStableFinish(signature, stableDelayFor(snapshot));
       };
 
       const scheduleCheck = () => {
