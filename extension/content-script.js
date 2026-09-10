@@ -14,18 +14,16 @@
   const COMPLETION_TIMEOUT_MS = 1800000;
   const ANSWER_STABLE_AFTER_FINAL_ACTION_MS = 500;
   const ANSWER_STABLE_AFTER_GENERATION_MS = 1200;
-  const ANSWER_STABLE_WITHOUT_GENERATION_MARKER_MS = 4000;
+  const ANSWER_STABLE_WITHOUT_GENERATION_MARKER_MS = 45000;
   const ANSWER_CHECK_THROTTLE_MS = 100;
   const REQUEST_RENDER_GRACE_MS = 100;
-  const VIEW_SIGNAL_DELAY_MS = 80;
-  const VIEW_SIGNAL_DEDUPE_MS = 750;
+  const INTERACTION_SIGNAL_DEDUPE_MS = 750;
   let watchToken = 0;
   let completionGeneration = 0;
   let lastSentFingerprint = '';
   let suppressUntilEpoch = 0;
-  let viewSignalTimer = null;
-  let lastViewedUrl = '';
-  let lastViewedAt = 0;
+  let lastInteractionUrl = '';
+  let lastInteractionAt = 0;
   let completionTimer = null;
   let cancelActiveCompletionWait = null;
   let lastCaptureDiagnostic = null;
@@ -190,16 +188,30 @@
     }
   }
 
-  function hasFinalResponseAction(turn) {
-    if (!turn) return false;
+  function finalResponseActionKind(turn) {
+    if (!turn) return '';
     try {
-      const buttons = Array.from(turn.querySelectorAll(
-        'button[data-testid="copy-turn-action-button"], button[aria-label*="Copy response" i]'
-      ));
-      return buttons.some((button) => !button.disabled && isRenderedElement(button));
-    } catch {
-      return false;
-    }
+      const buttons = Array.from(turn.querySelectorAll([
+        'button[data-testid="good-response-turn-action-button"]',
+        'button[data-testid="bad-response-turn-action-button"]',
+        'button[data-testid="copy-turn-action-button"]',
+        'button[data-testid="read-aloud-turn-action-button"]',
+        'button[aria-label*="Good response" i]',
+        'button[aria-label*="Bad response" i]',
+        'button[aria-label*="Copy response" i]',
+        'button[aria-label*="Read aloud" i]'
+      ].join(', '))).filter((button) => !button.disabled);
+
+      for (const button of buttons) {
+        const testId = normalize(button.getAttribute('data-testid')).toLowerCase();
+        const ariaLabel = normalize(button.getAttribute('aria-label')).toLowerCase();
+        if (testId.includes('good-response') || ariaLabel.includes('good response')) return 'good-response';
+        if (testId.includes('bad-response') || ariaLabel.includes('bad response')) return 'bad-response';
+        if (testId.includes('copy-turn') || ariaLabel.includes('copy response')) return 'copy-response';
+        if (testId.includes('read-aloud') || ariaLabel.includes('read aloud')) return 'read-aloud';
+      }
+    } catch {}
+    return '';
   }
 
   function hasVisibleStopButton() {
@@ -251,6 +263,15 @@
     }
   }
 
+  function completionSettleSignature(snapshot) {
+    if (!snapshot) return '';
+    return [
+      snapshot.renderSignature || '',
+      `final=${snapshot.finalActionKind || 'none'}`,
+      `generation=${snapshot.generationActive ? 'active' : 'idle'}`
+    ].join('::');
+  }
+
   function latestPromptSnapshot() {
     const turns = turnNodes();
     if (turns.length === 0) return null;
@@ -265,6 +286,7 @@
     const stopButtonActive = hasVisibleStopButton();
     const assistantBusy = hasBusyAssistantSignal(assistantTurn);
     const resultStreamingActive = hasResultStreamingSignal(assistantTurn);
+    const finalActionKind = finalResponseActionKind(assistantTurn);
     const renderSignature = responseRenderSignature(assistantTurn, response);
 
     return {
@@ -281,7 +303,8 @@
       assistantRoleNodeCount: capture.assistantRoleNodeCount,
       assistantRoleTextLength: capture.assistantRoleTextLength,
       renderSignature,
-      finalActionReady: hasFinalResponseAction(assistantTurn),
+      finalActionKind,
+      finalActionReady: Boolean(finalActionKind),
       stopButtonActive,
       assistantBusy,
       resultStreamingActive,
@@ -300,6 +323,7 @@
       assistantRoleNodeCount: Number(snapshot?.assistantRoleNodeCount || 0),
       assistantRoleTextLength: Number(snapshot?.assistantRoleTextLength || 0),
       renderSignatureLength: Number(snapshot?.renderSignature?.length || 0),
+      finalActionKind: String(snapshot?.finalActionKind || ''),
       finalActionReady: Boolean(snapshot?.finalActionReady),
       generationActive: Boolean(snapshot?.generationActive),
       generationObserved: Boolean(generationObserved),
@@ -326,7 +350,7 @@
       let timeoutId = null;
       let throttleId = null;
       let stableId = null;
-      let lastSignature = '';
+      let lastSettleSignature = '';
       let generationObserved = false;
       let cancelThisWait = null;
 
@@ -362,21 +386,22 @@
         return ANSWER_STABLE_WITHOUT_GENERATION_MARKER_MS;
       };
 
-      const scheduleStableFinish = (signature, delayMs) => {
+      const scheduleStableFinish = (settleSignature, delayMs) => {
         resetStableTimer();
         stableId = setTimeout(() => {
           stableId = null;
           if (!isCurrentGeneration()) return finish(null, 'superseded-extension-generation');
           const finalSnapshot = latestPromptSnapshot();
           if (!finalSnapshot?.response) return;
+          const finalSettleSignature = completionSettleSignature(finalSnapshot);
           if (finalSnapshot.generationActive && !finalSnapshot.finalActionReady) {
             generationObserved = true;
-            lastSignature = finalSnapshot.renderSignature;
+            lastSettleSignature = finalSettleSignature;
             return;
           }
-          if (finalSnapshot.renderSignature !== signature) {
-            lastSignature = finalSnapshot.renderSignature;
-            scheduleStableFinish(lastSignature, stableDelayFor(finalSnapshot));
+          if (finalSettleSignature !== settleSignature) {
+            lastSettleSignature = finalSettleSignature;
+            scheduleStableFinish(lastSettleSignature, stableDelayFor(finalSnapshot));
             return;
           }
           const status = finalSnapshot.finalActionReady
@@ -393,21 +418,21 @@
         if (settled || !isCurrentGeneration()) return;
         const snapshot = latestPromptSnapshot();
         const text = snapshot?.response || '';
-        const signature = snapshot?.renderSignature || '';
+        const settleSignature = completionSettleSignature(snapshot);
         if (snapshot?.generationActive && !snapshot.finalActionReady) {
           generationObserved = true;
-          lastSignature = signature;
+          lastSettleSignature = settleSignature;
           resetStableTimer();
           return;
         }
         if (!text) {
-          lastSignature = '';
+          lastSettleSignature = '';
           resetStableTimer();
           return;
         }
-        if (signature === lastSignature && stableId !== null) return;
-        lastSignature = signature;
-        scheduleStableFinish(signature, stableDelayFor(snapshot));
+        if (settleSignature === lastSettleSignature && stableId !== null) return;
+        lastSettleSignature = settleSignature;
+        scheduleStableFinish(settleSignature, stableDelayFor(snapshot));
       };
 
       const scheduleCheck = () => {
@@ -528,24 +553,19 @@
     return Boolean(node.closest('button[data-testid="stop-button"], button[data-testid="fruitjuice-stop-button"]'));
   }
 
-  function scheduleViewedSignal() {
-    if (!isCurrentGeneration()) return;
-    if (viewSignalTimer !== null) clearTimeout(viewSignalTimer);
-    viewSignalTimer = setTimeout(() => {
-      viewSignalTimer = null;
-      if (!isCurrentGeneration()) return;
-      if (document.visibilityState !== 'visible') return;
-      if (typeof document.hasFocus === 'function' && !document.hasFocus()) return;
-
-      const conversationUrl = location.href;
-      const now = Date.now();
-      if (conversationUrl === lastViewedUrl && now - lastViewedAt < VIEW_SIGNAL_DEDUPE_MS) return;
-      lastViewedUrl = conversationUrl;
-      lastViewedAt = now;
-
-      safeRuntimeSendMessage({ type: 'CHATGPT_CONVERSATION_VIEWED', conversationUrl });
-    }, VIEW_SIGNAL_DELAY_MS);
+  function signalConversationInteraction(event) {
+    if (!isCurrentGeneration() || event?.isTrusted === false) return;
+    const conversationUrl = location.href;
+    const now = Date.now();
+    if (conversationUrl === lastInteractionUrl && now - lastInteractionAt < INTERACTION_SIGNAL_DEDUPE_MS) return;
+    lastInteractionUrl = conversationUrl;
+    lastInteractionAt = now;
+    safeRuntimeSendMessage({ type: 'CHATGPT_CONVERSATION_INTERACTED', conversationUrl });
   }
+
+  document.addEventListener('pointerdown', signalConversationInteraction, true);
+  document.addEventListener('keydown', signalConversationInteraction, true);
+  document.addEventListener('wheel', signalConversationInteraction, { capture: true, passive: true });
 
   document.addEventListener('click', (event) => {
     if (!isCurrentGeneration() || !isStopButton(event.target)) return;
@@ -554,20 +574,6 @@
     if (cancelActiveCompletionWait) cancelActiveCompletionWait();
     suppressUntilEpoch = Date.now() + 1500;
   }, true);
-
-  document.addEventListener('visibilitychange', () => {
-    if (!isCurrentGeneration()) return;
-    if (document.visibilityState === 'visible') scheduleViewedSignal();
-  }, true);
-  window.addEventListener('focus', () => {
-    if (isCurrentGeneration()) scheduleViewedSignal();
-  }, true);
-  window.addEventListener('pageshow', () => {
-    if (isCurrentGeneration()) scheduleViewedSignal();
-  }, true);
-  document.addEventListener('DOMContentLoaded', () => {
-    if (isCurrentGeneration()) scheduleViewedSignal();
-  }, { once: true });
 
   try {
     chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -583,6 +589,4 @@
       return false;
     });
   } catch {}
-
-  scheduleViewedSignal();
 })();
