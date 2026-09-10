@@ -13,20 +13,14 @@
   const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
   const FINAL_TURN_WAIT_MS = 30000;
   const ANSWER_CHECK_THROTTLE_MS = 150;
-  const ANSWER_STABLE_MS = 1200;
-  const NETWORK_FALLBACK_DELAY_MS = 2500;
-  const GENERATION_SCAN_THROTTLE_MS = 100;
   const VIEW_SIGNAL_DELAY_MS = 80;
   const VIEW_SIGNAL_DEDUPE_MS = 750;
-  let completionAttempt = 0;
+  let watchToken = 0;
   let lastSentFingerprint = '';
   let suppressUntilEpoch = 0;
   let viewSignalTimer = null;
   let lastViewedUrl = '';
   let lastViewedAt = 0;
-  let generationWasActive = false;
-  let lifecycleScanTimer = null;
-  let networkFallbackTimer = null;
 
   function isCurrentGeneration() {
     return globalThis.__chatgptNativeNotifierGeneration === generation;
@@ -66,6 +60,9 @@
     return '';
   }
 
+  // Keep this extraction path aligned with upstream v1.0.8, commit
+  // cbe00dcfcff8a571f407c6109ed4d5f97cef60a9. That implementation is the
+  // workstation-proven baseline for meaningful response previews.
   function assistantText(turn) {
     if (!turn) return '';
     try {
@@ -74,19 +71,12 @@
         : turn.querySelector('[data-message-author-role="assistant"]');
       if (!roleNode) return '';
 
-      const markdownNodes = Array.from(roleNode.querySelectorAll('.markdown'));
-      const renderedNodes = markdownNodes.length > 0
-        ? markdownNodes
-        : Array.from(roleNode.querySelectorAll('[class*="prose"]'));
-      const renderedText = normalize(renderedNodes
-        .map((node) => normalize(node.textContent || node.innerText || ''))
-        .filter(Boolean)
-        .join(' '));
-      const fullText = normalize(roleNode.textContent || roleNode.innerText || '');
-
-      if (!renderedText) return fullText;
-      if (fullText.length > renderedText.length + 80) return fullText;
-      return renderedText;
+      const rendered = roleNode.querySelector('.markdown, [class*="prose"]');
+      return normalize(
+        rendered
+          ? (rendered.textContent || rendered.innerText || '')
+          : (roleNode.textContent || roleNode.innerText || '')
+      );
     } catch {
       return '';
     }
@@ -128,34 +118,24 @@
     };
   }
 
-  function snapshotFingerprint(snapshot) {
-    if (!snapshot?.response) return '';
-    return `${snapshot.promptKey}|${snapshot.assistantKey}|${snapshot.response}`;
-  }
-
-  function isGenerationInProgress() {
-    try {
-      if (document.querySelector('button[data-testid="stop-button"], button[data-testid="fruitjuice-stop-button"]')) {
-        return true;
-      }
-      return Array.from(document.querySelectorAll('button[aria-label]')).some((button) => {
-        const label = normalize(button.getAttribute('aria-label')).toLowerCase();
-        return label === 'stop generating' || label === 'stop response' || label === 'stop streaming';
-      });
-    } catch {
-      return false;
-    }
+  function answerBoundToLatestPrompt() {
+    return latestPromptSnapshot()?.response || '';
   }
 
   function conversationObserverRoot() {
     const turns = turnNodes();
     const latestTurn = turns[turns.length - 1];
-    if (latestTurn) return latestTurn.closest?.('main') || latestTurn.parentElement;
+    if (latestTurn) {
+      const main = latestTurn.closest?.('main');
+      if (main) return main;
+      if (latestTurn.parentElement) return latestTurn.parentElement;
+    }
     return document.querySelector('main') || document.body || document.documentElement;
   }
 
-  function waitForLatestAnswer() {
-    if (!isCurrentGeneration()) return Promise.resolve(null);
+  function waitForAnswerBoundToLatestPrompt() {
+    const immediate = answerBoundToLatestPrompt();
+    if (immediate) return Promise.resolve(immediate);
 
     return new Promise((resolve) => {
       let settled = false;
@@ -163,74 +143,33 @@
       let timeoutId = null;
       let throttleId = null;
       let frameId = null;
-      let stableTimerId = null;
       let lastCheckAt = 0;
-      let lastCandidateFingerprint = '';
 
-      const cleanup = () => {
-        observer?.disconnect();
-        if (timeoutId !== null) clearTimeout(timeoutId);
-        if (throttleId !== null) clearTimeout(throttleId);
-        if (stableTimerId !== null) clearTimeout(stableTimerId);
-        if (frameId !== null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frameId);
+      const cleanupScheduledCheck = () => {
+        if (throttleId !== null) {
+          clearTimeout(throttleId);
+          throttleId = null;
+        }
+        if (frameId !== null && typeof cancelAnimationFrame === 'function') {
+          cancelAnimationFrame(frameId);
+          frameId = null;
+        }
       };
 
-      const finish = (snapshot) => {
+      const finish = (text) => {
         if (settled) return;
         settled = true;
-        cleanup();
-        if (!isCurrentGeneration()) {
-          resolve(null);
-          return;
-        }
-        resolve(snapshot || latestPromptSnapshot() || { promptKey: '', assistantKey: '', response: 'Response finished.' });
-      };
-
-      const armStableFinish = (candidateFingerprint) => {
-        if (stableTimerId !== null) clearTimeout(stableTimerId);
-        stableTimerId = setTimeout(() => {
-          stableTimerId = null;
-          if (!isCurrentGeneration()) {
-            finish(null);
-            return;
-          }
-          if (isGenerationInProgress()) return;
-          const latest = latestPromptSnapshot();
-          const latestFingerprint = snapshotFingerprint(latest);
-          if (latestFingerprint && latestFingerprint === candidateFingerprint) {
-            finish(latest);
-            return;
-          }
-          if (latestFingerprint) {
-            lastCandidateFingerprint = latestFingerprint;
-            armStableFinish(latestFingerprint);
-          }
-        }, ANSWER_STABLE_MS);
+        if (observer) observer.disconnect();
+        if (timeoutId !== null) clearTimeout(timeoutId);
+        cleanupScheduledCheck();
+        resolve(text);
       };
 
       const check = () => {
-        if (settled) return;
-        if (!isCurrentGeneration()) {
-          finish(null);
-          return;
-        }
+        if (settled || !isCurrentGeneration()) return;
         lastCheckAt = performance.now();
-        if (isGenerationInProgress()) {
-          if (stableTimerId !== null) {
-            clearTimeout(stableTimerId);
-            stableTimerId = null;
-          }
-          return;
-        }
-        const snapshot = latestPromptSnapshot();
-        const candidateFingerprint = snapshotFingerprint(snapshot);
-        if (!candidateFingerprint) return;
-        if (candidateFingerprint === lastCandidateFingerprint) {
-          if (stableTimerId === null) armStableFinish(candidateFingerprint);
-          return;
-        }
-        lastCandidateFingerprint = candidateFingerprint;
-        armStableFinish(candidateFingerprint);
+        const text = answerBoundToLatestPrompt();
+        if (text) finish(text);
       };
 
       const scheduleCheck = () => {
@@ -254,7 +193,10 @@
         observer.observe(root, { childList: true, subtree: true, characterData: true });
       }
 
-      timeoutId = setTimeout(() => finish(latestPromptSnapshot()), FINAL_TURN_WAIT_MS);
+      timeoutId = setTimeout(() => {
+        finish(answerBoundToLatestPrompt() || 'Response finished.');
+      }, FINAL_TURN_WAIT_MS);
+
       check();
     });
   }
@@ -263,6 +205,7 @@
     if (!isCurrentGeneration() || !snapshot?.response) return;
     const fingerprint = `${snapshot.promptKey}|${snapshot.assistantKey}|${snapshot.response.slice(0, 1000)}`;
     if (fingerprint === lastSentFingerprint) return;
+
     lastSentFingerprint = fingerprint;
     safeRuntimeSendMessage({
       type: 'CHATGPT_RESPONSE_COMPLETE',
@@ -274,56 +217,23 @@
   }
 
   function armForCurrentPrompt() {
-    if (!isCurrentGeneration() || Date.now() < suppressUntilEpoch || isGenerationInProgress()) return;
-    const token = ++completionAttempt;
-    waitForLatestAnswer().then((resolved) => {
-      if (!isCurrentGeneration() || token !== completionAttempt || !resolved) return;
-      sendCompletion(resolved);
-    }).catch(() => {});
-  }
-
-  function scheduleNetworkFallback() {
-    if (networkFallbackTimer !== null) clearTimeout(networkFallbackTimer);
-    networkFallbackTimer = setTimeout(() => {
-      networkFallbackTimer = null;
-      if (!isCurrentGeneration() || Date.now() < suppressUntilEpoch) return;
-      if (isGenerationInProgress()) {
-        generationWasActive = true;
-        return;
-      }
-      armForCurrentPrompt();
-    }, NETWORK_FALLBACK_DELAY_MS);
-  }
-
-  function scanGenerationLifecycle() {
-    lifecycleScanTimer = null;
-    if (!isCurrentGeneration()) return;
-    const active = isGenerationInProgress();
-    if (active) {
-      generationWasActive = true;
-      if (networkFallbackTimer !== null) {
-        clearTimeout(networkFallbackTimer);
-        networkFallbackTimer = null;
-      }
+    if (!isCurrentGeneration() || Date.now() < suppressUntilEpoch) return;
+    const snapshot = latestPromptSnapshot();
+    if (snapshot?.response) {
+      sendCompletion(snapshot);
       return;
     }
-    if (!generationWasActive) return;
-    generationWasActive = false;
-    if (Date.now() >= suppressUntilEpoch) armForCurrentPrompt();
-  }
 
-  function scheduleGenerationScan() {
-    if (!isCurrentGeneration() || lifecycleScanTimer !== null) return;
-    lifecycleScanTimer = setTimeout(scanGenerationLifecycle, GENERATION_SCAN_THROTTLE_MS);
-  }
-
-  function startGenerationLifecycleObserver() {
-    generationWasActive = isGenerationInProgress();
-    const root = document.documentElement || document.body;
-    if (!root || typeof MutationObserver !== 'function') return;
-    const observer = new MutationObserver(scheduleGenerationScan);
-    observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-testid', 'aria-label', 'disabled'] });
-    scheduleGenerationScan();
+    const token = watchToken;
+    waitForAnswerBoundToLatestPrompt().then((text) => {
+      if (!isCurrentGeneration() || token !== watchToken) return;
+      const resolved = latestPromptSnapshot();
+      if (resolved?.response) {
+        sendCompletion(resolved);
+      } else {
+        sendCompletion({ promptKey: '', assistantKey: '', response: text });
+      }
+    }).catch(() => {});
   }
 
   function isStopButton(node) {
@@ -355,7 +265,7 @@
 
   document.addEventListener('click', (event) => {
     if (!isCurrentGeneration() || !isStopButton(event.target)) return;
-    completionAttempt += 1;
+    watchToken += 1;
     suppressUntilEpoch = Date.now() + 1500;
   }, true);
 
@@ -376,10 +286,9 @@
   try {
     chrome.runtime.onMessage.addListener((message) => {
       if (!isCurrentGeneration()) return;
-      if (message?.type === 'CHATGPT_CONVERSATION_REQUEST_COMPLETED') scheduleNetworkFallback();
+      if (message?.type === 'CHATGPT_CONVERSATION_REQUEST_COMPLETED') armForCurrentPrompt();
     });
   } catch {}
 
-  startGenerationLifecycleObserver();
   scheduleViewedSignal();
 })();
