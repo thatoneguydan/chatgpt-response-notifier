@@ -51,6 +51,15 @@ test('capture is restricted to the canonical newest conversation turn', () => {
   assert.doesNotMatch(contentScript, /for \(let index = turns\.length - 1; index >= 0/);
 });
 
+test('assistant capture evaluates the whole newest turn instead of one nested role node', () => {
+  assert.match(contentScript, /function assistantCapture\(turn\)/);
+  assert.match(contentScript, /turn\.querySelectorAll\('\.markdown, \[class\*="prose"\]'\)/);
+  assert.match(contentScript, /turn\.querySelectorAll\('\[data-message-author-role="assistant"\], \[data-author="assistant"\]'\)/);
+  assert.match(contentScript, /source: 'whole-turn'/);
+  assert.match(contentScript, /candidates\.sort\(\(left, right\) => right\.text\.length - left\.text\.length\)/);
+  assert.doesNotMatch(contentScript, /const scope = directAssistant \|\| turn/);
+});
+
 test('real completion follows live ChatGPT streaming state instead of requiring a Copy action', () => {
   assert.match(contentScript, /function hasVisibleStopButton\(\)/);
   assert.match(contentScript, /button\[data-testid="stop-button"\]/);
@@ -62,6 +71,12 @@ test('real completion follows live ChatGPT streaming state instead of requiring 
   assert.match(contentScript, /ANSWER_STABLE_WITHOUT_GENERATION_MARKER_MS\s*=\s*2500/);
   assert.match(contentScript, /waitForCompletedLatestAnswer/);
   assert.doesNotMatch(contentScript, /if \(!text \|\| !snapshot\?\.finalActionReady\)/);
+});
+
+test('busy-state detection checks the whole latest turn', () => {
+  assert.match(contentScript, /turn\.getAttribute\?\.\('aria-busy'\) === 'true'/);
+  assert.match(contentScript, /turn\.querySelector\?\.\('\[aria-busy="true"\]'\)/);
+  assert.doesNotMatch(contentScript, /const scope = directAssistant \|\| turn/);
 });
 
 test('final response action remains an optional fast confirmation', () => {
@@ -99,12 +114,19 @@ test('project-aware notification metadata cleans the current Open <name> project
 test('popup exposes bounded local capture diagnostics without logging response text', () => {
   assert.match(contentScript, /lastCaptureDiagnostic/);
   assert.match(contentScript, /responseLength/);
+  assert.match(contentScript, /captureSource/);
+  assert.match(contentScript, /turnTextLength/);
+  assert.match(contentScript, /responseSurfaceCount/);
+  assert.match(contentScript, /assistantRoleNodeCount/);
   assert.match(contentScript, /generationActive/);
   assert.match(contentScript, /generationObserved/);
   assert.match(contentScript, /finalActionReady/);
   assert.match(contentScript, /GET_CHATGPT_CAPTURE_DIAGNOSTIC/);
   assert.match(popupHtml, /id="captureStatus"/);
   assert.match(popupJs, /GET_CHATGPT_CAPTURE_DIAGNOSTIC/);
+  assert.match(popupJs, /source /);
+  assert.match(popupJs, /surfaces /);
+  assert.match(popupJs, /assistant nodes /);
   assert.match(popupJs, /streaming seen/);
   assert.match(popupJs, /final marker/);
   assert.doesNotMatch(popupJs, /capture\.response\b/);

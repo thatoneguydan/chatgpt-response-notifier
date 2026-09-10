@@ -114,35 +114,80 @@
     }
   }
 
-  function assistantText(turn) {
-    if (!turn) return '';
+  function topLevelRenderedNodes(nodes) {
+    return nodes.filter((node, index) => !nodes.some((other, otherIndex) => (
+      otherIndex !== index && other !== node && other.contains?.(node)
+    )));
+  }
+
+  function joinedUniqueNodeText(nodes) {
+    const texts = [];
+    const seen = new Set();
+    for (const node of nodes) {
+      const text = readableNodeText(node);
+      if (!text || seen.has(text)) continue;
+      seen.add(text);
+      texts.push(text);
+    }
+    return normalize(texts.join(' '));
+  }
+
+  function cleanTurnFallbackText(text) {
+    return normalize(text)
+      .replace(/^\s*(ChatGPT|Assistant)\s+said:?\s*/i, '')
+      .replace(/(?:\s+(?:Copy|Copy response|Good response|Bad response|Read aloud|Share|Regenerate|Retry|More))+\s*$/i, '')
+      .trim();
+  }
+
+  function assistantCapture(turn) {
+    const empty = {
+      text: '',
+      source: 'none',
+      turnTextLength: 0,
+      responseSurfaceCount: 0,
+      responseSurfaceTextLength: 0,
+      assistantRoleNodeCount: 0,
+      assistantRoleTextLength: 0
+    };
+    if (!turn) return empty;
+
     try {
-      if (roleOf(turn) === 'user') return '';
+      if (roleOf(turn) === 'user') return empty;
 
-      const directAssistant = turn.matches?.('[data-message-author-role="assistant"], [data-author="assistant"]')
-        ? turn
-        : turn.querySelector('[data-message-author-role="assistant"], [data-author="assistant"]');
-      const scope = directAssistant || turn;
+      const responseSurfaceNodes = topLevelRenderedNodes(
+        Array.from(turn.querySelectorAll('.markdown, [class*="prose"]'))
+          .filter(isRenderedElement)
+      );
+      const responseSurfaceText = joinedUniqueNodeText(responseSurfaceNodes);
 
-      const renderedTexts = Array.from(scope.querySelectorAll('.markdown, [class*="prose"]'))
-        .filter(isRenderedElement)
-        .map(readableNodeText)
-        .filter(Boolean);
-      if (renderedTexts.length > 0) {
-        const unique = [...new Set(renderedTexts)];
-        unique.sort((left, right) => right.length - left.length);
-        if (unique[0]) return unique[0];
-      }
+      const assistantRoleNodes = topLevelRenderedNodes([
+        ...(turn.matches?.('[data-message-author-role="assistant"], [data-author="assistant"]') ? [turn] : []),
+        ...Array.from(turn.querySelectorAll('[data-message-author-role="assistant"], [data-author="assistant"]'))
+          .filter(isRenderedElement)
+      ]);
+      const assistantRoleText = joinedUniqueNodeText(assistantRoleNodes);
+      const turnText = cleanTurnFallbackText(readableNodeText(turn));
 
-      if (directAssistant || roleOf(turn) === 'assistant') {
-        const fallback = readableNodeText(scope)
-          .replace(/^\s*(ChatGPT|Assistant)\s+said:\s*/i, '')
-          .replace(/\s+(Copy|Good response|Bad response|Read aloud|Share|Regenerate)\s*$/i, '')
-          .trim();
-        return normalize(fallback);
-      }
-    } catch {}
-    return '';
+      const candidates = [
+        { source: 'rendered-surfaces', text: responseSurfaceText },
+        { source: 'assistant-role-nodes', text: assistantRoleText },
+        { source: 'whole-turn', text: turnText }
+      ].filter((candidate) => candidate.text);
+      candidates.sort((left, right) => right.text.length - left.text.length);
+      const best = candidates[0] || { source: 'none', text: '' };
+
+      return {
+        text: best.text,
+        source: best.source,
+        turnTextLength: turnText.length,
+        responseSurfaceCount: responseSurfaceNodes.length,
+        responseSurfaceTextLength: responseSurfaceText.length,
+        assistantRoleNodeCount: assistantRoleNodes.length,
+        assistantRoleTextLength: assistantRoleText.length
+      };
+    } catch {
+      return empty;
+    }
   }
 
   function hasFinalResponseAction(turn) {
@@ -170,12 +215,8 @@
   function hasBusyAssistantSignal(turn) {
     if (!turn) return false;
     try {
-      const directAssistant = turn.matches?.('[data-message-author-role="assistant"], [data-author="assistant"]')
-        ? turn
-        : turn.querySelector('[data-message-author-role="assistant"], [data-author="assistant"]');
-      const scope = directAssistant || turn;
-      if (scope.getAttribute?.('aria-busy') === 'true') return true;
-      return Boolean(scope.querySelector?.('[aria-busy="true"]'));
+      if (turn.getAttribute?.('aria-busy') === 'true') return true;
+      return Boolean(turn.querySelector?.('[aria-busy="true"]'));
     } catch {
       return false;
     }
@@ -189,7 +230,8 @@
     // must live in the newest canonical conversation turn; otherwise we wait.
     const assistantIndex = turns.length - 1;
     const assistantTurn = turns[assistantIndex];
-    const response = assistantText(assistantTurn);
+    const capture = assistantCapture(assistantTurn);
+    const response = capture.text;
     const promptTurn = assistantIndex > 0 ? turns[assistantIndex - 1] : null;
     const stopButtonActive = hasVisibleStopButton();
     const assistantBusy = hasBusyAssistantSignal(assistantTurn);
@@ -201,6 +243,12 @@
       ].join('|'),
       assistantKey: assistantTurn?.getAttribute('data-testid') || `assistant-${assistantIndex}`,
       response,
+      captureSource: capture.source,
+      turnTextLength: capture.turnTextLength,
+      responseSurfaceCount: capture.responseSurfaceCount,
+      responseSurfaceTextLength: capture.responseSurfaceTextLength,
+      assistantRoleNodeCount: capture.assistantRoleNodeCount,
+      assistantRoleTextLength: capture.assistantRoleTextLength,
       finalActionReady: hasFinalResponseAction(assistantTurn),
       stopButtonActive,
       assistantBusy,
@@ -212,6 +260,12 @@
     lastCaptureDiagnostic = {
       status,
       responseLength: Number(snapshot?.response?.length || 0),
+      captureSource: String(snapshot?.captureSource || 'none'),
+      turnTextLength: Number(snapshot?.turnTextLength || 0),
+      responseSurfaceCount: Number(snapshot?.responseSurfaceCount || 0),
+      responseSurfaceTextLength: Number(snapshot?.responseSurfaceTextLength || 0),
+      assistantRoleNodeCount: Number(snapshot?.assistantRoleNodeCount || 0),
+      assistantRoleTextLength: Number(snapshot?.assistantRoleTextLength || 0),
       finalActionReady: Boolean(snapshot?.finalActionReady),
       generationActive: Boolean(snapshot?.generationActive),
       generationObserved: Boolean(generationObserved),
