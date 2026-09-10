@@ -13,15 +13,20 @@
   const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
   const FINAL_TURN_WAIT_MS = 30000;
   const ANSWER_CHECK_THROTTLE_MS = 150;
-  const ANSWER_STABLE_MS = 900;
+  const ANSWER_STABLE_MS = 1200;
+  const NETWORK_FALLBACK_DELAY_MS = 2500;
+  const GENERATION_SCAN_THROTTLE_MS = 100;
   const VIEW_SIGNAL_DELAY_MS = 80;
   const VIEW_SIGNAL_DEDUPE_MS = 750;
-  let watchToken = 0;
+  let completionAttempt = 0;
   let lastSentFingerprint = '';
   let suppressUntilEpoch = 0;
   let viewSignalTimer = null;
   let lastViewedUrl = '';
   let lastViewedAt = 0;
+  let generationWasActive = false;
+  let lifecycleScanTimer = null;
+  let networkFallbackTimer = null;
 
   function isCurrentGeneration() {
     return globalThis.__chatgptNativeNotifierGeneration === generation;
@@ -73,15 +78,15 @@
       const renderedNodes = markdownNodes.length > 0
         ? markdownNodes
         : Array.from(roleNode.querySelectorAll('[class*="prose"]'));
-      if (renderedNodes.length > 0) {
-        const renderedText = renderedNodes
-          .map((node) => normalize(node.textContent || node.innerText || ''))
-          .filter(Boolean)
-          .join(' ');
-        if (renderedText) return normalize(renderedText);
-      }
+      const renderedText = normalize(renderedNodes
+        .map((node) => normalize(node.textContent || node.innerText || ''))
+        .filter(Boolean)
+        .join(' '));
+      const fullText = normalize(roleNode.textContent || roleNode.innerText || '');
 
-      return normalize(roleNode.textContent || roleNode.innerText || '');
+      if (!renderedText) return fullText;
+      if (fullText.length > renderedText.length + 80) return fullText;
+      return renderedText;
     } catch {
       return '';
     }
@@ -126,6 +131,20 @@
   function snapshotFingerprint(snapshot) {
     if (!snapshot?.response) return '';
     return `${snapshot.promptKey}|${snapshot.assistantKey}|${snapshot.response}`;
+  }
+
+  function isGenerationInProgress() {
+    try {
+      if (document.querySelector('button[data-testid="stop-button"], button[data-testid="fruitjuice-stop-button"]')) {
+        return true;
+      }
+      return Array.from(document.querySelectorAll('button[aria-label]')).some((button) => {
+        const label = normalize(button.getAttribute('aria-label')).toLowerCase();
+        return label === 'stop generating' || label === 'stop response' || label === 'stop streaming';
+      });
+    } catch {
+      return false;
+    }
   }
 
   function conversationObserverRoot() {
@@ -175,6 +194,7 @@
             finish(null);
             return;
           }
+          if (isGenerationInProgress()) return;
           const latest = latestPromptSnapshot();
           const latestFingerprint = snapshotFingerprint(latest);
           if (latestFingerprint && latestFingerprint === candidateFingerprint) {
@@ -195,6 +215,13 @@
           return;
         }
         lastCheckAt = performance.now();
+        if (isGenerationInProgress()) {
+          if (stableTimerId !== null) {
+            clearTimeout(stableTimerId);
+            stableTimerId = null;
+          }
+          return;
+        }
         const snapshot = latestPromptSnapshot();
         const candidateFingerprint = snapshotFingerprint(snapshot);
         if (!candidateFingerprint) return;
@@ -233,7 +260,7 @@
   }
 
   function sendCompletion(snapshot) {
-    if (!isCurrentGeneration() || !snapshot) return;
+    if (!isCurrentGeneration() || !snapshot?.response) return;
     const fingerprint = `${snapshot.promptKey}|${snapshot.assistantKey}|${snapshot.response.slice(0, 1000)}`;
     if (fingerprint === lastSentFingerprint) return;
     lastSentFingerprint = fingerprint;
@@ -247,12 +274,56 @@
   }
 
   function armForCurrentPrompt() {
-    if (!isCurrentGeneration() || Date.now() < suppressUntilEpoch) return;
-    const token = watchToken;
+    if (!isCurrentGeneration() || Date.now() < suppressUntilEpoch || isGenerationInProgress()) return;
+    const token = ++completionAttempt;
     waitForLatestAnswer().then((resolved) => {
-      if (!isCurrentGeneration() || token !== watchToken || !resolved) return;
+      if (!isCurrentGeneration() || token !== completionAttempt || !resolved) return;
       sendCompletion(resolved);
     }).catch(() => {});
+  }
+
+  function scheduleNetworkFallback() {
+    if (networkFallbackTimer !== null) clearTimeout(networkFallbackTimer);
+    networkFallbackTimer = setTimeout(() => {
+      networkFallbackTimer = null;
+      if (!isCurrentGeneration() || Date.now() < suppressUntilEpoch) return;
+      if (isGenerationInProgress()) {
+        generationWasActive = true;
+        return;
+      }
+      armForCurrentPrompt();
+    }, NETWORK_FALLBACK_DELAY_MS);
+  }
+
+  function scanGenerationLifecycle() {
+    lifecycleScanTimer = null;
+    if (!isCurrentGeneration()) return;
+    const active = isGenerationInProgress();
+    if (active) {
+      generationWasActive = true;
+      if (networkFallbackTimer !== null) {
+        clearTimeout(networkFallbackTimer);
+        networkFallbackTimer = null;
+      }
+      return;
+    }
+    if (!generationWasActive) return;
+    generationWasActive = false;
+    if (Date.now() >= suppressUntilEpoch) armForCurrentPrompt();
+  }
+
+  function scheduleGenerationScan() {
+    if (!isCurrentGeneration() || lifecycleScanTimer !== null) return;
+    lifecycleScanTimer = setTimeout(scanGenerationLifecycle, GENERATION_SCAN_THROTTLE_MS);
+  }
+
+  function startGenerationLifecycleObserver() {
+    generationWasActive = isGenerationInProgress();
+    const root = document.documentElement || document.body;
+    if (!root || typeof MutationObserver !== 'function') return;
+    const observer = new MutationObserver(scheduleGenerationScan);
+    observer.observe(root, { childList: true, subtree: true, attributes: true, attributeFilter: ['data-testid', 'aria-label', 'disabled'] });
+    scheduleGenerationScan();
   }
 
   function isStopButton(node) {
@@ -284,7 +355,7 @@
 
   document.addEventListener('click', (event) => {
     if (!isCurrentGeneration() || !isStopButton(event.target)) return;
-    watchToken += 1;
+    completionAttempt += 1;
     suppressUntilEpoch = Date.now() + 1500;
   }, true);
 
@@ -305,9 +376,10 @@
   try {
     chrome.runtime.onMessage.addListener((message) => {
       if (!isCurrentGeneration()) return;
-      if (message?.type === 'CHATGPT_CONVERSATION_REQUEST_COMPLETED') armForCurrentPrompt();
+      if (message?.type === 'CHATGPT_CONVERSATION_REQUEST_COMPLETED') scheduleNetworkFallback();
     });
   } catch {}
 
+  startGenerationLifecycleObserver();
   scheduleViewedSignal();
 })();
