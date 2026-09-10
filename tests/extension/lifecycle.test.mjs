@@ -13,26 +13,40 @@ const [serviceWorker, contentScript, popupHtml, popupJs] = await Promise.all([
   readFile(path.join(extensionRoot, 'popup.js'), 'utf8')
 ]);
 
-test('conversation dismissal is driven by an explicit visible/focused page signal', () => {
-  assert.match(contentScript, /CHATGPT_CONVERSATION_VIEWED/);
-  assert.match(contentScript, /document\.visibilityState !== 'visible'/);
-  assert.match(contentScript, /document\.hasFocus/);
-  assert.match(serviceWorker, /CHATGPT_CONVERSATION_VIEWED/);
-  assert.match(serviceWorker, /dismissReportedViewedConversation/);
+test('conversation dismissal requires an actual page interaction', () => {
+  assert.match(contentScript, /CHATGPT_CONVERSATION_INTERACTED/);
+  assert.match(contentScript, /document\.addEventListener\('pointerdown', signalConversationInteraction, true\)/);
+  assert.match(contentScript, /document\.addEventListener\('keydown', signalConversationInteraction, true\)/);
+  assert.match(contentScript, /document\.addEventListener\('wheel', signalConversationInteraction/);
+  assert.match(contentScript, /event\?\.isTrusted === false/);
+  assert.match(serviceWorker, /CHATGPT_CONVERSATION_INTERACTED/);
+  assert.match(serviceWorker, /dismissReportedInteractedConversation/);
+  assert.doesNotMatch(contentScript, /CHATGPT_CONVERSATION_VIEWED/);
+  assert.doesNotMatch(contentScript, /scheduleViewedSignal/);
+});
+
+test('focus, activation, navigation, and helper restart do not clear unresolved alerts', () => {
+  assert.doesNotMatch(contentScript, /document\.visibilityState/);
+  assert.doesNotMatch(contentScript, /window\.addEventListener\('focus'/);
+  assert.doesNotMatch(contentScript, /window\.addEventListener\('pageshow'/);
+  assert.doesNotMatch(serviceWorker, /isTabActuallyViewed/);
+  assert.doesNotMatch(serviceWorker, /dismissCurrentlyViewedConversations/);
+  assert.doesNotMatch(serviceWorker, /chrome\.tabs\.onUpdated/);
   assert.doesNotMatch(serviceWorker, /chrome\.tabs\.onActivated/);
   assert.doesNotMatch(serviceWorker, /chrome\.windows\.onFocusChanged/);
-});
-
-test('tab URL navigation is a narrow fallback and tab teardown cannot dismiss by activation alone', () => {
-  assert.match(serviceWorker, /if \(!changeInfo\.url \|\| !tab\.active\) return;/);
-  assert.doesNotMatch(serviceWorker, /changeInfo\.status\s*!==\s*['"]complete['"]/);
-});
-
-test('native host restart reconciles the currently viewed conversation after persisted alerts restore', () => {
   assert.match(serviceWorker, /message\.type === 'host\.ready'/);
-  assert.match(serviceWorker, /dismissCurrentlyViewedConversations/);
   assert.match(serviceWorker, /await ensureContentScriptsInChatgptTabs\(\)/);
-  assert.match(serviceWorker, /await dismissCurrentlyViewedConversations\(\)/);
+});
+
+test('toast click activates the matching tab and foregrounds its Chrome window', () => {
+  assert.match(serviceWorker, /function foregroundChromeWindow\(windowId\)/);
+  assert.match(serviceWorker, /windowInfo\.state === 'minimized'/);
+  assert.match(serviceWorker, /chrome\.windows\.update\(windowId, \{ state: 'normal' \}\)/);
+  assert.match(serviceWorker, /chrome\.windows\.update\(windowId, \{ focused: true \}\)/);
+  assert.match(serviceWorker, /chrome\.tabs\.update\(existing\.id, \{ active: true \}\)/);
+  assert.match(serviceWorker, /await foregroundChromeWindow\(existing\.windowId\)/);
+  assert.match(serviceWorker, /message\.type === 'toast\.clicked'/);
+  assert.match(serviceWorker, /await focusOrOpenConversation\(conversationId, conversationUrl\)/);
 });
 
 test('completion still starts from the upstream-proven request-complete path', () => {
@@ -60,7 +74,7 @@ test('assistant capture evaluates the whole newest turn instead of one nested ro
   assert.doesNotMatch(contentScript, /const scope = directAssistant \|\| turn/);
 });
 
-test('real completion follows live ChatGPT streaming state instead of requiring a Copy action', () => {
+test('real completion follows available live ChatGPT streaming state with a conservative markerless fallback', () => {
   assert.match(contentScript, /function hasVisibleStopButton\(\)/);
   assert.match(contentScript, /button\[data-testid="stop-button"\]/);
   assert.match(contentScript, /button\[data-testid="fruitjuice-stop-button"\]/);
@@ -70,18 +84,20 @@ test('real completion follows live ChatGPT streaming state instead of requiring 
   assert.match(contentScript, /\.result-streaming/);
   assert.match(contentScript, /generationActive: stopButtonActive \|\| assistantBusy \|\| resultStreamingActive/);
   assert.match(contentScript, /ANSWER_STABLE_AFTER_GENERATION_MS\s*=\s*1200/);
-  assert.match(contentScript, /ANSWER_STABLE_WITHOUT_GENERATION_MARKER_MS\s*=\s*4000/);
+  assert.match(contentScript, /ANSWER_STABLE_WITHOUT_GENERATION_MARKER_MS\s*=\s*45000/);
   assert.match(contentScript, /waitForCompletedLatestAnswer/);
-  assert.doesNotMatch(contentScript, /if \(!text \|\| !snapshot\?\.finalActionReady\)/);
 });
 
-test('formatted response DOM participates in the stability fingerprint', () => {
+test('formatted response DOM and final-state transitions participate in the stability fingerprint', () => {
   assert.match(contentScript, /function responseRenderSignature\(turn, response\)/);
   assert.match(contentScript, /String\(node\.innerHTML \|\| ''\)\.length/);
-  assert.match(contentScript, /renderSignature/);
-  assert.match(contentScript, /lastSignature/);
-  assert.match(contentScript, /finalSnapshot\.renderSignature !== signature/);
+  assert.match(contentScript, /function completionSettleSignature\(snapshot\)/);
+  assert.match(contentScript, /snapshot\.finalActionKind/);
+  assert.match(contentScript, /snapshot\.generationActive/);
+  assert.match(contentScript, /lastSettleSignature/);
+  assert.match(contentScript, /finalSettleSignature !== settleSignature/);
   assert.doesNotMatch(contentScript, /let lastText = ''/);
+  assert.doesNotMatch(contentScript, /let lastSignature = ''/);
 });
 
 test('busy-state detection checks the whole latest turn', () => {
@@ -90,18 +106,24 @@ test('busy-state detection checks the whole latest turn', () => {
   assert.doesNotMatch(contentScript, /const scope = directAssistant \|\| turn/);
 });
 
-test('final response action remains an optional fast confirmation', () => {
-  assert.match(contentScript, /function hasFinalResponseAction\(turn\)/);
+test('current final response actions provide optional fast completion confirmation', () => {
+  assert.match(contentScript, /function finalResponseActionKind\(turn\)/);
+  assert.match(contentScript, /good-response-turn-action-button/);
+  assert.match(contentScript, /bad-response-turn-action-button/);
   assert.match(contentScript, /copy-turn-action-button/);
+  assert.match(contentScript, /Good response/);
+  assert.match(contentScript, /Bad response/);
   assert.match(contentScript, /Copy response/);
+  assert.match(contentScript, /finalActionReady: Boolean\(finalActionKind\)/);
   assert.match(contentScript, /ANSWER_STABLE_AFTER_FINAL_ACTION_MS\s*=\s*500/);
   assert.match(contentScript, /if \(snapshot\?\.finalActionReady\) return ANSWER_STABLE_AFTER_FINAL_ACTION_MS/);
-  assert.match(contentScript, /if \(snapshot\.generationActive && !snapshot\.finalActionReady\) return;/);
+  assert.doesNotMatch(contentScript, /buttons\.some\(\(button\) => !button\.disabled && isRenderedElement\(button\)\)/);
 });
 
-test('completion watcher observes page-wide stop-button and turn-local busy transitions', () => {
+test('completion watcher observes page-wide generation and final-action transitions', () => {
   assert.match(contentScript, /const observedRoot = document\.body \|\| document\.documentElement \|\| root/);
   assert.match(contentScript, /observer\.observe\(observedRoot/);
+  assert.match(contentScript, /'data-testid'/);
   assert.match(contentScript, /'aria-busy'/);
   assert.match(contentScript, /generationObserved = true/);
   assert.match(contentScript, /cancelActiveCompletionWait/);
@@ -133,7 +155,7 @@ test('popup exposes bounded local capture diagnostics without logging response t
   assert.match(contentScript, /generationActive/);
   assert.match(contentScript, /generationObserved/);
   assert.match(contentScript, /resultStreamingActive/);
-  assert.match(contentScript, /finalActionReady/);
+  assert.match(contentScript, /finalActionKind/);
   assert.match(contentScript, /GET_CHATGPT_CAPTURE_DIAGNOSTIC/);
   assert.match(popupHtml, /id="captureStatus"/);
   assert.match(popupJs, /GET_CHATGPT_CAPTURE_DIAGNOSTIC/);
@@ -143,7 +165,8 @@ test('popup exposes bounded local capture diagnostics without logging response t
   assert.match(popupJs, /render /);
   assert.match(popupJs, /streaming seen/);
   assert.match(popupJs, /result streaming/);
-  assert.match(popupJs, /final marker/);
+  assert.match(popupJs, /final marker /);
+  assert.match(popupJs, /capture\.finalActionKind \|\| 'none'/);
   assert.doesNotMatch(popupJs, /capture\.response\b/);
 });
 
