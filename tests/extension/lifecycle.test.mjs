@@ -33,23 +33,35 @@ test('native host restart reconciles the currently viewed conversation after per
   assert.match(serviceWorker, /await dismissCurrentlyViewedConversations\(\)/);
 });
 
-test('completion capture follows the pinned upstream v1.0.8 request-complete path', () => {
-  assert.match(contentScript, /cbe00dcfcff8a571f407c6109ed4d5f97cef60a9/);
-  assert.match(contentScript, /message\?\.type === 'CHATGPT_CONVERSATION_REQUEST_COMPLETED'\) armForCurrentPrompt\(\)/);
-  assert.match(contentScript, /const snapshot = latestPromptSnapshot\(\);/);
-  assert.match(contentScript, /if \(snapshot\?\.response\) \{\s*sendCompletion\(snapshot\);\s*return;/);
-  assert.match(contentScript, /const rendered = roleNode\.querySelector\('\.markdown, \[class\*=\"prose\"\]'\)/);
-  assert.match(contentScript, /const immediate = answerBoundToLatestPrompt\(\);\s*if \(immediate\) return Promise\.resolve\(immediate\);/);
+test('completion still starts from the upstream-proven request-complete path', () => {
+  assert.match(serviceWorker, /chrome\.webRequest\.onCompleted/);
+  assert.match(serviceWorker, /signalConversationRequestCompleted/);
+  assert.match(contentScript, /CHATGPT_CONVERSATION_REQUEST_COMPLETED/);
+  assert.match(contentScript, /RENDER_GRACE_MS\s*=\s*650/);
+  assert.match(contentScript, /scheduleCompletionFromRequest/);
 });
 
-test('experimental UI lifecycle and stabilization heuristics are absent from completion capture', () => {
-  assert.doesNotMatch(contentScript, /isGenerationInProgress/);
-  assert.doesNotMatch(contentScript, /startGenerationLifecycleObserver/);
-  assert.doesNotMatch(contentScript, /generationWasActive/);
-  assert.doesNotMatch(contentScript, /ANSWER_STABLE_MS/);
-  assert.doesNotMatch(contentScript, /NETWORK_FALLBACK_DELAY_MS/);
-  assert.doesNotMatch(contentScript, /scheduleNetworkFallback/);
-  assert.doesNotMatch(contentScript, /snapshotFingerprint/);
+test('current ChatGPT conversation-turn markup is accepted without old role attributes', () => {
+  assert.match(contentScript, /article\[data-testid\*="conversation-turn"\]/);
+  assert.match(contentScript, /\[data-testid\^="conversation-turn-"\]/);
+  assert.match(contentScript, /\[data-message-author-role\], \[data-author\]/);
+  assert.match(contentScript, /turn\.querySelector\('\.markdown, \[class\*="prose"\]'\)/);
+  assert.match(contentScript, /chatgpt\|assistant/);
+  assert.match(contentScript, /you\|user/);
+});
+
+test('real completion notifications require readable assistant text instead of generic fallback copy', () => {
+  assert.doesNotMatch(contentScript, /Response finished\./);
+  assert.match(contentScript, /if \(resolved\?\.response\) sendCompletion\(resolved\)/);
+  assert.match(serviceWorker, /No readable assistant response was captured/);
+});
+
+test('project-aware notification metadata is captured from the exact current project route', () => {
+  assert.match(contentScript, /function currentProjectId\(\)/);
+  assert.match(contentScript, /function currentProjectTitle\(\)/);
+  assert.match(contentScript, /const wantedPath = `\/g\/\$\{projectId\}\/project`/);
+  assert.match(contentScript, /projectTitle: currentProjectTitle\(\)/);
+  assert.match(serviceWorker, /formatNotificationTitle\(message\.projectTitle, message\.sessionTitle\)/);
 });
 
 test('service worker proactively injects the current content script into already-open ChatGPT tabs', () => {
