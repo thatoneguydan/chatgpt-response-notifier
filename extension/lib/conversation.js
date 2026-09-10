@@ -13,15 +13,12 @@ export function normalizeChatGptUrl(rawUrl) {
     url.hash = '';
     url.pathname = url.pathname.replace(/\/+$/, '') || '/';
     return url;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 export function conversationFromUrl(rawUrl) {
   const url = normalizeChatGptUrl(rawUrl);
   if (!url) return null;
-
   const segments = url.pathname.split('/').filter(Boolean);
   let conversationId = '';
   for (let index = segments.length - 2; index >= 0; index -= 1) {
@@ -29,13 +26,8 @@ export function conversationFromUrl(rawUrl) {
     conversationId = decodeURIComponent(segments[index + 1] || '').trim();
     if (conversationId) break;
   }
-
   if (!conversationId) return null;
-
-  return {
-    id: conversationId,
-    url: `${CHATGPT_ORIGIN}${url.pathname}`
-  };
+  return { id: conversationId, url: `${CHATGPT_ORIGIN}${url.pathname}` };
 }
 
 export function sameConversation(leftUrl, rightUrl) {
@@ -54,12 +46,19 @@ export function cleanSessionTitle(rawTitle) {
   return cleaned && cleaned.toLowerCase() !== 'chatgpt' ? cleaned : 'Chat';
 }
 
+export function cleanProjectTitle(rawTitle) {
+  const raw = String(rawTitle || '').replace(/\s+/g, ' ').trim();
+  if (!raw) return '';
+  const options = raw.match(/^Open project options for\s+(.+)$/i);
+  if (options?.[1]) return options[1].trim();
+  const openProject = raw.match(/^Open\s+(.+?)\s+project(?:\b.*)?$/i);
+  if (openProject?.[1]) return openProject[1].trim();
+  return raw;
+}
+
 export function formatNotificationTitle(projectTitle, rawSessionTitle) {
   const chatTitle = cleanSessionTitle(rawSessionTitle);
-  const project = String(projectTitle || '')
-    .replace(/\s+/g, ' ')
-    .replace(/^Open project options for\s+/i, '')
-    .trim();
+  const project = cleanProjectTitle(projectTitle);
   if (!project || project.toLowerCase() === chatTitle.toLowerCase()) return chatTitle;
   return `${project} — ${chatTitle}`;
 }
