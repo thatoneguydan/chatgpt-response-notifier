@@ -37,29 +37,34 @@ test('completion still starts from the upstream-proven request-complete path', (
   assert.match(serviceWorker, /chrome\.webRequest\.onCompleted/);
   assert.match(serviceWorker, /signalConversationRequestCompleted/);
   assert.match(contentScript, /CHATGPT_CONVERSATION_REQUEST_COMPLETED/);
-  assert.match(contentScript, /RENDER_GRACE_MS\s*=\s*650/);
+  assert.match(contentScript, /REQUEST_RENDER_GRACE_MS\s*=\s*250/);
   assert.match(contentScript, /scheduleCompletionFromRequest/);
 });
 
-test('current ChatGPT conversation-turn markup is accepted without old role attributes', () => {
-  assert.match(contentScript, /article\[data-testid\*="conversation-turn"\]/);
-  assert.match(contentScript, /\[data-testid\^="conversation-turn-"\]/);
-  assert.match(contentScript, /\[data-message-author-role\], \[data-author\]/);
-  assert.match(contentScript, /turn\.querySelector\('\.markdown, \[class\*="prose"\]'\)/);
-  assert.match(contentScript, /chatgpt\|assistant/);
-  assert.match(contentScript, /you\|user/);
+test('capture is restricted to the canonical conversation stream and never arbitrary articles', () => {
+  assert.match(contentScript, /document\.querySelector\('main'\)/);
+  assert.match(contentScript, /root\.querySelectorAll\('\[data-testid\^="conversation-turn-"\]'\)/);
+  assert.doesNotMatch(contentScript, /article\[data-testid\*="conversation-turn"\]/);
+  assert.match(contentScript, /const assistantIndex = turns\.length - 1/);
+  assert.doesNotMatch(contentScript, /for \(let index = turns\.length - 1; index >= 0/);
+});
+
+test('final response text must stabilize before the toast is emitted', () => {
+  assert.match(contentScript, /ANSWER_STABLE_MS\s*=\s*700/);
+  assert.match(contentScript, /FINAL_RENDER_TIMEOUT_MS\s*=\s*8000/);
+  assert.match(contentScript, /waitForStableLatestAnswer/);
+  assert.match(contentScript, /finalSnapshot\.response !== text/);
+  assert.match(contentScript, /if \(snapshot\?\.response\) sendCompletion\(snapshot\)/);
 });
 
 test('real completion notifications require readable assistant text instead of generic fallback copy', () => {
   assert.doesNotMatch(contentScript, /Response finished\./);
-  assert.match(contentScript, /if \(resolved\?\.response\) sendCompletion\(resolved\)/);
   assert.match(serviceWorker, /No readable assistant response was captured/);
 });
 
-test('project-aware notification metadata is captured from the exact current project route', () => {
+test('project-aware notification metadata cleans the current Open <name> project control', () => {
   assert.match(contentScript, /function currentProjectId\(\)/);
-  assert.match(contentScript, /function currentProjectTitle\(\)/);
-  assert.match(contentScript, /const wantedPath = `\/g\/\$\{projectId\}\/project`/);
+  assert.match(contentScript, /function cleanProjectLabel\(rawLabel\)/);
   assert.match(contentScript, /projectTitle: currentProjectTitle\(\)/);
   assert.match(serviceWorker, /formatNotificationTitle\(message\.projectTitle, message\.sessionTitle\)/);
 });
