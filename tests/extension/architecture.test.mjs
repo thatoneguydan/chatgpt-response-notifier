@@ -27,14 +27,6 @@ test('completion content script remains upstream 1.0.8', () => {
   );
 });
 
-test('normal notifier service worker remains unchanged while local features stay separate', () => {
-  assert.equal(
-    normalizedGitBlobSha('extension/service-worker.js'),
-    'add5cd871fb56294638d3d066426c5dd0360b9d0',
-    'service-worker.js normal completion/notification glue should not be changed by recovery or popup-history work'
-  );
-});
-
 test('service worker observes ChatGPT traffic but never creates ChatGPT HTTP traffic', () => {
   const worker = text('extension/service-worker.js');
   assert.match(worker, /chrome\.webRequest\.onCompleted\.addListener/);
@@ -44,6 +36,15 @@ test('service worker observes ChatGPT traffic but never creates ChatGPT HTTP tra
   assert.doesNotMatch(worker, /onBeforeSendHeaders/);
   assert.doesNotMatch(worker, /server-capture/i);
   assert.doesNotMatch(worker, /recovery-watchdog/i);
+});
+
+test('normal notification payload uses the full browser tab title while retaining preview data', () => {
+  const worker = text('extension/service-worker.js');
+  assert.match(worker, /function fullTabTitle\(sender, message\)/);
+  assert.match(worker, /sender\?\.tab\?\.title\s*\|\|\s*message\?\.sessionTitle/);
+  assert.match(worker, /title:\s*fullTabTitle\(sender, message\)/);
+  assert.match(worker, /preview:\s*truncateResponse\(message\?\.response\)/);
+  assert.doesNotMatch(worker, /cleanSessionTitle/);
 });
 
 test('refresh/reopen recovery stays local and only observes existing ChatGPT traffic', () => {
@@ -73,13 +74,17 @@ test('refresh/reopen recovery stays local and only observes existing ChatGPT tra
   assert.doesNotMatch(finishedSelector, /stop-button/i, 'Stop/send control must not be required for recovery completion');
 });
 
-test('recent notification history is local, capped at ten, and excludes test-toast plumbing', () => {
+test('recent notification history is local, capped at ten, keeps previews, and stores full tab titles', () => {
   const history = text('extension/history-background.js');
   assert.match(history, /const MAX_HISTORY = 10/);
   assert.match(history, /indexedDB\.open/);
   assert.match(history, /CHATGPT_RESPONSE_COMPLETE/);
   assert.match(history, /GET_RECENT_NOTIFICATIONS/);
   assert.match(history, /OPEN_RECENT_NOTIFICATION/);
+  assert.match(history, /sender\?\.tab\?\.title\s*\|\|\s*message\?\.sessionTitle/);
+  assert.match(history, /title:\s*fullTabTitle\(sender, message\)/);
+  assert.match(history, /preview:\s*truncateResponse\(message\?\.response\)/);
+  assert.doesNotMatch(history, /cleanSessionTitle/);
   assert.doesNotMatch(history, /TEST_NATIVE_TOAST/);
   assert.doesNotMatch(history, /\bfetch\s*\(/);
   assert.doesNotMatch(history, /XMLHttpRequest/);
@@ -90,6 +95,7 @@ test('recent notification history is local, capped at ten, and excludes test-toa
 test('local extension scripts are valid JavaScript', () => {
   for (const relative of [
     'extension/background.js',
+    'extension/service-worker.js',
     'extension/recovery-background.js',
     'extension/recovery-script.js',
     'extension/history-background.js',
@@ -168,6 +174,17 @@ test('Windows helper retains persisted stacking behavior', () => {
   assert.match(manager, /Persist\(\)/);
   assert.match(manager, /OrderByDescending\(item => item\.Record\.CompletedAt\)/);
   assert.match(manager, /const double Gap = 10/);
+});
+
+test('Windows toast is compact, light, title-only, and never truncates the title', () => {
+  const window = text('src/ChatGPTResponseNotifier.Host/ToastWindow.cs');
+  assert.match(window, /Width\s*=\s*350/);
+  assert.match(window, /Color\.FromRgb\(248, 248, 248\)/);
+  assert.match(window, /Text\s*=\s*record\.Title/);
+  assert.match(window, /TextWrapping\s*=\s*TextWrapping\.Wrap/);
+  assert.doesNotMatch(window, /TextTrimming\s*=/);
+  assert.doesNotMatch(window, /Text\s*=\s*record\.Preview/);
+  assert.doesNotMatch(window, /record\.CompletedAt\.ToLocalTime/);
 });
 
 test('helper teardown cannot turn active toasts into dismissals during updates', () => {
