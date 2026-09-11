@@ -4,9 +4,6 @@ const testButton = document.getElementById('test');
 const updateButton = document.getElementById('checkUpdate');
 const status = document.getElementById('status');
 const updateStatus = document.getElementById('updateStatus');
-const captureStatus = document.getElementById('captureStatus');
-const backgroundStatus = document.getElementById('backgroundStatus');
-const captureHistory = document.getElementById('captureHistory');
 
 function formatUpdateState(value) {
   if (!value || typeof value !== 'object') return 'Managed updates: waiting for helper status.';
@@ -22,29 +19,15 @@ function formatUpdateState(value) {
   }
 }
 
-function formatCaptureLine(capture) {
-  if (!capture || typeof capture !== 'object') return 'none';
-  return `${capture.status || 'unknown'}; ${capture.responseLength || 0} chars; source ${capture.captureSource || 'none'}; turn ${capture.turnTextLength || 0}; surfaces ${capture.responseSurfaceCount || 0}/${capture.responseSurfaceTextLength || 0}; assistant nodes ${capture.assistantRoleNodeCount || 0}/${capture.assistantRoleTextLength || 0}; render ${capture.renderSignatureLength || 0}; streaming ${capture.generationActive ? 'yes' : 'no'}; streaming seen ${capture.generationObserved ? 'yes' : 'no'}; result streaming ${capture.resultStreamingActive ? 'yes' : 'no'}; final marker ${capture.finalActionKind || 'none'}; ${capture.elapsedMs || 0} ms.`;
-}
-
-function formatHistoryLine(capture, index) {
-  const observedAt = capture?.observedAt ? new Date(capture.observedAt) : null;
-  const time = observedAt && !Number.isNaN(observedAt.getTime())
-    ? observedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-    : 'time unknown';
-  const context = capture?.projectContext ? 'project' : 'chat';
-  return `${index + 1}. ${time} · ${context} · ${formatCaptureLine(capture)}`;
-}
-
 async function refreshHostStatus() {
   status.textContent = 'Checking Windows helper...';
   try {
     const result = await chrome.runtime.sendMessage({ type: 'PING_NATIVE_HOST' });
     if (result?.ok) {
-      status.textContent = `Windows helper connected over localhost. Extension ${chrome.runtime.getManifest().version}.`;
+      status.textContent = `Windows helper connected. Extension ${chrome.runtime.getManifest().version}.`;
       updateStatus.textContent = formatUpdateState(result.updateStatus);
     } else {
-      status.textContent = 'Windows helper is not running. Re-run the ChatGPT Response Notifier installer.';
+      status.textContent = 'Windows helper is not running. Re-run the notifier installer.';
       updateStatus.textContent = 'Managed updates unavailable until the helper is running.';
     }
   } catch (error) {
@@ -53,62 +36,13 @@ async function refreshHostStatus() {
   }
 }
 
-
-function formatBackgroundCapture(capture) {
-  if (!capture || typeof capture !== 'object') return 'none observed since this extension worker started';
-  const details = [];
-  if (capture.triggerPath) details.push(capture.triggerPath);
-  if (capture.conversationId) details.push(`chat …${String(capture.conversationId).slice(-8)}`);
-  if (capture.reason) details.push(capture.reason);
-  if (capture.statusCode) details.push(`HTTP ${capture.statusCode}`);
-  if (Number.isFinite(capture.elapsedMs)) details.push(`${capture.elapsedMs} ms`);
-  if (capture.frozen === true) details.push('tab frozen');
-  if (capture.discarded === true) details.push('tab discarded');
-  return `${capture.status || 'unknown'}${details.length ? `; ${details.join('; ')}` : ''}.`;
-}
-
-async function refreshBackgroundStatus() {
-  backgroundStatus.textContent = 'Background watcher: checking...';
-  try {
-    const result = await chrome.runtime.sendMessage({ type: 'GET_BACKGROUND_CAPTURE_DIAGNOSTIC' });
-    backgroundStatus.textContent = `Background watcher: ${formatBackgroundCapture(result?.capture)}`;
-  } catch (error) {
-    backgroundStatus.textContent = `Background watcher unavailable: ${error.message}`;
-  }
-}
-
-async function refreshCaptureStatus() {
-  captureStatus.textContent = 'Last capture: checking current ChatGPT tab...';
-  captureHistory.textContent = '';
-  try {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (typeof tab?.id !== 'number' || !String(tab.url || '').startsWith('https://chatgpt.com/')) {
-      captureStatus.textContent = 'Last capture: open a ChatGPT tab to inspect.';
-      return;
-    }
-    const result = await chrome.tabs.sendMessage(tab.id, { type: 'GET_CHATGPT_CAPTURE_DIAGNOSTIC' });
-    const capture = result?.capture;
-    if (!capture) {
-      captureStatus.textContent = 'Last capture: none recorded in this tab yet.';
-      return;
-    }
-    captureStatus.textContent = `Last capture: ${formatCaptureLine(capture)}`;
-    const history = Array.isArray(result?.history) ? result.history : [capture];
-    if (history.length > 1) {
-      captureHistory.textContent = `Recent captures (newest first):\n${history.slice(0, 8).map(formatHistoryLine).join('\n')}`;
-    }
-  } catch {
-    captureStatus.textContent = 'Last capture: unavailable for the current tab.';
-  }
-}
-
 testButton.addEventListener('click', async () => {
   testButton.disabled = true;
-  status.textContent = 'Checking helper and sending test toast...';
+  status.textContent = 'Sending persistent notification test...';
   try {
     const result = await chrome.runtime.sendMessage({ type: 'TEST_NATIVE_TOAST' });
     status.textContent = result?.ok
-      ? 'Native toast + completion chime created.'
+      ? 'Persistent notification + completion chime created.'
       : `Test failed: ${result?.error || 'unknown error'}`;
   } catch (error) {
     status.textContent = `Test failed: ${error.message}`;
@@ -133,5 +67,3 @@ updateButton.addEventListener('click', async () => {
 });
 
 refreshHostStatus();
-refreshBackgroundStatus();
-refreshCaptureStatus();
