@@ -106,7 +106,7 @@ jobs:
             gh release create $tag $managedZip $setupExe `
               --target $sourceCommit `
               --title "ChatGPT Response Notifier $version" `
-              --notes "Keeps Ram Haidar's upstream prompt-bound completion monitor unchanged and adds a local terminal [GITHUB_STATUS: CODE] eligibility gate. Uncoded chats no longer notify; coded notifications include the status code, and refresh/reopen recovery uses the same footer without ChatGPT API polling."
+              --notes "Automatically continues INCOMPLETE_LIMIT chats through the local ChatGPT composer when safe, falls back to the normal notification if DOM continuation cannot be confirmed, and expands persistent popup history to the rolling 20 most recent notifications. No ChatGPT API polling or authentication access is added."
             if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
           }
           else {
