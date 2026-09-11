@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import vm from 'node:vm';
 import test from 'node:test';
 
 const root = new URL('../../', import.meta.url);
@@ -19,6 +20,12 @@ function normalizedGitBlobSha(relative) {
   return gitBlobSha(Buffer.from(checkoutText.replace(/\r\n/g, '\n'), 'utf8'));
 }
 
+function loadStatusParser() {
+  const context = vm.createContext({});
+  vm.runInContext(text('extension/status-code.js'), context);
+  return context.ChatGPTNotifierStatusCode;
+}
+
 test('completion content script remains upstream 1.0.8', () => {
   assert.equal(
     normalizedGitBlobSha('extension/content-script.js'),
@@ -27,64 +34,109 @@ test('completion content script remains upstream 1.0.8', () => {
   );
 });
 
+test('terminal GitHub status parser only accepts an exact final non-whitespace footer line', () => {
+  const parser = loadStatusParser();
+
+  const complete = parser.parseTerminalStatus('Finished the build.\n\n[GITHUB_STATUS: COMPLETE_APPLIED]\n');
+  assert.equal(complete.statusCode, 'COMPLETE_APPLIED');
+  assert.equal(complete.statusLine, '[GITHUB_STATUS: COMPLETE_APPLIED]');
+  assert.equal(complete.body, 'Finished the build.');
+
+  const planning = parser.parseTerminalStatus('We are still choosing the architecture.\n[GITHUB_STATUS: PLANNING_ACTIVE]');
+  assert.equal(planning.statusCode, 'PLANNING_ACTIVE');
+  assert.equal(planning.body, 'We are still choosing the architecture.');
+
+  assert.equal(
+    parser.parseTerminalStatus('[GITHUB_STATUS: COMPLETE_APPLIED]\nThis is only a discussion of the code.').statusCode,
+    '',
+    'a status-looking line in the middle of a response must not notify'
+  );
+  assert.equal(parser.parseTerminalStatus('Done.\n[GITHUB_STATUS: complete_applied]').statusCode, '');
+  assert.equal(parser.parseTerminalStatus('Done.\n[GITHUB_STATUS: COMPLETE-APPLIED]').statusCode, '');
+  assert.equal(parser.parseTerminalStatus('Done without a footer.').statusCode, '');
+});
+
+test('status parser stays syntax-based so future canonical codes do not require notifier releases', () => {
+  const parser = loadStatusParser();
+  assert.equal(parser.isStatusCode('PLANNING_ACTIVE'), true);
+  assert.equal(parser.isStatusCode('FUTURE_POLICY_CODE_2'), true);
+  assert.equal(parser.isStatusCode('future_policy_code'), false);
+  assert.equal(parser.parseTerminalStatus('Body\n[GITHUB_STATUS: FUTURE_POLICY_CODE_2]').statusCode, 'FUTURE_POLICY_CODE_2');
+});
+
 test('service worker observes ChatGPT traffic but never creates ChatGPT HTTP traffic', () => {
   const worker = text('extension/service-worker.js');
   assert.match(worker, /chrome\.webRequest\.onCompleted\.addListener/);
   assert.match(worker, /signalConversationRequestCompleted\(details\.tabId\)/);
   assert.doesNotMatch(worker, /\bfetch\s*\(/);
+  assert.doesNotMatch(worker, /XMLHttpRequest/);
   assert.doesNotMatch(worker, /api\/auth\/session/i);
   assert.doesNotMatch(worker, /onBeforeSendHeaders/);
   assert.doesNotMatch(worker, /server-capture/i);
   assert.doesNotMatch(worker, /recovery-watchdog/i);
 });
 
-test('normal notification payload uses the full browser tab title while retaining preview data', () => {
+test('normal completion remains upstream-triggered but notification eligibility comes from the terminal status footer', () => {
   const worker = text('extension/service-worker.js');
-  assert.match(worker, /function fullTabTitle\(sender, message\)/);
-  assert.match(worker, /sender\?\.tab\?\.title\s*\|\|\s*message\?\.sessionTitle/);
+  assert.match(worker, /CHATGPT_STATUS_CODE_QUERY/);
+  assert.match(worker, /queryTerminalStatus\(tabId\)/);
+  assert.match(worker, /ChatGPTNotifierStatusCode\?\.isStatusCode\(statusCode\)/);
+  assert.match(worker, /statusCode,/);
+  assert.match(worker, /preview:\s*truncateResponse\(status\?\.responseBody\s*\|\|\s*message\?\.response\)/);
   assert.match(worker, /title:\s*fullTabTitle\(sender, message\)/);
-  assert.match(worker, /preview:\s*truncateResponse\(message\?\.response\)/);
-  assert.doesNotMatch(worker, /cleanSessionTitle/);
+  assert.match(worker, /rememberEligibleCompletion/);
+  assert.match(worker, /notified:\s*Boolean\(notificationId\)/);
 });
 
-test('refresh/reopen recovery stays local and only observes existing ChatGPT traffic', () => {
+test('status DOM layer preserves line boundaries outside the unchanged upstream detector', () => {
+  const statusScript = text('extension/status-script.js');
+  const upstream = text('extension/content-script.js');
+  assert.match(statusScript, /innerText/);
+  assert.match(statusScript, /parseTerminalStatus\(responseText\)/);
+  assert.match(statusScript, /MutationObserver/);
+  assert.match(statusScript, /CHATGPT_STATUS_CODE_QUERY/);
+  assert.doesNotMatch(statusScript, /\bfetch\s*\(/);
+  assert.match(upstream, /replace\(\/\\s\+\/g, ' '\)/, 'upstream whitespace normalization remains untouched');
+});
+
+test('refresh/reopen recovery stays local and uses the same terminal footer instead of ChatGPT action buttons', () => {
   const wrapper = text('extension/background.js');
   const recoveryBackground = text('extension/recovery-background.js');
   const recoveryScript = text('extension/recovery-script.js');
 
-  assert.match(wrapper, /importScripts\([\s\S]*service-worker\.js[\s\S]*recovery-background\.js[\s\S]*history-background\.js[\s\S]*\)/);
+  assert.match(wrapper, /importScripts\([\s\S]*status-code\.js[\s\S]*service-worker\.js[\s\S]*recovery-background\.js[\s\S]*history-background\.js[\s\S]*\)/);
   assert.match(recoveryBackground, /chrome\.webRequest\.onBeforeRequest\.addListener/);
   assert.match(recoveryBackground, /indexedDB\.open/);
   assert.match(recoveryBackground, /CHATGPT_CONVERSATION_REQUEST_COMPLETED/);
   assert.match(recoveryBackground, /CHATGPT_RECOVERY_QUERY/);
-  assert.match(recoveryBackground, /CHATGPT_RECOVERY_FINISHED_UI/);
+  assert.match(recoveryBackground, /CHATGPT_RECOVERY_STATUS_READY/);
+  assert.match(recoveryBackground, /ChatGPTNotifierStatusCode\?\.isStatusCode\(statusCode\)/);
   assert.doesNotMatch(recoveryBackground, /\bfetch\s*\(/);
   assert.doesNotMatch(recoveryBackground, /XMLHttpRequest/);
   assert.doesNotMatch(recoveryBackground, /chrome\.storage/);
   assert.doesNotMatch(recoveryBackground, /api\/auth\/session/i);
 
-  assert.match(recoveryScript, /more-turn-action-button/);
-  assert.match(recoveryScript, /copy-turn-action-button/);
-  assert.match(recoveryScript, /CHATGPT_RECOVERY_FINISHED_UI/);
+  assert.match(recoveryScript, /__chatgptNotifierStatusDom/);
+  assert.match(recoveryScript, /snapshot\?\.statusCode/);
+  assert.match(recoveryScript, /CHATGPT_RECOVERY_STATUS_READY/);
   assert.match(recoveryScript, /CHATGPT_RECOVERY_CANCEL/);
+  assert.doesNotMatch(recoveryScript, /more-turn-action-button/);
+  assert.doesNotMatch(recoveryScript, /copy-turn-action-button/);
+  assert.doesNotMatch(recoveryScript, /FINISHED_ACTION_SELECTOR/);
   assert.doesNotMatch(recoveryScript, /\bfetch\s*\(/);
-
-  const finishedSelector = recoveryScript.match(/const FINISHED_ACTION_SELECTOR = \[([\s\S]*?)\]\.join/)?.[1] || '';
-  assert.ok(finishedSelector, 'finished-response action selector must exist');
-  assert.doesNotMatch(finishedSelector, /stop-button/i, 'Stop/send control must not be required for recovery completion');
 });
 
-test('recent notification history is local, capped at ten, keeps previews, and stores full tab titles', () => {
+test('recent history contains only eligible coded notifications while retaining preview data', () => {
   const history = text('extension/history-background.js');
   assert.match(history, /const MAX_HISTORY = 10/);
   assert.match(history, /indexedDB\.open/);
-  assert.match(history, /CHATGPT_RESPONSE_COMPLETE/);
+  assert.match(history, /rememberEligibleCompletion/);
+  assert.match(history, /statusCode/);
+  assert.match(history, /preview:/);
+  assert.match(history, /filter\(\(item\) => isStatusCode\(item\?\.statusCode\)\)/);
   assert.match(history, /GET_RECENT_NOTIFICATIONS/);
   assert.match(history, /OPEN_RECENT_NOTIFICATION/);
-  assert.match(history, /sender\?\.tab\?\.title\s*\|\|\s*message\?\.sessionTitle/);
-  assert.match(history, /title:\s*fullTabTitle\(sender, message\)/);
-  assert.match(history, /preview:\s*truncateResponse\(message\?\.response\)/);
-  assert.doesNotMatch(history, /cleanSessionTitle/);
+  assert.doesNotMatch(history, /CHATGPT_RESPONSE_COMPLETE/);
   assert.doesNotMatch(history, /TEST_NATIVE_TOAST/);
   assert.doesNotMatch(history, /\bfetch\s*\(/);
   assert.doesNotMatch(history, /XMLHttpRequest/);
@@ -99,6 +151,8 @@ test('local extension scripts are valid JavaScript', () => {
     'extension/recovery-background.js',
     'extension/recovery-script.js',
     'extension/history-background.js',
+    'extension/status-code.js',
+    'extension/status-script.js',
     'extension/popup.js'
   ]) {
     const path = fileURLToPath(new URL(relative, root));
@@ -107,20 +161,19 @@ test('local extension scripts are valid JavaScript', () => {
   }
 });
 
-test('extension delegates Windows notifications to localhost helper only', () => {
+test('extension delegates Windows notifications to localhost helper only and adds no permissions', () => {
   const worker = text('extension/service-worker.js');
   const recoveryBackground = text('extension/recovery-background.js');
   const historyBackground = text('extension/history-background.js');
+  const statusScript = text('extension/status-script.js');
   const manifest = JSON.parse(text('extension/manifest.json'));
 
   assert.match(worker, /ws:\/\/127\.0\.0\.1:38473\/bridge/);
   assert.match(worker, /type:\s*'toast\.show'/);
-  assert.doesNotMatch(worker, /chrome\.notifications/);
-  assert.doesNotMatch(worker, /chrome\.offscreen/);
-  assert.doesNotMatch(recoveryBackground, /chrome\.notifications/);
-  assert.doesNotMatch(recoveryBackground, /chrome\.offscreen/);
-  assert.doesNotMatch(historyBackground, /chrome\.notifications/);
-  assert.doesNotMatch(historyBackground, /chrome\.offscreen/);
+  for (const source of [worker, recoveryBackground, historyBackground, statusScript]) {
+    assert.doesNotMatch(source, /chrome\.notifications/);
+    assert.doesNotMatch(source, /chrome\.offscreen/);
+  }
   assert.doesNotMatch(worker, /Click to return/i);
 
   assert.deepEqual(manifest.permissions.sort(), ['scripting', 'tabs', 'webRequest']);
@@ -129,34 +182,36 @@ test('extension delegates Windows notifications to localhost helper only', () =>
   assert.equal(manifest.background.service_worker, 'background.js');
   assert.deepEqual(
     manifest.content_scripts[0].js,
-    ['content-script.js', 'persistence-script.js', 'recovery-script.js']
+    ['content-script.js', 'persistence-script.js', 'status-code.js', 'status-script.js', 'recovery-script.js']
   );
 });
 
-test('popup is centered on the ten-item clickable history with only compact footer controls', () => {
+test('popup remains ten-item clickable history and displays the status code with full wrapping title', () => {
   const popup = text('extension/popup.html');
   const popupScript = text('extension/popup.js');
 
   assert.match(popup, /id="history"/);
+  assert.match(popup, /class="history-status"|\.history-status/);
+  assert.match(popup, /white-space:\s*normal/);
   assert.match(popup, /id="version"/);
   assert.match(popup, /id="checkUpdate"/);
   assert.match(popup, /id="test"/);
   assert.doesNotMatch(popup, /Uses the upstream prompt-bound/i);
   assert.doesNotMatch(popup, /Checking Windows helper/i);
-  assert.doesNotMatch(popupScript, /Managed updates:/i);
-  assert.doesNotMatch(popupScript, /Windows helper connected/i);
+  assert.match(popupScript, /record\.statusCode/);
   assert.match(popupScript, /GET_RECENT_NOTIFICATIONS/);
   assert.match(popupScript, /OPEN_RECENT_NOTIFICATION/);
   assert.match(popupScript, /slice\(0, 10\)/);
 });
 
-test('obsolete polling and recovery files stay deleted', () => {
+test('obsolete polling and action-button recovery machinery stays deleted', () => {
   for (const relative of [
     'extension/recovery-watchdog.js',
     'extension/lib/server-capture.js'
   ]) {
     assert.equal(existsSync(new URL(relative, root)), false, `${relative} must not return`);
   }
+  assert.doesNotMatch(text('extension/recovery-script.js'), /FINISHED_ACTION_SELECTOR/);
 });
 
 test('persistent notification dismissal remains deliberate-interaction based', () => {
@@ -168,19 +223,23 @@ test('persistent notification dismissal remains deliberate-interaction based', (
   assert.doesNotMatch(persistence, /window\.addEventListener\(['"]focus/);
 });
 
-test('Windows helper retains persisted stacking behavior', () => {
+test('Windows helper retains persisted stacking and v0.6 notification-state compatibility', () => {
   const manager = text('src/ChatGPTResponseNotifier.Host/ToastManager.cs');
+  const record = text('src/ChatGPTResponseNotifier.Core/NotificationRecord.cs');
   assert.match(manager, /_store\.Load\(\)/);
   assert.match(manager, /Persist\(\)/);
   assert.match(manager, /OrderByDescending\(item => item\.Record\.CompletedAt\)/);
   assert.match(manager, /const double Gap = 10/);
+  assert.match(record, /public string StatusCode \{ get; init; \} = string\.Empty/);
+  assert.doesNotMatch(record, /Title\.Length\s*>/, 'full browser tab titles must not be truncated or rejected by the helper model');
 });
 
-test('Windows toast is compact, light, title-only, and never truncates the title', () => {
+test('Windows toast is compact, light, full-title plus status code, with preview retained but not rendered', () => {
   const window = text('src/ChatGPTResponseNotifier.Host/ToastWindow.cs');
   assert.match(window, /Width\s*=\s*350/);
   assert.match(window, /Color\.FromRgb\(248, 248, 248\)/);
   assert.match(window, /Text\s*=\s*record\.Title/);
+  assert.match(window, /Text\s*=\s*record\.StatusCode/);
   assert.match(window, /TextWrapping\s*=\s*TextWrapping\.Wrap/);
   assert.doesNotMatch(window, /TextTrimming\s*=/);
   assert.doesNotMatch(window, /Text\s*=\s*record\.Preview/);
