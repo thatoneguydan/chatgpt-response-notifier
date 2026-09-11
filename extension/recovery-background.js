@@ -208,7 +208,7 @@
 
   chrome.webRequest.onBeforeRequest.addListener((details) => {
     if (!isAnswerStreamRequest(details)) return;
-    rememberPendingForTab(details.tabId).catch((error) => {
+    rememberPendingForTab(details.tabId, details.documentUrl || '').catch((error) => {
       console.warn('Could not persist pending ChatGPT response state', error);
     });
   }, REQUEST_FILTER);

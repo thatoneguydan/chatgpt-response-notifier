@@ -14,14 +14,16 @@
     '[data-test-id="rate-up-button"]',
     '[data-testid="bad-response-turn-action-button"]',
     '[data-test-id="rate-down-button"]',
+    '[data-testid="voice-play-turn-action-button"]',
     'button[aria-label="More actions" i]',
     'button[aria-label="More" i]',
     'button[aria-label="Copy response" i]',
-    'button[aria-label="Copy" i]'
+    'button[aria-label="Copy" i]',
+    'button[aria-label="Read aloud" i]'
   ].join(', ');
   const MANUAL_STOP_SELECTOR = 'button[data-testid="stop-button"], button[data-testid="fruitjuice-stop-button"]';
   const RECHECK_DELAY_MS = 1000;
-  const MAX_RECHECKS = 30;
+  const MAX_RECHECKS = 12;
 
   let recoveryArmed = false;
   let recoveryCompleted = false;
@@ -30,7 +32,6 @@
   let scheduledCheck = null;
   let queryInFlight = false;
   let rechecksRemaining = MAX_RECHECKS;
-  let lastQueriedUrl = '';
 
   const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
 
@@ -189,8 +190,6 @@
     if (queryInFlight || recoveryArmed || recoveryCompleted) return;
     const conversationId = conversationIdFromUrl(location.href);
     if (!conversationId) return;
-    if (lastQueriedUrl === location.href) return;
-    lastQueriedUrl = location.href;
     queryInFlight = true;
     try {
       const result = await chrome.runtime.sendMessage({
@@ -213,9 +212,23 @@
     }, RECHECK_DELAY_MS);
   }
 
+  function composerHasDraft() {
+    try {
+      const composer = document.querySelector('#prompt-textarea');
+      if (!composer) return false;
+      const value = 'value' in composer ? composer.value : (composer.textContent || composer.innerText || '');
+      return normalize(value).length > 0;
+    } catch {
+      return false;
+    }
+  }
+
   function cancelPendingOnManualStop(event) {
     if (!(event.target instanceof Element)) return;
     if (!event.target.closest(MANUAL_STOP_SELECTOR)) return;
+    // When the user pre-types a follow-up, ChatGPT can visually turn the Stop
+    // control into a send arrow. Do not treat that state as a manual cancel.
+    if (composerHasDraft()) return;
     stopObserving();
     recoveryArmed = false;
     recoveryCompleted = true;
