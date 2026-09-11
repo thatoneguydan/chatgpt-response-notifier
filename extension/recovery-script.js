@@ -4,23 +4,6 @@
   if (globalThis.__chatgptNotifierRecoveryInstalled) return;
   globalThis.__chatgptNotifierRecoveryInstalled = true;
 
-  const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
-  const FINISHED_ACTION_SELECTOR = [
-    '[data-testid="more-turn-action-button"]',
-    '[data-test-id="more-menu-button"]',
-    '[data-testid="copy-turn-action-button"]',
-    '[data-test-id="copy-button"]',
-    '[data-testid="good-response-turn-action-button"]',
-    '[data-test-id="rate-up-button"]',
-    '[data-testid="bad-response-turn-action-button"]',
-    '[data-test-id="rate-down-button"]',
-    '[data-testid="voice-play-turn-action-button"]',
-    'button[aria-label="More actions" i]',
-    'button[aria-label="More" i]',
-    'button[aria-label="Copy response" i]',
-    'button[aria-label="Copy" i]',
-    'button[aria-label="Read aloud" i]'
-  ].join(', ');
   const MANUAL_STOP_SELECTOR = 'button[data-testid="stop-button"], button[data-testid="fruitjuice-stop-button"]';
   const RECHECK_DELAY_MS = 1000;
   const MAX_RECHECKS = 12;
@@ -48,83 +31,11 @@
     return '';
   }
 
-  function turnNodes() {
+  function latestStatusSnapshot() {
     try {
-      return Array.from(document.querySelectorAll(TURN_SELECTOR));
+      return globalThis.__chatgptNotifierStatusDom?.latestAssistantSnapshot?.() || null;
     } catch {
-      return [];
-    }
-  }
-
-  function roleOf(turn) {
-    if (!turn) return '';
-    try {
-      const direct = normalize(
-        turn.getAttribute('data-turn') || turn.getAttribute('data-message-author-role') || ''
-      ).toLowerCase();
-      if (direct === 'user' || direct === 'assistant') return direct;
-      if (turn.querySelector('[data-message-author-role="user"]')) return 'user';
-      if (turn.querySelector('[data-message-author-role="assistant"]')) return 'assistant';
-    } catch {}
-    return '';
-  }
-
-  function assistantText(turn) {
-    if (!turn) return '';
-    try {
-      const roleNode = turn.matches?.('[data-message-author-role="assistant"]')
-        ? turn
-        : turn.querySelector('[data-message-author-role="assistant"]');
-      if (!roleNode) return '';
-      const rendered = roleNode.querySelector('.markdown, [class*="prose"]');
-      return normalize(
-        rendered
-          ? (rendered.textContent || rendered.innerText || '')
-          : (roleNode.textContent || roleNode.innerText || '')
-      );
-    } catch {
-      return '';
-    }
-  }
-
-  function latestPromptAndAssistant() {
-    const turns = turnNodes();
-    let latestUserIndex = -1;
-    for (let index = 0; index < turns.length; index += 1) {
-      if (roleOf(turns[index]) === 'user') latestUserIndex = index;
-    }
-    if (latestUserIndex < 0) return null;
-
-    let assistantIndex = -1;
-    let response = '';
-    for (let index = latestUserIndex + 1; index < turns.length; index += 1) {
-      if (roleOf(turns[index]) !== 'assistant') continue;
-      const text = assistantText(turns[index]);
-      if (!text) continue;
-      assistantIndex = index;
-      response = text;
-    }
-    if (assistantIndex < 0 || !response) return null;
-
-    const userTurn = turns[latestUserIndex];
-    const assistantTurn = turns[assistantIndex];
-    return {
-      promptKey: [
-        location.pathname,
-        userTurn?.getAttribute('data-testid') || `user-${latestUserIndex}`
-      ].join('|'),
-      assistantKey: assistantTurn?.getAttribute('data-testid') || `assistant-${assistantIndex}`,
-      response,
-      assistantTurn
-    };
-  }
-
-  function hasFinishedAction(assistantTurn) {
-    if (!assistantTurn) return false;
-    try {
-      return Boolean(assistantTurn.querySelector(FINISHED_ACTION_SELECTOR));
-    } catch {
-      return false;
+      return null;
     }
   }
 
@@ -140,13 +51,14 @@
   }
 
   async function sendRecoveredCompletion(snapshot) {
-    if (recoveryCompleted || recoverySignalInFlight) return;
+    if (recoveryCompleted || recoverySignalInFlight || !snapshot?.statusCode) return;
     recoverySignalInFlight = true;
     try {
       const result = await chrome.runtime.sendMessage({
-        type: 'CHATGPT_RECOVERY_FINISHED_UI',
+        type: 'CHATGPT_RECOVERY_STATUS_READY',
         conversationUrl: location.href,
-        assistantKey: snapshot.assistantKey
+        assistantKey: snapshot.assistantKey,
+        statusCode: snapshot.statusCode
       });
       if (result?.armed === true) {
         recoveryCompleted = true;
@@ -161,13 +73,8 @@
   function checkForRecoveredCompletion() {
     scheduledCheck = null;
     if (!recoveryArmed || recoveryCompleted) return;
-    const snapshot = latestPromptAndAssistant();
-    if (!snapshot) return;
-
-    // Recovery is intentionally permissive: any known finished-response action
-    // on the latest assistant turn is enough. The composer Stop/send control is
-    // never required because pre-typing can change its visual state.
-    if (hasFinishedAction(snapshot.assistantTurn)) sendRecoveredCompletion(snapshot).catch(() => {});
+    const snapshot = latestStatusSnapshot();
+    if (snapshot?.statusCode) sendRecoveredCompletion(snapshot).catch(() => {});
   }
 
   function scheduleCompletionCheck() {
@@ -181,7 +88,7 @@
     const root = document.querySelector('main') || document.body || document.documentElement;
     if (root && typeof MutationObserver === 'function') {
       observer = new MutationObserver(scheduleCompletionCheck);
-      observer.observe(root, { childList: true, subtree: true, characterData: true, attributes: true });
+      observer.observe(root, { childList: true, subtree: true, characterData: true });
     }
     scheduleCompletionCheck();
   }
@@ -226,8 +133,9 @@
   function cancelPendingOnManualStop(event) {
     if (!(event.target instanceof Element)) return;
     if (!event.target.closest(MANUAL_STOP_SELECTOR)) return;
-    // When the user pre-types a follow-up, ChatGPT can visually turn the Stop
-    // control into a send arrow. Do not treat that state as a manual cancel.
+    // Pre-typing can make ChatGPT visually replace the Stop affordance with a
+    // send arrow. Never infer completion from this control, and do not treat a
+    // click while a draft exists as cancellation of the in-flight response.
     if (composerHasDraft()) return;
     stopObserving();
     recoveryArmed = false;
