@@ -10,9 +10,11 @@ Persistent, independently stacked Windows notifications for completed ChatGPT re
 - locally remembers an in-progress conversation so monitoring can recover after a page refresh or Chrome restart;
 - creates one persistent Windows notification window per completed response;
 - stacks multiple notifications instead of replacing earlier ones;
-- persists unresolved notifications across helper/browser restarts;
+- persists unresolved notifications across helper/browser restarts and managed-update handoffs;
+- keeps the 10 most recent real completion notifications in extension-local history, even after their Windows toast is dismissed;
+- makes those recent notifications clickable from the pinned extension popup;
 - dismisses a conversation's outstanding notifications when you deliberately interact with that conversation, click a notification, or press its X button;
-- clicking a notification focuses an existing matching chat or opens the saved chat URL;
+- clicking a Windows notification focuses an existing matching chat or opens the saved chat URL;
 - communicates with the Windows helper only over a loopback WebSocket (`127.0.0.1`);
 - checks, downloads, verifies, and installs updates silently in the Windows helper;
 - plays the existing two-note completion chime from the helper.
@@ -30,7 +32,7 @@ The normal path remains upstream's monitoring path:
 3. let that content script bind the rendered assistant answer to the latest user prompt;
 4. route the resulting `CHATGPT_RESPONSE_COMPLETE` event to the localhost Windows helper.
 
-The helper/update/recovery integration must not add ChatGPT HTTP requests. `tests/extension/architecture.test.mjs` and the release workflow enforce this boundary.
+The helper/update/recovery/history integration must not add ChatGPT HTTP requests. `tests/extension/architecture.test.mjs` and the release workflow enforce this boundary.
 
 ## Refresh and Chrome-restart recovery
 
@@ -44,7 +46,13 @@ If Chrome is completely closed when the response finishes, the extension cannot 
 
 ## Notification persistence
 
-The Windows helper owns notification lifetime and stacking. Outstanding notifications are saved to disk and restored when the helper restarts. Returning to a tab by itself does not clear them; deliberate pointer/keyboard interaction in the matching conversation does.
+The Windows helper owns active notification lifetime and stacking. Outstanding notifications are saved to disk and restored when the helper restarts. Helper teardown during a managed update is not treated as a user dismissal, so active notifications return after the replacement helper starts. Returning to a tab by itself does not clear them; deliberate pointer/keyboard interaction in the matching conversation does.
+
+## Popup history
+
+The pinned extension popup is intentionally minimal. Its main surface is the 10 most recent real ChatGPT completion notifications, newest first. Each item contains the chat title, response preview, and completion time and can be clicked to focus or reopen that conversation. This history is stored in extension-local IndexedDB and is separate from active Windows-toast state, so dismissing a toast does not remove it from recent history. Test notifications are not added to history.
+
+The footer contains only the extension version plus compact **Update** and **Test** buttons.
 
 ## Install
 
