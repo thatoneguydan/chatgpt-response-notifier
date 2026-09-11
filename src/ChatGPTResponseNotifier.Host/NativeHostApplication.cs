@@ -12,6 +12,7 @@ internal sealed class NativeHostApplication : Application
     private LocalBridgeServer? _bridgeServer;
     private ToastManager? _toastManager;
     private PublicUpdateService? _updateService;
+    private DiagnosticsStore? _diagnosticsStore;
     private Task? _updateLoop;
 
     public new int Run()
@@ -26,6 +27,15 @@ internal sealed class NativeHostApplication : Application
     {
         try
         {
+            _diagnosticsStore = new DiagnosticsStore(Path.Combine(NativeHostInstaller.DataRoot, "diagnostics.jsonl"));
+            _diagnosticsStore.AppendHost(new
+            {
+                source = "host",
+                status = "host-started",
+                observedAt = DateTimeOffset.UtcNow,
+                installedExtensionVersion = BundleInstaller.ReadInstalledExtensionVersion()
+            });
+
             var store = new NotificationStateStore(Path.Combine(NativeHostInstaller.DataRoot, "pending.json"));
             _toastManager = new ToastManager(store, SendEventAsync);
 
@@ -75,6 +85,7 @@ internal sealed class NativeHostApplication : Application
 
         _updateService?.Dispose();
         _updateService = null;
+        _diagnosticsStore = null;
         _shutdown.Dispose();
     }
 
@@ -84,6 +95,7 @@ internal sealed class NativeHostApplication : Application
         restored = _toastManager?.Count ?? 0,
         installedExtensionVersion = BundleInstaller.ReadInstalledExtensionVersion(),
         transport = "localhost-websocket",
+        diagnosticsAvailable = true,
         updateStatus = _updateService?.Status
     };
 
@@ -97,7 +109,23 @@ internal sealed class NativeHostApplication : Application
         switch (message.Type)
         {
             case "toast.show" when message.Notification is not null:
+                _diagnosticsStore?.AppendHost(new
+                {
+                    source = "host",
+                    status = "toast-received",
+                    observedAt = DateTimeOffset.UtcNow,
+                    conversationSuffix = Suffix(message.Notification.ConversationId),
+                    notificationSuffix = Suffix(message.Notification.Id)
+                });
                 _toastManager!.Show(message.Notification);
+                _diagnosticsStore?.AppendHost(new
+                {
+                    source = "host",
+                    status = "toast-shown",
+                    observedAt = DateTimeOffset.UtcNow,
+                    conversationSuffix = Suffix(message.Notification.ConversationId),
+                    notificationSuffix = Suffix(message.Notification.Id)
+                });
                 break;
             case "toast.dismissConversation" when !string.IsNullOrWhiteSpace(message.ConversationId):
                 _toastManager!.DismissConversation(message.ConversationId);
@@ -129,16 +157,66 @@ internal sealed class NativeHostApplication : Application
                     requestId = message.RequestId,
                     installedExtensionVersion = BundleInstaller.ReadInstalledExtensionVersion(),
                     transport = "localhost-websocket",
+                    diagnosticsAvailable = true,
                     updateStatus = _updateService?.Status
                 });
                 break;
             case "update.check":
                 _ = CheckForPublicUpdateAsync(message.RequestId);
                 break;
+            case "diagnostics.event" when message.Diagnostic is JsonElement diagnostic:
+                _diagnosticsStore?.Append(DiagnosticsSanitizer.Event(diagnostic));
+                break;
+            case "diagnostics.get":
+                _ = SendDiagnosticsAsync(message.RequestId, message.Limit);
+                break;
+            case "diagnostics.probe":
+                _ = SendEventAsync(new
+                {
+                    type = "diagnostics.probe",
+                    requestId = message.RequestId
+                });
+                break;
+            case "diagnostics.probeResult" when message.Probe is JsonElement probe:
+            {
+                var safeProbe = DiagnosticsSanitizer.Probe(probe);
+                _diagnosticsStore?.AppendHost(new
+                {
+                    source = "host",
+                    status = "probe-result-received",
+                    observedAt = DateTimeOffset.UtcNow
+                });
+                _ = SendEventAsync(new
+                {
+                    type = "diagnostics.probeResult",
+                    requestId = message.RequestId,
+                    probe = safeProbe
+                });
+                break;
+            }
             default:
                 FileLog.Write($"Ignored unsupported localhost bridge message type '{message.Type}'.");
                 break;
         }
+    }
+
+    private async Task SendDiagnosticsAsync(string? requestId, int? limit)
+    {
+        var records = _diagnosticsStore?.Snapshot(limit ?? 200) ?? Array.Empty<DiagnosticEnvelope>();
+        await SendEventAsync(new
+        {
+            type = "diagnostics.result",
+            requestId,
+            installedExtensionVersion = BundleInstaller.ReadInstalledExtensionVersion(),
+            hostProcessId = Environment.ProcessId,
+            records
+        }).ConfigureAwait(false);
+    }
+
+    private static string Suffix(string? value)
+    {
+        var text = (value ?? string.Empty).Trim();
+        return text.Length <= 8 ? text : text[^8..];
     }
 
     private async Task RunUpdateLoopAsync()

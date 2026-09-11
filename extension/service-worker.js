@@ -9,7 +9,8 @@ import {
   captureIsFreshForRequest,
   currentConversationReadUrl,
   latestCompletedAssistant,
-  legacyConversationReadUrl
+  legacyConversationReadUrl,
+  summarizeConversationTerminalState
 } from './lib/server-capture.js';
 
 const BRIDGE_URL = 'ws://127.0.0.1:38473/bridge';
@@ -250,6 +251,64 @@ function boundedRequestContextCache() {
   }
 }
 
+function diagnosticSuffix(value) {
+  const text = String(value || '').trim();
+  return text.length <= 8 ? text : text.slice(-8);
+}
+
+function diagnosticString(value, maxLength = 160) {
+  return String(value || '').replace(/[\r\n\t]+/g, ' ').trim().slice(0, maxLength);
+}
+
+function sanitizeTerminalState(state) {
+  if (!state || typeof state !== 'object') return null;
+  const ancestry = Array.isArray(state.ancestry)
+    ? state.ancestry.slice(0, 12).map((node) => ({
+        idSuffix: diagnosticSuffix(node?.idSuffix),
+        parentSuffix: diagnosticSuffix(node?.parentSuffix),
+        role: diagnosticString(node?.role, 40),
+        recipient: diagnosticString(node?.recipient, 96),
+        channel: diagnosticString(node?.channel, 40),
+        endTurn: typeof node?.endTurn === 'boolean' ? node.endTurn : null,
+        status: diagnosticString(node?.status, 80),
+        hidden: Boolean(node?.hidden),
+        hasText: Boolean(node?.hasText),
+        contentType: diagnosticString(node?.contentType, 80)
+      }))
+    : [];
+  return {
+    messageCount: Number.isFinite(Number(state.messageCount)) ? Number(state.messageCount) : 0,
+    currentNodeSuffix: diagnosticSuffix(state.currentNodeSuffix),
+    currentNodePresent: Boolean(state.currentNodePresent),
+    ancestry
+  };
+}
+
+function persistBackgroundDiagnostic(status, details = {}) {
+  const safe = {
+    source: 'extension',
+    status: diagnosticString(status || 'unknown', 96),
+    observedAt: new Date().toISOString(),
+    extensionVersion: chrome.runtime.getManifest().version
+  };
+
+  for (const field of ['tabId', 'statusCode', 'elapsedMs', 'queuedMessages', 'watchCount', 'requestContextCount']) {
+    if (Number.isFinite(Number(details?.[field]))) safe[field] = Number(details[field]);
+  }
+  for (const field of ['frozen', 'discarded', 'deliveredNow']) {
+    if (typeof details?.[field] === 'boolean') safe[field] = details[field];
+  }
+  for (const field of ['triggerPath', 'reason', 'error']) {
+    if (details?.[field] != null) safe[field] = diagnosticString(details[field], field === 'error' ? 240 : 160);
+  }
+  if (details?.source != null) safe.captureSource = diagnosticString(details.source, 160);
+  if (details?.conversationId) safe.conversationSuffix = diagnosticSuffix(details.conversationId);
+  if (details?.notificationId) safe.notificationSuffix = diagnosticSuffix(details.notificationId);
+  if (details?.terminalState) safe.terminalState = sanitizeTerminalState(details.terminalState);
+
+  sendNative({ type: 'diagnostics.event', diagnostic: safe });
+}
+
 function recordBackgroundCapture(status, details = {}) {
   const diagnostic = {
     status: String(status || 'unknown'),
@@ -258,6 +317,7 @@ function recordBackgroundCapture(status, details = {}) {
   };
   backgroundCaptureHistory = [diagnostic, ...backgroundCaptureHistory]
     .slice(0, SERVER_CAPTURE_DIAGNOSTIC_HISTORY_LIMIT);
+  persistBackgroundDiagnostic(status, details);
 }
 
 function rememberCompletedAnswerRequest(requestId) {
@@ -379,7 +439,8 @@ async function readCompletedConversation(identity, context, retryDelays = SERVER
   const legacyUrl = legacyConversationReadUrl(identity.id);
   const requestStartedAt = Number(context?.startedAt) || Date.now();
   let lastStatus = 0;
-  let lastReason = 'no-completed-assistant';
+  let lastReason = 'no-terminal-assistant';
+  let lastTerminalState = null;
 
   for (const delayMs of retryDelays) {
     await sleep(delayMs);
@@ -398,9 +459,10 @@ async function readCompletedConversation(identity, context, retryDelays = SERVER
       continue;
     }
 
+    lastTerminalState = summarizeConversationTerminalState(result.payload);
     const capture = latestCompletedAssistant(result.payload);
     if (!capture?.response) {
-      lastReason = 'no-completed-assistant';
+      lastReason = 'no-terminal-assistant';
       continue;
     }
     if (!captureIsFreshForRequest(capture, requestStartedAt, SERVER_CAPTURE_FRESHNESS_TOLERANCE_MS)) {
@@ -408,17 +470,17 @@ async function readCompletedConversation(identity, context, retryDelays = SERVER
       continue;
     }
 
-    return { ok: true, capture, source, status: result.status };
+    return { ok: true, capture, source, status: result.status, terminalState: lastTerminalState };
   }
 
-  return { ok: false, capture: null, source: 'none', status: lastStatus, reason: lastReason };
+  return { ok: false, capture: null, source: 'none', status: lastStatus, reason: lastReason, terminalState: lastTerminalState };
 }
 
 function showCompletionToast(identity, response, sessionTitle, projectTitle = '') {
   const preview = truncatePreview(response);
   if (!identity || !preview) return null;
   const notificationId = crypto.randomUUID();
-  sendNative({
+  const deliveredNow = sendNative({
     type: 'toast.show',
     notification: {
       id: notificationId,
@@ -428,6 +490,11 @@ function showCompletionToast(identity, response, sessionTitle, projectTitle = ''
       preview,
       completedAt: new Date().toISOString()
     }
+  });
+  recordBackgroundCapture('toast-dispatch', {
+    conversationId: identity.id,
+    notificationId,
+    deliveredNow
   });
   return notificationId;
 }
@@ -445,6 +512,10 @@ async function injectCurrentContentScripts(tabId) {
   await chrome.scripting.executeScript({
     target: { tabId },
     func: () => {
+      // A disabled/re-enabled extension can leave same-version globals in the
+      // existing isolated page world after the old runtime listeners are dead.
+      // Invalidate the old generation before reinjecting so stale listeners
+      // cannot become current again, then clear version guards for both scripts.
       globalThis.__chatgptNativeNotifierGeneration =
         (Number(globalThis.__chatgptNativeNotifierGeneration) || 0) + 1;
       globalThis.__chatgptNativeNotifierVersion = '';
@@ -581,7 +652,7 @@ async function watchAnswerRequestFromStart(details, context) {
 
   const watchStartedAt = Date.now();
   let attempt = 0;
-  let lastReason = '';
+  let lastPollingSignature = '';
   while (!watch.cancelled && Date.now() - watchStartedAt < SERVER_CAPTURE_START_WATCH_TIMEOUT_MS) {
     await sleep(startWatchDelay(attempt));
     if (watch.cancelled) return;
@@ -605,6 +676,7 @@ async function watchAnswerRequestFromStart(details, context) {
         triggerPath: watch.triggerPath,
         source: result.source,
         statusCode: result.status || 0,
+        terminalState: result.terminalState,
         elapsedMs: Date.now() - watch.startedAt,
         frozen: Boolean(tab?.frozen),
         discarded: Boolean(tab?.discarded)
@@ -614,14 +686,16 @@ async function watchAnswerRequestFromStart(details, context) {
     }
 
     const reason = String(result.reason || `http-${result.status || 0}`);
-    if (reason !== lastReason) {
-      lastReason = reason;
+    const pollingSignature = JSON.stringify([reason, result.status || 0, sanitizeTerminalState(result.terminalState)]);
+    if (pollingSignature !== lastPollingSignature) {
+      lastPollingSignature = pollingSignature;
       recordBackgroundCapture('request-start-polling', {
         tabId: details.tabId,
         conversationId: identity.id,
         triggerPath: watch.triggerPath,
         reason,
-        statusCode: result.status || 0
+        statusCode: result.status || 0,
+        terminalState: result.terminalState
       });
     }
     attempt += 1;
@@ -705,7 +779,8 @@ async function handleCompletedAnswerRequest(details) {
       conversationId: identity.id,
       triggerPath: answerRequestPath(details),
       source: result.source,
-      statusCode: result.status || 0
+      statusCode: result.status || 0,
+      terminalState: result.terminalState
     });
     return;
   }
@@ -719,7 +794,8 @@ async function handleCompletedAnswerRequest(details) {
       conversationId: identity.id,
       triggerPath: answerRequestPath(details),
       reason: result.reason || 'no-terminal-assistant',
-      statusCode: result.status || 0
+      statusCode: result.status || 0,
+      terminalState: result.terminalState
     });
     return;
   }
@@ -734,7 +810,8 @@ async function handleCompletedAnswerRequest(details) {
     conversationId: identity.id,
     triggerPath: answerRequestPath(details),
     reason: result.reason || 'no-terminal-assistant',
-    statusCode: result.status || 0
+    statusCode: result.status || 0,
+    terminalState: result.terminalState
   });
   watchAnswerRequestFromStart(details, context).catch((error) => {
     recordBackgroundCapture('network-completed-rearm-error', {
@@ -781,6 +858,105 @@ chrome.webRequest.onCompleted.addListener((details) => {
   });
 }, CHATGPT_REQUEST_FILTER);
 
+function promiseWithTimeout(promise, timeoutMs, fallback = null) {
+  return Promise.race([
+    Promise.resolve(promise).catch(() => fallback),
+    sleep(timeoutMs).then(() => fallback)
+  ]);
+}
+
+function requestContextForTab(tabId) {
+  const contexts = Array.from(answerRequestContexts.values())
+    .filter((context) => Number(context?.tabId) === Number(tabId));
+  return contexts[contexts.length - 1] || { tabId, startedAt: Date.now(), headers: {} };
+}
+
+async function probeConversationServer(identity, context) {
+  try {
+    const headers = await serverReadHeaders(context);
+    let result = await fetchConversationJson(currentConversationReadUrl(identity.id), headers);
+    let apiSource = 'current-conversations-api';
+    if (!result.ok && result.status === 404) {
+      result = await fetchConversationJson(legacyConversationReadUrl(identity.id), headers);
+      apiSource = 'legacy-conversation-api';
+    }
+    if (!result.ok) {
+      return {
+        conversationSuffix: diagnosticSuffix(identity.id),
+        apiSource,
+        apiStatus: Number(result.status || 0),
+        apiOk: false
+      };
+    }
+    const capture = latestCompletedAssistant(result.payload);
+    return {
+      conversationSuffix: diagnosticSuffix(identity.id),
+      apiSource,
+      apiStatus: Number(result.status || 0),
+      apiOk: true,
+      terminalCapturePresent: Boolean(capture?.response),
+      terminalCaptureAgeMs: Number.isFinite(capture?.createdAtMs)
+        ? Math.max(0, Date.now() - capture.createdAtMs)
+        : null,
+      terminalState: sanitizeTerminalState(summarizeConversationTerminalState(result.payload))
+    };
+  } catch (error) {
+    return {
+      conversationSuffix: diagnosticSuffix(identity.id),
+      apiSource: 'none',
+      apiStatus: 0,
+      apiOk: false,
+      error: diagnosticString(error?.message || error, 240)
+    };
+  }
+}
+
+async function runLiveDiagnosticsProbe(requestId) {
+  let tabs = [];
+  try { tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] }); } catch {}
+
+  const authSessionAvailable = Boolean(await accessTokenFromSession());
+  const tabSummaries = [];
+  const conversationTargets = [];
+  for (const tab of tabs.slice(0, 30)) {
+    if (typeof tab.id !== 'number') continue;
+    const identity = conversationFromUrl(tab.url || '');
+    let contentScriptLive = null;
+    if (!tab.frozen && !tab.discarded) {
+      contentScriptLive = await promiseWithTimeout(contentScriptIsLive(tab.id), 750, null);
+    }
+    tabSummaries.push({
+      tabId: tab.id,
+      active: Boolean(tab.active),
+      frozen: Boolean(tab.frozen),
+      discarded: Boolean(tab.discarded),
+      hasConversation: Boolean(identity),
+      conversationSuffix: identity ? diagnosticSuffix(identity.id) : '',
+      contentScriptLive
+    });
+    if (identity && conversationTargets.length < 8) {
+      conversationTargets.push({ identity, context: requestContextForTab(tab.id) });
+    }
+  }
+
+  const conversations = await Promise.all(
+    conversationTargets.map(({ identity, context }) => probeConversationServer(identity, context))
+  );
+  const probe = {
+    extensionVersion: chrome.runtime.getManifest().version,
+    observedAt: new Date().toISOString(),
+    bridgeState: bridgeSocket?.readyState ?? -1,
+    queuedNativeMessages: outboundQueue.length,
+    tabCount: tabs.length,
+    requestContextCount: answerRequestContexts.size,
+    watchCount: answerRequestWatches.size,
+    authSessionAvailable,
+    tabs: tabSummaries,
+    conversations
+  };
+  sendNative({ type: 'diagnostics.probeResult', requestId, probe });
+}
+
 async function dismissReportedUserInteraction(message, sender) {
   const tabId = sender.tab?.id;
   if (typeof tabId !== 'number') return false;
@@ -817,6 +993,7 @@ function finiteWindowCoordinate(value) {
 async function requestNativeChromeForeground(tabId, windowId) {
   if (typeof tabId !== 'number' || typeof windowId !== 'number') return false;
   try {
+    // Give Chrome a moment to update the native window title after activating the tab.
     await sleep(50);
     const [tabInfo, windowInfo] = await Promise.all([
       chrome.tabs.get(tabId),
@@ -891,7 +1068,23 @@ async function handleNativeMessage(message) {
   }
 
   if (message.type === 'host.ready') {
+    recordBackgroundCapture('host-ready', { queuedMessages: outboundQueue.length });
     await ensureContentScriptsInChatgptTabs();
+    return;
+  }
+
+  if (message.type === 'diagnostics.probe') {
+    runLiveDiagnosticsProbe(String(message.requestId || '')).catch((error) => {
+      sendNative({
+        type: 'diagnostics.probeResult',
+        requestId: String(message.requestId || ''),
+        probe: {
+          extensionVersion: chrome.runtime.getManifest().version,
+          observedAt: new Date().toISOString(),
+          error: diagnosticString(error?.message || error, 240)
+        }
+      });
+    });
     return;
   }
 
