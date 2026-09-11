@@ -78,9 +78,24 @@ internal sealed class ToastWindow : Window
         header.Children.Add(title);
         header.Children.Add(close);
 
-        // NotificationRecord.Preview and CompletedAt remain in the persisted/backend
-        // model for popup history and future toast layouts; this compact toast only
-        // renders the full title.
+        var stack = new StackPanel();
+        stack.Children.Add(header);
+        if (!string.IsNullOrWhiteSpace(record.StatusCode))
+        {
+            stack.Children.Add(new TextBlock
+            {
+                Text = record.StatusCode,
+                Margin = new Thickness(0, 4, 0, 0),
+                Foreground = new SolidColorBrush(Color.FromRgb(92, 92, 92)),
+                FontFamily = new FontFamily("Consolas"),
+                FontSize = 10.5,
+                FontWeight = FontWeights.SemiBold,
+                TextWrapping = TextWrapping.Wrap
+            });
+        }
+
+        // Preview and completion time remain persisted in NotificationRecord for
+        // popup history and a possible future toast layout, but are not rendered.
         var border = new Border
         {
             Margin = new Thickness(6),
@@ -96,7 +111,7 @@ internal sealed class ToastWindow : Window
                 Opacity = 0.22
             },
             Cursor = Cursors.Hand,
-            Child = header
+            Child = stack
         };
         border.MouseLeftButtonUp += (_, e) =>
         {
