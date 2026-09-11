@@ -18,7 +18,7 @@ internal sealed class ToastWindow : Window
     public ToastWindow(NotificationRecord record)
     {
         Record = record;
-        Width = 420;
+        Width = 350;
         SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.None;
         ResizeMode = ResizeMode.NoResize;
@@ -42,14 +42,14 @@ internal sealed class ToastWindow : Window
         var close = new Button
         {
             Content = "×",
-            Width = 28,
-            Height = 28,
+            Width = 24,
+            Height = 24,
             Padding = new Thickness(0),
             Margin = new Thickness(8, 0, 0, 0),
             Background = Brushes.Transparent,
-            Foreground = new SolidColorBrush(Color.FromRgb(220, 220, 220)),
+            Foreground = new SolidColorBrush(Color.FromRgb(70, 70, 70)),
             BorderThickness = new Thickness(0),
-            FontSize = 18,
+            FontSize = 16,
             Cursor = Cursors.Hand,
             ToolTip = "Dismiss"
         };
@@ -63,10 +63,10 @@ internal sealed class ToastWindow : Window
         var title = new TextBlock
         {
             Text = record.Title,
-            FontSize = 14,
+            FontSize = 13.5,
             FontWeight = FontWeights.SemiBold,
-            Foreground = Brushes.White,
-            TextTrimming = TextTrimming.CharacterEllipsis,
+            Foreground = new SolidColorBrush(Color.FromRgb(30, 30, 30)),
+            TextWrapping = TextWrapping.Wrap,
             VerticalAlignment = VerticalAlignment.Center
         };
         Grid.SetColumn(title, 0);
@@ -78,45 +78,25 @@ internal sealed class ToastWindow : Window
         header.Children.Add(title);
         header.Children.Add(close);
 
-        var preview = new TextBlock
-        {
-            Text = record.Preview,
-            Margin = new Thickness(0, 8, 0, 0),
-            Foreground = new SolidColorBrush(Color.FromRgb(220, 220, 220)),
-            FontSize = 12.5,
-            TextWrapping = TextWrapping.Wrap,
-            MaxHeight = 150
-        };
-
-        var time = new TextBlock
-        {
-            Text = record.CompletedAt.ToLocalTime().ToString("h:mm tt"),
-            Margin = new Thickness(0, 8, 0, 0),
-            Foreground = new SolidColorBrush(Color.FromRgb(155, 155, 155)),
-            FontSize = 10.5
-        };
-
-        var stack = new StackPanel();
-        stack.Children.Add(header);
-        stack.Children.Add(preview);
-        stack.Children.Add(time);
-
+        // NotificationRecord.Preview and CompletedAt remain in the persisted/backend
+        // model for popup history and future toast layouts; this compact toast only
+        // renders the full title.
         var border = new Border
         {
-            Margin = new Thickness(10),
-            Padding = new Thickness(14, 12, 12, 11),
-            CornerRadius = new CornerRadius(12),
-            Background = new SolidColorBrush(Color.FromRgb(31, 31, 31)),
-            BorderBrush = new SolidColorBrush(Color.FromRgb(64, 64, 64)),
+            Margin = new Thickness(6),
+            Padding = new Thickness(12, 9, 9, 9),
+            CornerRadius = new CornerRadius(9),
+            Background = new SolidColorBrush(Color.FromRgb(248, 248, 248)),
+            BorderBrush = new SolidColorBrush(Color.FromRgb(210, 210, 210)),
             BorderThickness = new Thickness(1),
             Effect = new DropShadowEffect
             {
-                BlurRadius = 18,
-                ShadowDepth = 3,
-                Opacity = 0.38
+                BlurRadius = 14,
+                ShadowDepth = 2,
+                Opacity = 0.22
             },
             Cursor = Cursors.Hand,
-            Child = stack
+            Child = header
         };
         border.MouseLeftButtonUp += (_, e) =>
         {
