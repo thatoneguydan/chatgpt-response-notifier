@@ -25,7 +25,6 @@ const SERVER_CAPTURE_START_WATCH_TIMEOUT_MS = 30 * 60 * 1000;
 const SERVER_CAPTURE_DIAGNOSTIC_HISTORY_LIMIT = 12;
 const SERVER_CAPTURE_FETCH_TIMEOUT_MS = 5000;
 const SERVER_CAPTURE_FRESHNESS_TOLERANCE_MS = 5000;
-const SERVER_CAPTURE_GENERIC_PREVIEW = 'Your ChatGPT response finished. Open this conversation to read it.';
 const SERVER_CAPTURE_HEADER_NAMES = new Set([
   'authorization',
   'chatgpt-account-id',
@@ -651,27 +650,47 @@ async function handleCompletedAnswerRequest(details) {
     });
     return;
   }
-  cancelAnswerRequestWatch(requestId);
+
+  const existingWatch = answerRequestWatches.get(requestId) || null;
   recordBackgroundCapture('network-completed-observed', {
     tabId: details.tabId,
     triggerPath: answerRequestPath(details),
     statusCode: details.statusCode || 0
   });
-  const context = takeAnswerRequestContext(details) || {
+  const context = answerRequestContexts.get(requestId) || {
     tabId: details.tabId,
     startedAt: Number(details.timeStamp) || Date.now(),
-    headers: {}
+    headers: {},
+    triggerPath: answerRequestPath(details)
   };
 
   let tab = null;
   try { tab = await chrome.tabs.get(details.tabId); } catch {}
   const identity = await resolveConversationIdentity(tab?.url || '', details.tabId);
   if (!identity) {
-    await signalConversationRequestCompleted(details.tabId);
+    if (!existingWatch) {
+      // New conversations can briefly lack a stable /c/<id> URL. The DOM path
+      // remains a compatibility fallback only when no service-worker watch survived.
+      await signalConversationRequestCompleted(details.tabId);
+    }
     return;
   }
 
   const result = await readCompletedConversation(identity, context);
+
+  // The request-start watch may have found and notified the terminal answer while
+  // this acceleration read was in flight. Never emit a second toast in that race.
+  if (completedAnswerRequestIds.has(requestId)) {
+    completedAnswerRequestIds.delete(requestId);
+    takeAnswerRequestContext(details);
+    cancelAnswerRequestWatch(requestId);
+    recordBackgroundCapture('network-completed-after-request-start-toast', {
+      tabId: details.tabId,
+      triggerPath: answerRequestPath(details)
+    });
+    return;
+  }
+
   if (result.ok && result.capture?.response) {
     showCompletionToast(
       identity,
@@ -679,16 +698,52 @@ async function handleCompletedAnswerRequest(details) {
       result.capture.title || tab?.title || 'ChatGPT',
       ''
     );
+    takeAnswerRequestContext(details);
+    cancelAnswerRequestWatch(requestId);
+    recordBackgroundCapture('network-completed-terminal-toast', {
+      tabId: details.tabId,
+      conversationId: identity.id,
+      triggerPath: answerRequestPath(details),
+      source: result.source,
+      statusCode: result.status || 0
+    });
     return;
   }
 
-  showCompletionToast(identity, SERVER_CAPTURE_GENERIC_PREVIEW, tab?.title || 'ChatGPT', '');
-  console.warn('Background-safe ChatGPT response capture fell back to a generic completion alert', {
+  // A transport request can finish between tool calls while the ChatGPT turn is
+  // still running. Network completion is therefore only an acceleration signal,
+  // never sufficient evidence by itself that the user-facing answer is ready.
+  if (existingWatch && !existingWatch.cancelled) {
+    recordBackgroundCapture('network-completed-waiting-for-terminal', {
+      tabId: details.tabId,
+      conversationId: identity.id,
+      triggerPath: answerRequestPath(details),
+      reason: result.reason || 'no-terminal-assistant',
+      statusCode: result.status || 0
+    });
+    return;
+  }
+
+  // If the service worker restarted and lost its in-memory request-start watch,
+  // re-arm a bounded server-side watch instead of producing a premature generic
+  // notification. This remains independent of hidden-tab DOM execution.
+  answerRequestContexts.set(requestId, context);
+  boundedRequestContextCache();
+  recordBackgroundCapture('network-completed-rearming-terminal-watch', {
+    tabId: details.tabId,
     conversationId: identity.id,
-    frozen: Boolean(tab?.frozen),
-    discarded: Boolean(tab?.discarded),
-    reason: result.reason || 'unknown',
-    status: result.status || 0
+    triggerPath: answerRequestPath(details),
+    reason: result.reason || 'no-terminal-assistant',
+    statusCode: result.status || 0
+  });
+  watchAnswerRequestFromStart(details, context).catch((error) => {
+    recordBackgroundCapture('network-completed-rearm-error', {
+      tabId: details.tabId,
+      conversationId: identity.id,
+      triggerPath: answerRequestPath(details),
+      error: String(error?.message || error)
+    });
+    console.warn('Could not re-arm terminal ChatGPT completion watch', error);
   });
 }
 
