@@ -114,6 +114,23 @@ test('status DOM layer preserves line boundaries outside the unchanged upstream 
   assert.match(upstream, /replace\(\/\\s\+\/g, ' '\)/, 'upstream whitespace normalization remains untouched');
 });
 
+test('INCOMPLETE_LIMIT auto-continuation uses only guarded ChatGPT DOM interaction and falls back to notification on failure', () => {
+  const statusScript = text('extension/status-script.js');
+  assert.match(statusScript, /AUTO_CONTINUE_TEXT\s*=\s*'continue until you finish or need something from me'/);
+  assert.match(statusScript, /snapshot\?\.statusCode !== 'INCOMPLETE_LIMIT'/);
+  assert.match(statusScript, /document\.activeElement === composer/);
+  assert.match(statusScript, /composerText\(composer\) !== ''/);
+  assert.match(statusScript, /button\[data-testid="send-button"\]/);
+  assert.match(statusScript, /sendButton\.click\(\)/);
+  assert.match(statusScript, /waitForSendAccepted/);
+  assert.match(statusScript, /autoContinued \? '' : \(snapshot\?\.statusCode \|\| ''\)/);
+  assert.match(statusScript, /pendingAutoContinueTurn/);
+  assert.doesNotMatch(statusScript, /\bfetch\s*\(/);
+  assert.doesNotMatch(statusScript, /XMLHttpRequest/);
+  assert.doesNotMatch(statusScript, /chrome\.storage/);
+  assert.doesNotMatch(statusScript, /api\/auth\/session/i);
+});
+
 test('refresh/reopen recovery stays local and uses the same terminal footer instead of ChatGPT action buttons', () => {
   const wrapper = text('extension/background.js');
   const recoveryBackground = text('extension/recovery-background.js');
@@ -141,9 +158,9 @@ test('refresh/reopen recovery stays local and uses the same terminal footer inst
   assert.doesNotMatch(recoveryScript, /\bfetch\s*\(/);
 });
 
-test('recent history contains only eligible coded notifications while retaining preview data', () => {
+test('recent history contains only the rolling 20 eligible coded notifications while retaining preview data', () => {
   const history = text('extension/history-background.js');
-  assert.match(history, /const MAX_HISTORY = 10/);
+  assert.match(history, /const MAX_HISTORY = 20/);
   assert.match(history, /indexedDB\.open/);
   assert.match(history, /rememberEligibleCompletion/);
   assert.match(history, /statusCode/);
@@ -201,7 +218,7 @@ test('extension delegates Windows notifications to localhost helper only and add
   );
 });
 
-test('popup remains ten-item clickable history and displays the status code with full wrapping title', () => {
+test('popup remains twenty-item clickable history and displays the status code with full wrapping title', () => {
   const popup = text('extension/popup.html');
   const popupScript = text('extension/popup.js');
 
@@ -216,7 +233,7 @@ test('popup remains ten-item clickable history and displays the status code with
   assert.match(popupScript, /record\.statusCode/);
   assert.match(popupScript, /GET_RECENT_NOTIFICATIONS/);
   assert.match(popupScript, /OPEN_RECENT_NOTIFICATION/);
-  assert.match(popupScript, /slice\(0, 10\)/);
+  assert.match(popupScript, /slice\(0, 20\)/);
 });
 
 test('obsolete polling and action-button recovery machinery stays deleted', () => {
