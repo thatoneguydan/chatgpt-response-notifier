@@ -20,6 +20,9 @@ const CHATGPT_REQUEST_FILTER = {
   ]
 };
 const SERVER_CAPTURE_RETRY_DELAYS_MS = [100, 350, 900, 1800, 3000];
+const SERVER_CAPTURE_START_WATCH_DELAYS_MS = [1000, 1500, 2500, 4000, 6000, 8000, 10000, 12000, 15000];
+const SERVER_CAPTURE_START_WATCH_TIMEOUT_MS = 30 * 60 * 1000;
+const SERVER_CAPTURE_DIAGNOSTIC_HISTORY_LIMIT = 12;
 const SERVER_CAPTURE_FETCH_TIMEOUT_MS = 5000;
 const SERVER_CAPTURE_FRESHNESS_TOLERANCE_MS = 5000;
 const SERVER_CAPTURE_GENERIC_PREVIEW = 'Your ChatGPT response finished. Open this conversation to read it.';
@@ -39,6 +42,10 @@ let keepAliveTimer = null;
 const outboundQueue = [];
 const nativeRequestWaiters = new Map();
 const answerRequestContexts = new Map();
+const answerRequestWatches = new Map();
+const answerRequestWatchIdsByTab = new Map();
+const completedAnswerRequestIds = new Set();
+let backgroundCaptureHistory = [];
 
 function queueNativeMessage(message) {
   outboundQueue.push(message);
@@ -214,14 +221,26 @@ function maybeReloadForInstalledVersion(installedVersion) {
   return false;
 }
 
+function answerRequestPath(details) {
+  try {
+    return new URL(details?.url || '').pathname.replace(/\/+$/, '');
+  } catch {
+    return '';
+  }
+}
+
+function isAnswerStartRequest(details) {
+  if (details.tabId < 0 || details.method !== 'POST') return false;
+  const path = answerRequestPath(details);
+  return path === '/backend-api/f/conversation' ||
+    path === '/backend-api/conversation' ||
+    path === '/backend-api/f/conversation/prepare';
+}
+
 function isAnswerStreamRequest(details) {
   if (details.tabId < 0 || details.method !== 'POST') return false;
-  try {
-    const path = new URL(details.url).pathname.replace(/\/+$/, '');
-    return path === '/backend-api/f/conversation' || path === '/backend-api/conversation';
-  } catch {
-    return false;
-  }
+  const path = answerRequestPath(details);
+  return path === '/backend-api/f/conversation' || path === '/backend-api/conversation';
 }
 
 function boundedRequestContextCache() {
@@ -229,6 +248,27 @@ function boundedRequestContextCache() {
     const oldest = answerRequestContexts.keys().next().value;
     if (!oldest) break;
     answerRequestContexts.delete(oldest);
+  }
+}
+
+function recordBackgroundCapture(status, details = {}) {
+  const diagnostic = {
+    status: String(status || 'unknown'),
+    observedAt: new Date().toISOString(),
+    ...details
+  };
+  backgroundCaptureHistory = [diagnostic, ...backgroundCaptureHistory]
+    .slice(0, SERVER_CAPTURE_DIAGNOSTIC_HISTORY_LIMIT);
+}
+
+function rememberCompletedAnswerRequest(requestId) {
+  const value = String(requestId || '');
+  if (!value) return;
+  completedAnswerRequestIds.add(value);
+  while (completedAnswerRequestIds.size > 100) {
+    const oldest = completedAnswerRequestIds.values().next().value;
+    if (!oldest) break;
+    completedAnswerRequestIds.delete(oldest);
   }
 }
 
@@ -244,13 +284,28 @@ function captureRequestHeaders(requestHeaders) {
 }
 
 function captureAnswerRequestContext(details) {
-  if (!isAnswerStreamRequest(details)) return;
-  answerRequestContexts.set(String(details.requestId), {
+  if (!isAnswerStartRequest(details)) return;
+  const requestId = String(details.requestId || '');
+  const context = {
     tabId: details.tabId,
     startedAt: Number(details.timeStamp) || Date.now(),
-    headers: captureRequestHeaders(details.requestHeaders)
-  });
+    headers: captureRequestHeaders(details.requestHeaders),
+    triggerPath: answerRequestPath(details)
+  };
+  answerRequestContexts.set(requestId, context);
   boundedRequestContextCache();
+  recordBackgroundCapture('request-start-observed', {
+    tabId: details.tabId,
+    triggerPath: context.triggerPath
+  });
+  watchAnswerRequestFromStart(details, context).catch((error) => {
+    recordBackgroundCapture('request-start-watch-error', {
+      tabId: details.tabId,
+      triggerPath: context.triggerPath,
+      error: String(error?.message || error)
+    });
+    console.warn('Request-start ChatGPT completion watch failed', error);
+  });
 }
 
 function takeAnswerRequestContext(details) {
@@ -319,7 +374,7 @@ async function fetchConversationJson(url, headers) {
   }
 }
 
-async function readCompletedConversation(identity, context) {
+async function readCompletedConversation(identity, context, retryDelays = SERVER_CAPTURE_RETRY_DELAYS_MS) {
   const headers = await serverReadHeaders(context);
   const currentUrl = currentConversationReadUrl(identity.id);
   const legacyUrl = legacyConversationReadUrl(identity.id);
@@ -327,7 +382,7 @@ async function readCompletedConversation(identity, context) {
   let lastStatus = 0;
   let lastReason = 'no-completed-assistant';
 
-  for (const delayMs of SERVER_CAPTURE_RETRY_DELAYS_MS) {
+  for (const delayMs of retryDelays) {
     await sleep(delayMs);
     let result = await fetchConversationJson(currentUrl, headers);
     let source = 'current-conversations-api';
@@ -455,7 +510,153 @@ async function resolveConversationIdentity(initialUrl, tabId) {
   return null;
 }
 
+function cancelAnswerRequestWatch(requestId) {
+  const key = String(requestId || '');
+  const watch = answerRequestWatches.get(key);
+  if (!watch) return;
+  watch.cancelled = true;
+  answerRequestWatches.delete(key);
+  if (answerRequestWatchIdsByTab.get(watch.tabId) === key) {
+    answerRequestWatchIdsByTab.delete(watch.tabId);
+  }
+}
+
+function startWatchDelay(attempt) {
+  const index = Math.min(
+    Math.max(0, Number(attempt) || 0),
+    SERVER_CAPTURE_START_WATCH_DELAYS_MS.length - 1
+  );
+  return SERVER_CAPTURE_START_WATCH_DELAYS_MS[index];
+}
+
+async function watchAnswerRequestFromStart(details, context) {
+  const requestId = String(details?.requestId || '');
+  if (!requestId || typeof details?.tabId !== 'number') return;
+
+  const priorRequestId = answerRequestWatchIdsByTab.get(details.tabId);
+  if (priorRequestId && priorRequestId !== requestId) {
+    cancelAnswerRequestWatch(priorRequestId);
+    answerRequestContexts.delete(priorRequestId);
+  }
+
+  const watch = {
+    requestId,
+    tabId: details.tabId,
+    startedAt: Number(context?.startedAt) || Date.now(),
+    triggerPath: String(context?.triggerPath || answerRequestPath(details)),
+    cancelled: false
+  };
+  answerRequestWatches.set(requestId, watch);
+  answerRequestWatchIdsByTab.set(details.tabId, requestId);
+
+  let tab = null;
+  try { tab = await chrome.tabs.get(details.tabId); } catch {}
+  let identity = await resolveConversationIdentity(tab?.url || '', details.tabId);
+  for (let attempt = 0; !identity && attempt < 20 && !watch.cancelled; attempt += 1) {
+    await sleep(500);
+    try {
+      tab = await chrome.tabs.get(details.tabId);
+      identity = conversationFromUrl(tab?.url || '');
+    } catch {
+      break;
+    }
+  }
+
+  if (watch.cancelled) return;
+  if (!identity) {
+    recordBackgroundCapture('request-start-no-identity', {
+      tabId: details.tabId,
+      triggerPath: watch.triggerPath
+    });
+    cancelAnswerRequestWatch(requestId);
+    return;
+  }
+
+  recordBackgroundCapture('request-start-watch-armed', {
+    tabId: details.tabId,
+    conversationId: identity.id,
+    triggerPath: watch.triggerPath,
+    frozen: Boolean(tab?.frozen),
+    discarded: Boolean(tab?.discarded)
+  });
+
+  const watchStartedAt = Date.now();
+  let attempt = 0;
+  let lastReason = '';
+  while (!watch.cancelled && Date.now() - watchStartedAt < SERVER_CAPTURE_START_WATCH_TIMEOUT_MS) {
+    await sleep(startWatchDelay(attempt));
+    if (watch.cancelled) return;
+
+    const activeContext = answerRequestContexts.get(requestId) || context;
+    const result = await readCompletedConversation(identity, activeContext, [0]);
+    if (watch.cancelled) return;
+    if (result.ok && result.capture?.response) {
+      try { tab = await chrome.tabs.get(details.tabId); } catch {}
+      showCompletionToast(
+        identity,
+        result.capture.response,
+        result.capture.title || tab?.title || 'ChatGPT',
+        ''
+      );
+      rememberCompletedAnswerRequest(requestId);
+      answerRequestContexts.delete(requestId);
+      recordBackgroundCapture('request-start-toast', {
+        tabId: details.tabId,
+        conversationId: identity.id,
+        triggerPath: watch.triggerPath,
+        source: result.source,
+        statusCode: result.status || 0,
+        elapsedMs: Date.now() - watch.startedAt,
+        frozen: Boolean(tab?.frozen),
+        discarded: Boolean(tab?.discarded)
+      });
+      cancelAnswerRequestWatch(requestId);
+      return;
+    }
+
+    const reason = String(result.reason || `http-${result.status || 0}`);
+    if (reason !== lastReason) {
+      lastReason = reason;
+      recordBackgroundCapture('request-start-polling', {
+        tabId: details.tabId,
+        conversationId: identity.id,
+        triggerPath: watch.triggerPath,
+        reason,
+        statusCode: result.status || 0
+      });
+    }
+    attempt += 1;
+  }
+
+  if (!watch.cancelled) {
+    recordBackgroundCapture('request-start-watch-timeout', {
+      tabId: details.tabId,
+      conversationId: identity.id,
+      triggerPath: watch.triggerPath,
+      elapsedMs: Date.now() - watch.startedAt
+    });
+    cancelAnswerRequestWatch(requestId);
+  }
+}
+
 async function handleCompletedAnswerRequest(details) {
+  const requestId = String(details?.requestId || '');
+  if (completedAnswerRequestIds.has(requestId)) {
+    completedAnswerRequestIds.delete(requestId);
+    takeAnswerRequestContext(details);
+    cancelAnswerRequestWatch(requestId);
+    recordBackgroundCapture('network-completed-after-request-start-toast', {
+      tabId: details.tabId,
+      triggerPath: answerRequestPath(details)
+    });
+    return;
+  }
+  cancelAnswerRequestWatch(requestId);
+  recordBackgroundCapture('network-completed-observed', {
+    tabId: details.tabId,
+    triggerPath: answerRequestPath(details),
+    statusCode: details.statusCode || 0
+  });
   const context = takeAnswerRequestContext(details) || {
     tabId: details.tabId,
     startedAt: Number(details.timeStamp) || Date.now(),
@@ -498,14 +699,26 @@ chrome.webRequest.onBeforeSendHeaders.addListener(
 );
 
 chrome.webRequest.onErrorOccurred.addListener((details) => {
-  if (!isAnswerStreamRequest(details)) return;
+  if (!isAnswerStartRequest(details)) return;
+  cancelAnswerRequestWatch(details.requestId);
   takeAnswerRequestContext(details);
+  recordBackgroundCapture('answer-request-error', {
+    tabId: details.tabId,
+    triggerPath: answerRequestPath(details),
+    error: String(details.error || '')
+  });
 }, CHATGPT_REQUEST_FILTER);
 
 chrome.webRequest.onCompleted.addListener((details) => {
   if (!isAnswerStreamRequest(details)) return;
   if (details.statusCode < 200 || details.statusCode >= 300) {
+    cancelAnswerRequestWatch(details.requestId);
     takeAnswerRequestContext(details);
+    recordBackgroundCapture('network-completed-non-success', {
+      tabId: details.tabId,
+      triggerPath: answerRequestPath(details),
+      statusCode: details.statusCode || 0
+    });
     return;
   }
   handleCompletedAnswerRequest(details).catch((error) => {
@@ -676,6 +889,15 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         : { ok: false, error: 'No readable assistant response was captured.' });
     }).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
     return true;
+  }
+
+  if (message?.type === 'GET_BACKGROUND_CAPTURE_DIAGNOSTIC') {
+    sendResponse?.({
+      ok: true,
+      capture: backgroundCaptureHistory[0] || null,
+      history: backgroundCaptureHistory.slice(0, SERVER_CAPTURE_DIAGNOSTIC_HISTORY_LIMIT)
+    });
+    return false;
   }
 
   if (message?.type === 'TEST_NATIVE_TOAST') {

@@ -10,7 +10,7 @@
     button { width: 100%; border: 0; border-radius: 8px; padding: 9px 10px; font-weight: 650; cursor: pointer; }
     button + button { margin-top: 8px; }
     #status { min-height: 34px; margin-top: 9px; color: #d8d8d8; line-height: 1.35; }
-    #updateStatus, #captureStatus { margin-top: 8px; color: #a9a9a9; line-height: 1.35; }
+    #updateStatus, #captureStatus, #backgroundStatus { margin-top: 8px; color: #a9a9a9; line-height: 1.35; }
     #captureHistory { margin-top: 10px; padding-top: 9px; border-top: 1px solid #333; color: #929292; font-size: 11px; line-height: 1.35; white-space: pre-wrap; max-height: 210px; overflow-y: auto; }
   </style>
 </head>
@@ -21,7 +21,8 @@
   <button id="checkUpdate">Check for update</button>
   <div id="status">Checking Windows helper...</div>
   <div id="updateStatus"></div>
-  <div id="captureStatus">Last capture: checking current ChatGPT tab...</div>
+  <div id="backgroundStatus">Background watcher: checking...</div>
+  <div id="captureStatus">Last page capture: checking current ChatGPT tab...</div>
   <div id="captureHistory"></div>
   <script src="popup.js"></script>
 </body>
