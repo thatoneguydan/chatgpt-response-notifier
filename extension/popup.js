@@ -1,69 +1,101 @@
 'use strict';
 
+const historyRoot = document.getElementById('history');
+const empty = document.getElementById('empty');
+const version = document.getElementById('version');
 const testButton = document.getElementById('test');
 const updateButton = document.getElementById('checkUpdate');
-const status = document.getElementById('status');
-const updateStatus = document.getElementById('updateStatus');
 
-function formatUpdateState(value) {
-  if (!value || typeof value !== 'object') return 'Managed updates: waiting for helper status.';
-  switch (value.state) {
-    case 'waiting': return 'Managed updates: waiting for first background check.';
-    case 'checking': return 'Managed updates: checking silently...';
-    case 'current': return `Managed updates: current (${value.currentVersion || chrome.runtime.getManifest().version}).`;
-    case 'downloading': return `Managed updates: downloading ${value.availableVersion || ''} silently...`;
-    case 'installing': return `Managed updates: installing ${value.availableVersion || ''}...`;
-    case 'installed': return `Managed updates: installed ${value.currentVersion || value.availableVersion || ''}; reloading extension.`;
-    case 'error': return `Managed update error: ${value.error || 'unknown error'}`;
-    default: return `Managed updates: ${value.state || 'unknown state'}.`;
+version.textContent = `v${chrome.runtime.getManifest().version}`;
+
+function formatTime(value) {
+  try {
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) return '';
+    const now = new Date();
+    const sameDay = date.getFullYear() === now.getFullYear()
+      && date.getMonth() === now.getMonth()
+      && date.getDate() === now.getDate();
+    return sameDay
+      ? date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
+      : date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  } catch {
+    return '';
   }
 }
 
-async function refreshHostStatus() {
-  status.textContent = 'Checking Windows helper...';
-  try {
-    const result = await chrome.runtime.sendMessage({ type: 'PING_NATIVE_HOST' });
-    if (result?.ok) {
-      status.textContent = `Windows helper connected. Extension ${chrome.runtime.getManifest().version}.`;
-      updateStatus.textContent = formatUpdateState(result.updateStatus);
-    } else {
-      status.textContent = 'Windows helper is not running. Re-run the notifier installer.';
-      updateStatus.textContent = 'Managed updates unavailable until the helper is running.';
+function makeHistoryItem(record) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'history-item';
+
+  const title = document.createElement('span');
+  title.className = 'history-title';
+  title.textContent = record.title || 'ChatGPT';
+
+  const preview = document.createElement('span');
+  preview.className = 'history-preview';
+  preview.textContent = record.preview || 'Response finished.';
+
+  const time = document.createElement('span');
+  time.className = 'history-time';
+  time.textContent = formatTime(record.completedAt);
+
+  button.append(title, preview, time);
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    try {
+      const result = await chrome.runtime.sendMessage({
+        type: 'OPEN_RECENT_NOTIFICATION',
+        conversationId: record.conversationId,
+        conversationUrl: record.conversationUrl
+      });
+      if (result?.ok) window.close();
+    } catch {}
+    finally {
+      button.disabled = false;
     }
-  } catch (error) {
-    status.textContent = `Helper check failed: ${error.message}`;
-    updateStatus.textContent = 'Managed update status unavailable.';
+  });
+  return button;
+}
+
+async function loadHistory() {
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'GET_RECENT_NOTIFICATIONS' });
+    const notifications = Array.isArray(result?.notifications) ? result.notifications.slice(0, 10) : [];
+    historyRoot.replaceChildren();
+    if (notifications.length === 0) {
+      historyRoot.append(empty);
+      return;
+    }
+    for (const record of notifications) historyRoot.append(makeHistoryItem(record));
+  } catch {
+    historyRoot.replaceChildren(empty);
   }
 }
 
-testButton.addEventListener('click', async () => {
-  testButton.disabled = true;
-  status.textContent = 'Sending persistent notification test...';
+async function runTinyAction(button, message) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = '…';
   try {
-    const result = await chrome.runtime.sendMessage({ type: 'TEST_NATIVE_TOAST' });
-    status.textContent = result?.ok
-      ? 'Persistent notification + completion chime created.'
-      : `Test failed: ${result?.error || 'unknown error'}`;
-  } catch (error) {
-    status.textContent = `Test failed: ${error.message}`;
-  } finally {
-    testButton.disabled = false;
+    const result = await chrome.runtime.sendMessage(message);
+    button.textContent = result?.ok ? '✓' : '!';
+  } catch {
+    button.textContent = '!';
   }
+  setTimeout(() => {
+    button.textContent = original;
+    button.disabled = false;
+  }, 900);
+}
+
+testButton.addEventListener('click', () => {
+  runTinyAction(testButton, { type: 'TEST_NATIVE_TOAST' });
 });
 
-updateButton.addEventListener('click', async () => {
-  updateButton.disabled = true;
-  updateStatus.textContent = 'Managed updates: checking silently...';
-  try {
-    const result = await chrome.runtime.sendMessage({ type: 'CHECK_MANAGED_UPDATE' });
-    updateStatus.textContent = result?.ok
-      ? formatUpdateState(result.updateStatus)
-      : `Managed update check failed: ${result?.error || 'unknown error'}`;
-  } catch (error) {
-    updateStatus.textContent = `Managed update check failed: ${error.message}`;
-  } finally {
-    updateButton.disabled = false;
-  }
+updateButton.addEventListener('click', () => {
+  runTinyAction(updateButton, { type: 'CHECK_MANAGED_UPDATE' });
 });
 
-refreshHostStatus();
+loadHistory();

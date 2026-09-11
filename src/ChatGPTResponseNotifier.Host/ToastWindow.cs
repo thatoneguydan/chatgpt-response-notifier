@@ -30,10 +30,11 @@ internal sealed class ToastWindow : Window
         Focusable = false;
 
         Content = BuildContent(record);
-        Closed += (_, _) =>
-        {
-            if (!SuppressCloseEvent) ToastDismissed?.Invoke(this, EventArgs.Empty);
-        };
+
+        // Closing the helper process (including a managed-update handoff) must
+        // not be interpreted as a user dismissal. Explicit user actions below
+        // raise ToastDismissed/ToastClicked themselves; ordinary window teardown
+        // leaves the persisted pending-notification state intact for restoration.
     }
 
     private UIElement BuildContent(NotificationRecord record)
