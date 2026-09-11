@@ -3,18 +3,28 @@
 (() => {
   if (globalThis.ChatGPTNotifierStatusCode) return;
 
-  // Keep the notifier coupled to the stable footer shape, not to a duplicated
-  // project-local list of policy codes. Any canonical uppercase status code can
-  // be consumed without requiring a notifier release just to extend the taxonomy.
+  // This list mirrors the canonical GitHub work-session status taxonomy in
+  // DevelopmentInfrastructure/GITHUB-WORK-STATUS-POLICY.md. Unknown tokens do
+  // not qualify for notifications; taxonomy changes require an intentional
+  // notifier update so accidental status-looking text cannot become eligible.
+  const VALID_STATUS_CODES = Object.freeze([
+    'PLANNING_ACTIVE',
+    'COMPLETE_APPLIED',
+    'COMPLETE_NO_CHANGES',
+    'BLOCKED_HUMAN',
+    'INCOMPLETE_LIMIT',
+    'INCOMPLETE_TOOL_FAILURE',
+    'INCOMPLETE_HANDOFF'
+  ]);
+  const VALID_STATUS_CODE_SET = new Set(VALID_STATUS_CODES);
   const STATUS_LINE_PATTERN = /^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/;
-  const STATUS_CODE_PATTERN = /^[A-Z][A-Z0-9_]*$/;
 
   function normalizeLineEndings(value) {
     return String(value || '').replace(/\r\n?/g, '\n');
   }
 
   function isStatusCode(value) {
-    return STATUS_CODE_PATTERN.test(String(value || ''));
+    return VALID_STATUS_CODE_SET.has(String(value || ''));
   }
 
   function parseTerminalStatus(value) {
@@ -28,7 +38,7 @@
 
     const statusLine = lines[lines.length - 1].trim();
     const match = statusLine.match(STATUS_LINE_PATTERN);
-    if (!match) {
+    if (!match || !isStatusCode(match[1])) {
       return { statusCode: '', statusLine: '', body: text.trim() };
     }
 
@@ -43,6 +53,7 @@
   }
 
   globalThis.ChatGPTNotifierStatusCode = Object.freeze({
+    validStatusCodes: VALID_STATUS_CODES,
     isStatusCode,
     parseTerminalStatus
   });

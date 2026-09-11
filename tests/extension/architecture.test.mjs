@@ -56,12 +56,27 @@ test('terminal GitHub status parser only accepts an exact final non-whitespace f
   assert.equal(parser.parseTerminalStatus('Done without a footer.').statusCode, '');
 });
 
-test('status parser stays syntax-based so future canonical codes do not require notifier releases', () => {
+test('status parser accepts only the canonical seven work-session codes', () => {
   const parser = loadStatusParser();
-  assert.equal(parser.isStatusCode('PLANNING_ACTIVE'), true);
-  assert.equal(parser.isStatusCode('FUTURE_POLICY_CODE_2'), true);
+  const expected = [
+    'PLANNING_ACTIVE',
+    'COMPLETE_APPLIED',
+    'COMPLETE_NO_CHANGES',
+    'BLOCKED_HUMAN',
+    'INCOMPLETE_LIMIT',
+    'INCOMPLETE_TOOL_FAILURE',
+    'INCOMPLETE_HANDOFF'
+  ];
+
+  assert.deepEqual(Array.from(parser.validStatusCodes), expected);
+  for (const code of expected) {
+    assert.equal(parser.isStatusCode(code), true, `${code} must qualify`);
+    assert.equal(parser.parseTerminalStatus(`Body\n[GITHUB_STATUS: ${code}]`).statusCode, code);
+  }
+
+  assert.equal(parser.isStatusCode('FUTURE_POLICY_CODE_2'), false);
   assert.equal(parser.isStatusCode('future_policy_code'), false);
-  assert.equal(parser.parseTerminalStatus('Body\n[GITHUB_STATUS: FUTURE_POLICY_CODE_2]').statusCode, 'FUTURE_POLICY_CODE_2');
+  assert.equal(parser.parseTerminalStatus('Body\n[GITHUB_STATUS: FUTURE_POLICY_CODE_2]').statusCode, '');
 });
 
 test('service worker observes ChatGPT traffic but never creates ChatGPT HTTP traffic', () => {
