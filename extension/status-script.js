@@ -340,7 +340,6 @@
 
     const composer = composerElement();
     if (!composer) return { ok: false, reason: 'composer-not-found' };
-    if (document.activeElement === composer) return { ok: false, reason: 'composer-focused' };
     if (composerText(composer) !== '') return { ok: false, reason: 'composer-not-empty' };
     if (stopButtonPresent()) return { ok: false, reason: 'response-still-generating' };
 
