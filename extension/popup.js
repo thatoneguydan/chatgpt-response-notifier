@@ -66,7 +66,7 @@ function makeHistoryItem(record) {
 async function loadHistory() {
   try {
     const result = await chrome.runtime.sendMessage({ type: 'GET_RECENT_NOTIFICATIONS' });
-    const notifications = Array.isArray(result?.notifications) ? result.notifications.slice(0, 10) : [];
+    const notifications = Array.isArray(result?.notifications) ? result.notifications.slice(0, 20) : [];
     historyRoot.replaceChildren();
     if (notifications.length === 0) {
       historyRoot.append(empty);
