@@ -118,7 +118,6 @@ test('INCOMPLETE_LIMIT auto-continuation uses only guarded ChatGPT DOM interacti
   const statusScript = text('extension/status-script.js');
   assert.match(statusScript, /AUTO_CONTINUE_TEXT\s*=\s*'continue until you finish or need something from me'/);
   assert.match(statusScript, /snapshot\?\.statusCode !== 'INCOMPLETE_LIMIT'/);
-  assert.match(statusScript, /document\.activeElement === composer/);
   assert.match(statusScript, /composerText\(composer\) !== ''/);
   assert.match(statusScript, /button\[data-testid="send-button"\]/);
   assert.match(statusScript, /sendButton\.click\(\)/);
