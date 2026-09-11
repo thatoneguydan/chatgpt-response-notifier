@@ -4,9 +4,10 @@ Persistent, independently stacked Windows notifications for completed ChatGPT re
 
 ## What it does
 
-- uses Ram Haidar's upstream prompt-bound completion monitor unchanged for completion detection;
+- uses Ram Haidar's upstream prompt-bound completion monitor unchanged for normal completion detection;
 - observes the ChatGPT response request that the page already makes, then inspects the rendered assistant turn in the page DOM;
 - does **not** poll ChatGPT APIs, fetch conversation data, or request authentication/session data;
+- locally remembers an in-progress conversation so monitoring can recover after a page refresh or Chrome restart;
 - creates one persistent Windows notification window per completed response;
 - stacks multiple notifications instead of replacing earlier ones;
 - persists unresolved notifications across helper/browser restarts;
@@ -22,14 +23,24 @@ The custom Windows notification contains the chat title, response preview, compl
 
 `extension/content-script.js` is intentionally kept byte-for-byte identical to upstream revision `cbe00dcfcff8a571f407c6109ed4d5f97cef60a9` (`ChatGPT Prompt-Bound Completion Alert` 1.0.8).
 
-The service worker preserves upstream's monitoring path:
+The normal path remains upstream's monitoring path:
 
 1. observe completion of the existing ChatGPT conversation POST with `chrome.webRequest.onCompleted`;
 2. signal the upstream content script;
 3. let that content script bind the rendered assistant answer to the latest user prompt;
 4. route the resulting `CHATGPT_RESPONSE_COMPLETE` event to the localhost Windows helper.
 
-The helper/update integration must not add ChatGPT HTTP requests. `tests/extension/architecture.test.mjs` and the release workflow enforce this boundary.
+The helper/update/recovery integration must not add ChatGPT HTTP requests. `tests/extension/architecture.test.mjs` and the release workflow enforce this boundary.
+
+## Refresh and Chrome-restart recovery
+
+Recovery is a separate layer; it does not make the normal detector stricter and it does not modify `content-script.js`.
+
+When the existing ChatGPT conversation POST starts, `extension/recovery-background.js` records only the conversation ID, URL, and local start time in extension-local IndexedDB. It does not read the request body and does not make a request of its own. The pending marker expires after seven days and is cleared on normal completion or a manual Stop action.
+
+If that same conversation page later reloads while the marker is still pending, `extension/recovery-script.js` watches the latest assistant turn. It does **not** require the composer Stop/send button to be in any particular state. Any recognized finished-response action on that assistant turn (for example More actions or Copy) is enough to re-arm the unchanged upstream content script, which then produces the normal completion event and notification.
+
+If Chrome is completely closed when the response finishes, the extension cannot notify while Chrome is closed. The pending marker survives; recovery occurs after Chrome reopens and that conversation page loads again.
 
 ## Notification persistence
 
@@ -37,7 +48,7 @@ The Windows helper owns notification lifetime and stacking. Outstanding notifica
 
 ## Install
 
-Use the latest `ChatGPT-Response-Notifier-Setup-<version>.exe` from GitHub Releases. The Chrome extension is installed as an unpacked extension from the stable LocalAppData folder created by Setup.
+Use the latest `ChatGPT-Response-Notifier-Setup-<version>.exe` from GitHub Releases. Setup installs the extension files into `%LOCALAPPDATA%\ChatGPTResponseNotifier\Extension`. On the first install, load that folder once with Chrome's **Load unpacked** button; managed updates keep using the same stable folder and extension ID afterward.
 
 ## Update model
 

@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { existsSync, readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 const root = new URL('../../', import.meta.url);
@@ -33,22 +35,65 @@ test('service worker observes ChatGPT traffic but never creates ChatGPT HTTP tra
   assert.doesNotMatch(worker, /recovery-watchdog/i);
 });
 
+test('refresh/reopen recovery stays local and only observes existing ChatGPT traffic', () => {
+  const wrapper = text('extension/background.js');
+  const recoveryBackground = text('extension/recovery-background.js');
+  const recoveryScript = text('extension/recovery-script.js');
+
+  assert.match(wrapper, /importScripts\(['"]service-worker\.js['"],\s*['"]recovery-background\.js['"]\)/);
+  assert.match(recoveryBackground, /chrome\.webRequest\.onBeforeRequest\.addListener/);
+  assert.match(recoveryBackground, /indexedDB\.open/);
+  assert.match(recoveryBackground, /CHATGPT_CONVERSATION_REQUEST_COMPLETED/);
+  assert.match(recoveryBackground, /CHATGPT_RECOVERY_QUERY/);
+  assert.match(recoveryBackground, /CHATGPT_RECOVERY_FINISHED_UI/);
+  assert.doesNotMatch(recoveryBackground, /\bfetch\s*\(/);
+  assert.doesNotMatch(recoveryBackground, /XMLHttpRequest/);
+  assert.doesNotMatch(recoveryBackground, /chrome\.storage/);
+  assert.doesNotMatch(recoveryBackground, /api\/auth\/session/i);
+
+  assert.match(recoveryScript, /more-turn-action-button/);
+  assert.match(recoveryScript, /copy-turn-action-button/);
+  assert.match(recoveryScript, /CHATGPT_RECOVERY_FINISHED_UI/);
+  assert.match(recoveryScript, /CHATGPT_RECOVERY_CANCEL/);
+  assert.doesNotMatch(recoveryScript, /\bfetch\s*\(/);
+
+  const finishedSelector = recoveryScript.match(/const FINISHED_ACTION_SELECTOR = \[([\s\S]*?)\]\.join/)?.[1] || '';
+  assert.ok(finishedSelector, 'finished-response action selector must exist');
+  assert.doesNotMatch(finishedSelector, /stop-button/i, 'Stop/send control must not be required for recovery completion');
+});
+
+test('recovery scripts are valid JavaScript', () => {
+  for (const relative of [
+    'extension/background.js',
+    'extension/recovery-background.js',
+    'extension/recovery-script.js'
+  ]) {
+    const path = fileURLToPath(new URL(relative, root));
+    const result = spawnSync(process.execPath, ['--check', path], { encoding: 'utf8' });
+    assert.equal(result.status, 0, `${relative} failed syntax check:\n${result.stderr || result.stdout}`);
+  }
+});
+
 test('extension delegates notifications to localhost helper only', () => {
   const worker = text('extension/service-worker.js');
+  const recoveryBackground = text('extension/recovery-background.js');
   const manifest = JSON.parse(text('extension/manifest.json'));
 
   assert.match(worker, /ws:\/\/127\.0\.0\.1:38473\/bridge/);
   assert.match(worker, /type:\s*'toast\.show'/);
   assert.doesNotMatch(worker, /chrome\.notifications/);
   assert.doesNotMatch(worker, /chrome\.offscreen/);
+  assert.doesNotMatch(recoveryBackground, /chrome\.notifications/);
+  assert.doesNotMatch(recoveryBackground, /chrome\.offscreen/);
   assert.doesNotMatch(worker, /Click to return/i);
 
   assert.deepEqual(manifest.permissions.sort(), ['scripting', 'tabs', 'webRequest']);
   assert.ok(manifest.host_permissions.includes('ws://127.0.0.1/*'));
   assert.ok(manifest.host_permissions.includes('https://chatgpt.com/*'));
+  assert.equal(manifest.background.service_worker, 'background.js');
   assert.deepEqual(
     manifest.content_scripts[0].js,
-    ['content-script.js', 'persistence-script.js']
+    ['content-script.js', 'persistence-script.js', 'recovery-script.js']
   );
 });
 
