@@ -2,28 +2,23 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>ChatGPT Native Response Notifier</title>
+  <title>ChatGPT Response Notifier</title>
   <style>
-    body { font: 13px system-ui, sans-serif; width: 360px; margin: 0; padding: 14px; background: #171717; color: #f2f2f2; }
+    body { font: 13px system-ui, sans-serif; width: 340px; margin: 0; padding: 14px; background: #171717; color: #f2f2f2; }
     h1 { font-size: 15px; margin: 0 0 8px; }
     p { color: #cfcfcf; line-height: 1.4; margin: 0 0 12px; }
     button { width: 100%; border: 0; border-radius: 8px; padding: 9px 10px; font-weight: 650; cursor: pointer; }
     button + button { margin-top: 8px; }
-    #status { min-height: 34px; margin-top: 9px; color: #d8d8d8; line-height: 1.35; }
-    #updateStatus, #captureStatus, #backgroundStatus { margin-top: 8px; color: #a9a9a9; line-height: 1.35; }
-    #captureHistory { margin-top: 10px; padding-top: 9px; border-top: 1px solid #333; color: #929292; font-size: 11px; line-height: 1.35; white-space: pre-wrap; max-height: 210px; overflow-y: auto; }
+    #status, #updateStatus { margin-top: 9px; color: #bdbdbd; line-height: 1.35; }
   </style>
 </head>
 <body>
-  <h1>ChatGPT Native Response Notifier</h1>
-  <p>Each completed response becomes its own persistent Windows toast window.</p>
-  <button id="test">Test native toast</button>
+  <h1>ChatGPT Response Notifier</h1>
+  <p>Uses the upstream prompt-bound completion monitor and the Windows helper for persistent stacked notifications.</p>
+  <button id="test">Test persistent notification</button>
   <button id="checkUpdate">Check for update</button>
   <div id="status">Checking Windows helper...</div>
   <div id="updateStatus"></div>
-  <div id="backgroundStatus">Background watcher: checking...</div>
-  <div id="captureStatus">Last page capture: checking current ChatGPT tab...</div>
-  <div id="captureHistory"></div>
   <script src="popup.js"></script>
 </body>
 </html>
