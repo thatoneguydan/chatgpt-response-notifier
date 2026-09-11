@@ -23,6 +23,10 @@ function normalizeMessage(raw, fallbackId = '') {
       message.metadata?.parent_message_id || message.metadata?.parent_id || null;
   }
   if (!message.children && Array.isArray(wrapper.children)) message.children = wrapper.children;
+  if (message.recipient == null && wrapper.recipient != null) message.recipient = wrapper.recipient;
+  if (message.channel == null && wrapper.channel != null) message.channel = wrapper.channel;
+  if (message.end_turn == null && wrapper.end_turn != null) message.end_turn = wrapper.end_turn;
+  if (message.status == null && wrapper.status != null) message.status = wrapper.status;
   return message;
 }
 
@@ -78,6 +82,35 @@ function messageRole(message) {
   return String(message?.author?.role || message?.role || '').trim().toLowerCase();
 }
 
+function messageRecipient(message) {
+  const candidates = [
+    message?.recipient,
+    message?.metadata?.recipient,
+    message?.metadata?.recipient_name
+  ];
+  return String(candidates.find((value) => typeof value === 'string' && value.trim()) || '').trim().toLowerCase();
+}
+
+function messageChannel(message) {
+  const candidates = [
+    message?.channel,
+    message?.metadata?.channel
+  ];
+  return String(candidates.find((value) => typeof value === 'string' && value.trim()) || '').trim().toLowerCase();
+}
+
+function isUserFacingRecipient(message) {
+  const recipient = messageRecipient(message);
+  if (!recipient) return true;
+  return recipient === 'all' || recipient === 'user';
+}
+
+function isTerminalUserFacingChannel(message) {
+  const channel = messageChannel(message);
+  if (!channel) return true;
+  return channel === 'final';
+}
+
 function messageParentId(message) {
   const candidates = [
     message?.parent,
@@ -91,6 +124,12 @@ function messageParentId(message) {
 
 function isCompletedAssistant(message) {
   if (!message || messageRole(message) !== 'assistant' || isVisuallyHidden(message)) return false;
+  // A tool-directed or commentary/analysis assistant node can be individually
+  // "finished" while the overall ChatGPT turn is still running. Explicit
+  // non-terminal/user-facing metadata always wins over a generic status.
+  if (message.end_turn === false) return false;
+  if (!isUserFacingRecipient(message)) return false;
+  if (!isTerminalUserFacingChannel(message)) return false;
   if (!extractServerMessageText(message)) return false;
   if (message.end_turn === true) return true;
   const status = String(message.status || '').trim().toLowerCase();
