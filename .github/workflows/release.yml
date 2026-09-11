@@ -12,6 +12,9 @@ permissions:
 
 jobs:
   release:
+    # This repository is public. Keep release publication isolated on GitHub's
+    # hosted Windows runner rather than exposing Dan's workstation runner to a
+    # public repository trust boundary.
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -26,6 +29,11 @@ jobs:
           node --check .\extension\service-worker.js
           node --check .\extension\content-script.js
           node --check .\extension\persistence-script.js
+          node --check .\extension\status-code.js
+          node --check .\extension\status-script.js
+          node --check .\extension\recovery-background.js
+          node --check .\extension\recovery-script.js
+          node --check .\extension\history-background.js
           node --check .\extension\popup.js
           node --test .\tests\extension\architecture.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Extension architecture tests failed.' }
@@ -98,7 +106,7 @@ jobs:
             gh release create $tag $managedZip $setupExe `
               --target $sourceCommit `
               --title "ChatGPT Response Notifier $version" `
-              --notes "Restores Ram Haidar's upstream prompt-bound completion monitor unchanged, with no ChatGPT API polling. Completion events are routed to the persistent stacked Windows helper, with managed automatic updates retained."
+              --notes "Keeps Ram Haidar's upstream prompt-bound completion monitor unchanged and adds a local terminal [GITHUB_STATUS: CODE] eligibility gate. Uncoded chats no longer notify; coded notifications include the status code, and refresh/reopen recovery uses the same footer without ChatGPT API polling."
             if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
           }
           else {

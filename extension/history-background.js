@@ -8,12 +8,7 @@
   const DB_VERSION = 1;
   const STORE_NAME = 'notifications';
   const MAX_HISTORY = 10;
-  const RESPONSE_PREVIEW_MAX_CHARS = 300;
   let databasePromise = null;
-
-  function normalize(value) {
-    return String(value || '').replace(/\s+/g, ' ').trim();
-  }
 
   function conversationFromUrl(rawUrl) {
     try {
@@ -33,41 +28,8 @@
     return null;
   }
 
-  function fullTabTitle(sender, message) {
-    const title = String(sender?.tab?.title || message?.sessionTitle || 'ChatGPT').trim();
-    return title || 'ChatGPT';
-  }
-
-  function truncateResponse(text, maxChars = RESPONSE_PREVIEW_MAX_CHARS) {
-    const normalized = normalize(text);
-    if (!normalized) return 'Response finished.';
-    if (normalized.length <= maxChars) return normalized;
-    const slice = normalized.slice(0, Math.max(1, maxChars - 3));
-    const lastSpace = slice.lastIndexOf(' ');
-    const safeCut = lastSpace >= Math.floor(maxChars * 0.7) ? slice.slice(0, lastSpace) : slice;
-    return `${safeCut.trimEnd()}...`;
-  }
-
-  function sleep(delayMs) {
-    return new Promise((resolve) => setTimeout(resolve, Math.max(0, delayMs)));
-  }
-
-  async function resolveConversationIdentity(initialUrl, tabId) {
-    let identity = conversationFromUrl(initialUrl);
-    if (identity) return identity;
-
-    if (typeof tabId !== 'number') return null;
-    for (let attempt = 0; attempt < 10; attempt += 1) {
-      await sleep(250);
-      try {
-        const tab = await chrome.tabs.get(tabId);
-        identity = conversationFromUrl(tab.url);
-        if (identity) return identity;
-      } catch {
-        return null;
-      }
-    }
-    return null;
+  function isStatusCode(value) {
+    return Boolean(globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(String(value || '')));
   }
 
   function openDatabase() {
@@ -88,7 +50,7 @@
     return databasePromise;
   }
 
-  async function getAllHistory() {
+  async function getAllHistoryUnbounded() {
     const database = await openDatabase();
     return await new Promise((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, 'readonly');
@@ -96,14 +58,19 @@
       request.onsuccess = () => {
         const items = Array.isArray(request.result) ? request.result : [];
         items.sort((left, right) => String(right.completedAt || '').localeCompare(String(left.completedAt || '')));
-        resolve(items.slice(0, MAX_HISTORY));
+        resolve(items);
       };
       request.onerror = () => reject(request.error || new Error('Could not read notification history.'));
     });
   }
 
+  async function getAllHistory() {
+    const items = await getAllHistoryUnbounded();
+    return items.filter((item) => isStatusCode(item?.statusCode)).slice(0, MAX_HISTORY);
+  }
+
   async function saveHistoryRecord(record) {
-    const existing = await getAllHistory();
+    const existing = await getAllHistoryUnbounded();
     const duplicate = existing.find((item) =>
       item.conversationId === record.conversationId &&
       record.fingerprint &&
@@ -122,13 +89,13 @@
     });
 
     const all = await getAllHistoryUnbounded();
-    if (all.length <= MAX_HISTORY) return;
-    const keep = new Set(all.slice(0, MAX_HISTORY).map((item) => item.historyId));
+    const coded = all.filter((item) => isStatusCode(item?.statusCode));
+    const keep = new Set(coded.slice(0, MAX_HISTORY).map((item) => item.historyId));
     await new Promise((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, 'readwrite');
       const store = transaction.objectStore(STORE_NAME);
       for (const item of all) {
-        if (!keep.has(item.historyId)) store.delete(item.historyId);
+        if (!isStatusCode(item?.statusCode) || !keep.has(item.historyId)) store.delete(item.historyId);
       }
       transaction.oncomplete = resolve;
       transaction.onerror = () => reject(transaction.error || new Error('Could not trim notification history.'));
@@ -136,36 +103,24 @@
     });
   }
 
-  async function getAllHistoryUnbounded() {
-    const database = await openDatabase();
-    return await new Promise((resolve, reject) => {
-      const transaction = database.transaction(STORE_NAME, 'readonly');
-      const request = transaction.objectStore(STORE_NAME).getAll();
-      request.onsuccess = () => {
-        const items = Array.isArray(request.result) ? request.result : [];
-        items.sort((left, right) => String(right.completedAt || '').localeCompare(String(left.completedAt || '')));
-        resolve(items);
-      };
-      request.onerror = () => reject(request.error || new Error('Could not read notification history.'));
-    });
-  }
+  async function rememberEligibleCompletion(record) {
+    if (!record || !isStatusCode(record.statusCode)) return false;
+    const conversationId = String(record.conversationId || '');
+    const conversationUrl = String(record.conversationUrl || '');
+    const identity = conversationFromUrl(conversationUrl);
+    if (!conversationId || !identity || identity.id !== conversationId) return false;
 
-  async function rememberCompletion(message, sender) {
-    const tabId = sender.tab?.id;
-    const identity = await resolveConversationIdentity(sender.tab?.url || '', tabId);
-    if (!identity) return;
-
-    const fingerprint = String(message?.fingerprint || '');
-    const completedAt = new Date().toISOString();
     await saveHistoryRecord({
-      historyId: crypto.randomUUID(),
-      fingerprint,
-      conversationId: identity.id,
+      historyId: String(record.historyId || crypto.randomUUID()),
+      fingerprint: String(record.fingerprint || ''),
+      conversationId,
       conversationUrl: identity.url,
-      title: fullTabTitle(sender, message),
-      preview: truncateResponse(message?.response),
-      completedAt
+      title: String(record.title || 'ChatGPT'),
+      preview: String(record.preview || 'Response finished.'),
+      statusCode: String(record.statusCode || ''),
+      completedAt: String(record.completedAt || new Date().toISOString())
     });
+    return true;
   }
 
   async function focusOrOpenConversation(conversationId, conversationUrl) {
@@ -192,14 +147,11 @@
     return true;
   }
 
-  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message?.type === 'CHATGPT_RESPONSE_COMPLETE') {
-      rememberCompletion(message, sender).catch((error) => {
-        console.warn('Could not save completion in recent notification history', error);
-      });
-      return false;
-    }
+  globalThis.__chatgptNotifierHistory = Object.freeze({
+    rememberEligibleCompletion
+  });
 
+  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     if (message?.type === 'GET_RECENT_NOTIFICATIONS') {
       getAllHistory().then((notifications) => {
         sendResponse?.({ ok: true, notifications });

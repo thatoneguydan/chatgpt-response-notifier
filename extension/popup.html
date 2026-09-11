@@ -33,15 +33,22 @@
     .history-item:hover { background: #242424; }
     .history-title {
       display: block;
-      overflow: hidden;
       color: #f5f5f5;
       font-weight: 650;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+      white-space: normal;
+    }
+    .history-status {
+      display: block;
+      margin-top: 4px;
+      color: #9b9b9b;
+      font: 600 10.5px Consolas, monospace;
+      overflow-wrap: anywhere;
     }
     .history-preview {
       display: -webkit-box;
-      margin-top: 3px;
+      margin-top: 4px;
       overflow: hidden;
       color: #bdbdbd;
       line-height: 1.35;

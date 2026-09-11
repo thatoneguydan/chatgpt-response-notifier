@@ -200,7 +200,7 @@
       try {
         await chrome.scripting.executeScript({
           target: { tabId: tab.id },
-          files: ['recovery-script.js']
+          files: ['status-code.js', 'status-script.js', 'recovery-script.js']
         });
       } catch {}
     }
@@ -238,11 +238,12 @@
       return true;
     }
 
-    if (message?.type === 'CHATGPT_RECOVERY_FINISHED_UI') {
+    if (message?.type === 'CHATGPT_RECOVERY_STATUS_READY') {
       (async () => {
         const tabId = sender.tab?.id;
         const identity = await identityForSender(message, sender);
-        if (typeof tabId !== 'number' || !identity) {
+        const statusCode = String(message?.statusCode || '');
+        if (typeof tabId !== 'number' || !identity || !globalThis.ChatGPTNotifierStatusCode?.isStatusCode(statusCode)) {
           sendResponse?.({ ok: false, armed: false });
           return;
         }

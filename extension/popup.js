@@ -33,6 +33,10 @@ function makeHistoryItem(record) {
   title.className = 'history-title';
   title.textContent = record.title || 'ChatGPT';
 
+  const status = document.createElement('span');
+  status.className = 'history-status';
+  status.textContent = record.statusCode || '';
+
   const preview = document.createElement('span');
   preview.className = 'history-preview';
   preview.textContent = record.preview || 'Response finished.';
@@ -41,7 +45,7 @@ function makeHistoryItem(record) {
   time.className = 'history-time';
   time.textContent = formatTime(record.completedAt);
 
-  button.append(title, preview, time);
+  button.append(title, status, preview, time);
   button.addEventListener('click', async () => {
     button.disabled = true;
     try {

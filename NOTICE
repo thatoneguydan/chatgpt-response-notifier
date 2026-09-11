@@ -1,7 +1,7 @@
-ChatGPT Response Notifier 0.6.0
+ChatGPT Response Notifier 0.7.0
 
 This project uses the completion-monitoring implementation from ChatGPT Response Complete Notifier by Ram Haidar (ramhaidar/ChatGPT-Response-Complete-Notifier), revision cbe00dcfcff8a571f407c6109ed4d5f97cef60a9.
 
-For version 0.6.0, extension/content-script.js remains byte-for-byte identical to the upstream file at that revision. The surrounding integration routes upstream completion events to this project's localhost Windows helper for persistent stacked notifications and managed updates without adding ChatGPT API polling. Separate local recovery and recent-notification-history layers use extension-local IndexedDB and existing browser/page events only. The Windows toast renders only the full browser-tab title in a compact light-theme surface while retaining response-preview data in the notification payload/backend model.
+For version 0.7.0, extension/content-script.js remains byte-for-byte identical to the upstream file at that revision. The surrounding integration routes upstream completion events through a separate local terminal-status eligibility layer and then to this project's localhost Windows helper for persistent stacked notifications and managed updates without adding ChatGPT API polling. Only responses whose final non-whitespace line matches the GitHub work-session footer shape `[GITHUB_STATUS: UPPERCASE_CODE]` are notified or added to recent history. Refresh/reopen recovery uses the same footer rather than ChatGPT action-button UI. Response-preview data remains available in the notification/history backend while the compact light Windows toast renders the full browser-tab title and status code.
 
 Original and modified portions are distributed under GPL-3.0.

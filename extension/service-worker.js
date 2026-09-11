@@ -2,6 +2,7 @@
 
 const BRIDGE_URL = 'ws://127.0.0.1:38473/bridge';
 const RESPONSE_PREVIEW_MAX_CHARS = 300;
+const STATUS_QUERY_TIMEOUT_MS = 30000;
 const CHATGPT_REQUEST_FILTER = {
   urls: [
     'https://chatgpt.com/backend-api/f/conversation*',
@@ -112,7 +113,6 @@ function connectNativeHost() {
       failPendingNativeRequests();
       scheduleReconnect();
     };
-
     return socket;
   } catch {
     bridgeSocket = null;
@@ -193,20 +193,17 @@ function conversationFromUrl(rawUrl) {
     const url = new URL(String(rawUrl || ''));
     if (url.hostname !== 'chatgpt.com' && url.hostname !== 'www.chatgpt.com') return null;
     const segments = url.pathname.split('/').filter(Boolean);
-    let conversationId = '';
     for (let index = segments.length - 2; index >= 0; index -= 1) {
       if (segments[index] !== 'c') continue;
-      conversationId = decodeURIComponent(segments[index + 1] || '').trim();
-      if (conversationId) break;
+      const id = decodeURIComponent(segments[index + 1] || '').trim();
+      if (!id) continue;
+      return {
+        id,
+        url: `https://chatgpt.com${url.pathname.replace(/\/+$/, '')}`
+      };
     }
-    if (!conversationId) return null;
-    return {
-      id: conversationId,
-      url: `https://chatgpt.com${url.pathname.replace(/\/+$/, '')}`
-    };
-  } catch {
-    return null;
-  }
+  } catch {}
+  return null;
 }
 
 function fullTabTitle(sender, message) {
@@ -314,17 +311,16 @@ async function injectScriptsIntoExistingChatgptTabs() {
     try {
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        files: ['content-script.js', 'persistence-script.js']
+        files: ['content-script.js', 'persistence-script.js', 'status-code.js', 'status-script.js']
       });
     } catch {}
   }
 }
 
-// Monitoring core below is intentionally kept behaviorally identical to
-// ramhaidar/ChatGPT-Response-Complete-Notifier revision
-// cbe00dcfcff8a571f407c6109ed4d5f97cef60a9. It observes the existing ChatGPT
-// answer request and then asks the upstream content script to inspect the DOM.
-// It performs no ChatGPT API polling or additional HTTP requests.
+// Monitoring core below intentionally preserves Ram Haidar's request-completion
+// trigger: observe the ChatGPT conversation POST the page already makes, then
+// signal the unchanged upstream content script to inspect the rendered answer.
+// No ChatGPT API polling or additional HTTP request is created here.
 function normalizePathname(url) {
   try {
     return new URL(url).pathname.replace(/\/+$/, '');
@@ -346,8 +342,6 @@ async function signalConversationRequestCompleted(tabId) {
     return;
   } catch {}
 
-  // Handles tabs that were already open when the unpacked extension was
-  // reloaded. The content script has an install guard, so reinjection is safe.
   try {
     await chrome.scripting.executeScript({
       target: { tabId },
@@ -365,6 +359,23 @@ chrome.webRequest.onCompleted.addListener((details) => {
   signalConversationRequestCompleted(details.tabId).catch(() => {});
 }, CHATGPT_REQUEST_FILTER);
 
+async function queryTerminalStatus(tabId, timeoutMs = STATUS_QUERY_TIMEOUT_MS) {
+  const message = { type: 'CHATGPT_STATUS_CODE_QUERY', timeoutMs };
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch {}
+
+  try {
+    await chrome.scripting.executeScript({
+      target: { tabId },
+      files: ['status-code.js', 'status-script.js']
+    });
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch {
+    return null;
+  }
+}
+
 async function dismissConversationForSender(message, sender) {
   const tabId = sender.tab?.id;
   if (typeof tabId !== 'number') return false;
@@ -380,23 +391,46 @@ async function showCompletionFromUpstream(message, sender) {
 
   const fingerprint = String(message?.fingerprint || '');
   if (fingerprint && lastNotificationFingerprintByTab.get(tabId) === fingerprint) return null;
+
+  // Ram's unchanged content script intentionally normalizes response whitespace,
+  // so the terminal-line eligibility check lives in a separate DOM layer that
+  // preserves line boundaries. This adds no ChatGPT network traffic.
+  const status = await queryTerminalStatus(tabId);
+  const statusCode = String(status?.statusCode || '');
+  if (!globalThis.ChatGPTNotifierStatusCode?.isStatusCode(statusCode)) return null;
+
+  // Two duplicate completion messages may wait on the same DOM query at once.
+  // Re-check immediately before claiming the notification so only one wins.
+  if (fingerprint && lastNotificationFingerprintByTab.get(tabId) === fingerprint) return null;
   if (fingerprint) lastNotificationFingerprintByTab.set(tabId, fingerprint);
 
   const identity = await resolveConversationIdentity(sender.tab?.url || '', tabId);
   if (!identity) return null;
 
   const notificationId = crypto.randomUUID();
-  sendNative({
-    type: 'toast.show',
-    notification: {
-      id: notificationId,
-      conversationId: identity.id,
-      conversationUrl: identity.url,
-      title: fullTabTitle(sender, message),
-      preview: truncateResponse(message?.response),
-      completedAt: new Date().toISOString()
-    }
-  });
+  const completedAt = new Date().toISOString();
+  const notification = {
+    id: notificationId,
+    conversationId: identity.id,
+    conversationUrl: identity.url,
+    title: fullTabTitle(sender, message),
+    preview: truncateResponse(status?.responseBody || message?.response),
+    statusCode,
+    completedAt
+  };
+
+  sendNative({ type: 'toast.show', notification });
+
+  try {
+    globalThis.__chatgptNotifierHistory?.rememberEligibleCompletion?.({
+      historyId: notificationId,
+      fingerprint,
+      ...notification
+    }).catch?.((error) => console.warn('Could not save eligible completion history', error));
+  } catch (error) {
+    console.warn('Could not save eligible completion history', error);
+  }
+
   return notificationId;
 }
 
@@ -424,9 +458,11 @@ async function handleNativeMessage(message) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'CHATGPT_RESPONSE_COMPLETE') {
     showCompletionFromUpstream(message, sender).then((notificationId) => {
-      sendResponse?.(notificationId
-        ? { ok: true, notificationId }
-        : { ok: false, error: 'Could not create a persistent notification for this completed chat.' });
+      sendResponse?.({
+        ok: true,
+        notified: Boolean(notificationId),
+        notificationId: notificationId || null
+      });
     }).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
     return true;
   }
@@ -459,6 +495,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           conversationUrl: 'https://chatgpt.com/',
           title: 'Notifier test',
           preview: 'Persistent stacked notification test.',
+          statusCode: 'TEST',
           completedAt: new Date().toISOString()
         }
       });

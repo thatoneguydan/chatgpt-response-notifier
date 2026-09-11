@@ -1,0 +1,60 @@
+name: Validate notifier source
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    # Public pull requests are an untrusted-code boundary; do not attach Dan's
+    # workstation runner to this workflow. Use an isolated hosted runner here.
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate extension architecture and source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($script in @(
+            '.\extension\background.js',
+            '.\extension\service-worker.js',
+            '.\extension\content-script.js',
+            '.\extension\persistence-script.js',
+            '.\extension\status-code.js',
+            '.\extension\status-script.js',
+            '.\extension\recovery-background.js',
+            '.\extension\recovery-script.js',
+            '.\extension\history-background.js',
+            '.\extension\popup.js'
+          )) {
+            node --check $script
+            if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax validation failed: $script" }
+          }
+
+          node --test .\tests\extension\architecture.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Extension architecture tests failed.' }
+
+          $manifest = Get-Content -LiteralPath .\extension\manifest.json -Raw | ConvertFrom-Json
+          foreach ($forbidden in @('downloads', 'alarms', 'storage', 'nativeMessaging', 'notifications', 'offscreen')) {
+            if ($manifest.permissions -contains $forbidden) { throw "Forbidden extension permission present: $forbidden" }
+          }
+          if ($manifest.host_permissions -contains 'https://github.com/*') { throw 'Extension must not depend on GitHub browser permissions.' }
+          if ($manifest.host_permissions -notcontains 'ws://127.0.0.1/*') { throw 'Loopback WebSocket permission is missing.' }
+
+      - name: Build Windows helper and Setup project
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          dotnet build .\src\ChatGPTResponseNotifier.Host\ChatGPTResponseNotifier.Host.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Windows helper build failed.' }
+          dotnet build .\installer\ChatGPTResponseNotifier.Setup.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Setup.exe project build failed.' }
