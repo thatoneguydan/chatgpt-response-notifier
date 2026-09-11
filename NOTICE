@@ -1,5 +1,7 @@
-ChatGPT Response Notifier 0.2.1
+ChatGPT Response Notifier 0.3.0
 
-This project includes substantial modifications to ChatGPT Response Complete Notifier by Ram Haidar (ramhaidar/ChatGPT-Response-Complete-Notifier), revision cbe00dcfcff8a571f407c6109ed4d5f97cef60a9.
+This project uses the completion-monitoring implementation from ChatGPT Response Complete Notifier by Ram Haidar (ramhaidar/ChatGPT-Response-Complete-Notifier), revision cbe00dcfcff8a571f407c6109ed4d5f97cef60a9.
+
+For version 0.3.0, extension/content-script.js is kept byte-for-byte identical to the upstream file at that revision. The surrounding service-worker integration routes upstream completion events to this project's localhost Windows helper for persistent stacked notifications and managed updates without adding ChatGPT API polling.
 
 Original and modified portions are distributed under GPL-3.0.

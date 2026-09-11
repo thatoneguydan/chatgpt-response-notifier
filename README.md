@@ -4,15 +4,36 @@ Persistent, independently stacked Windows notifications for completed ChatGPT re
 
 ## What it does
 
-- detects completed responses on `chatgpt.com` with a Chromium extension;
-- creates one native Windows toast window per completed response;
-- keeps alerts tied to the ChatGPT **conversation**, not a temporary browser tab;
-- clicking an alert focuses an existing matching chat or opens the saved chat URL;
-- revisiting a conversation dismisses its outstanding alerts;
-- persists unresolved alerts across browser/helper restarts;
-- communicates only over a loopback WebSocket (`127.0.0.1`);
-- checks and downloads updates silently in the Windows helper;
-- restores the original two-note completion chime.
+- uses Ram Haidar's upstream prompt-bound completion monitor unchanged for completion detection;
+- observes the ChatGPT response request that the page already makes, then inspects the rendered assistant turn in the page DOM;
+- does **not** poll ChatGPT APIs, fetch conversation data, or request authentication/session data;
+- creates one persistent Windows notification window per completed response;
+- stacks multiple notifications instead of replacing earlier ones;
+- persists unresolved notifications across helper/browser restarts;
+- dismisses a conversation's outstanding notifications when you deliberately interact with that conversation, click a notification, or press its X button;
+- clicking a notification focuses an existing matching chat or opens the saved chat URL;
+- communicates with the Windows helper only over a loopback WebSocket (`127.0.0.1`);
+- checks, downloads, verifies, and installs updates silently in the Windows helper;
+- plays the existing two-note completion chime from the helper.
+
+The custom Windows notification contains the chat title, response preview, completion time, and dismiss button. It does not include an extra "click to return" instruction.
+
+## Completion-monitor boundary
+
+`extension/content-script.js` is intentionally kept byte-for-byte identical to upstream revision `cbe00dcfcff8a571f407c6109ed4d5f97cef60a9` (`ChatGPT Prompt-Bound Completion Alert` 1.0.8).
+
+The service worker preserves upstream's monitoring path:
+
+1. observe completion of the existing ChatGPT conversation POST with `chrome.webRequest.onCompleted`;
+2. signal the upstream content script;
+3. let that content script bind the rendered assistant answer to the latest user prompt;
+4. route the resulting `CHATGPT_RESPONSE_COMPLETE` event to the localhost Windows helper.
+
+The helper/update integration must not add ChatGPT HTTP requests. `tests/extension/architecture.test.mjs` and the release workflow enforce this boundary.
+
+## Notification persistence
+
+The Windows helper owns notification lifetime and stacking. Outstanding notifications are saved to disk and restored when the helper restarts. Returning to a tab by itself does not clear them; deliberate pointer/keyboard interaction in the matching conversation does.
 
 ## Install
 
@@ -24,8 +45,8 @@ The Windows helper reads `update/manifest.json`, downloads the matching release 
 
 ## Upstream and license
 
-This project began from Ram Haidar's **ChatGPT Response Complete Notifier** and was substantially modified in September 2026 to add conversation-owned persistent native Windows notifications, the localhost helper, installer, and managed updater.
+Completion monitoring is based on Ram Haidar's **ChatGPT Response Complete Notifier**.
 
 Upstream: `ramhaidar/ChatGPT-Response-Complete-Notifier`, revision `cbe00dcfcff8a571f407c6109ed4d5f97cef60a9`.
 
-Licensed under GNU GPL v3.0. See `LICENSE`.
+Original and modified portions are distributed under GNU GPL v3.0. See `LICENSE` and `NOTICE`.
