@@ -209,14 +209,9 @@ function conversationFromUrl(rawUrl) {
   }
 }
 
-function cleanSessionTitle(rawTitle) {
-  const raw = String(rawTitle || '').replace(/\s+/g, ' ').trim();
-  if (!raw) return 'ChatGPT';
-  const cleaned = raw
-    .replace(/\s*[-|–—]\s*ChatGPT\s*$/i, '')
-    .replace(/^ChatGPT\s*[-|–—]\s*/i, '')
-    .trim();
-  return cleaned && cleaned.toLowerCase() !== 'chatgpt' ? cleaned : 'ChatGPT';
+function fullTabTitle(sender, message) {
+  const title = String(sender?.tab?.title || message?.sessionTitle || 'ChatGPT').trim();
+  return title || 'ChatGPT';
 }
 
 function truncateResponse(text, maxChars = RESPONSE_PREVIEW_MAX_CHARS) {
@@ -397,7 +392,7 @@ async function showCompletionFromUpstream(message, sender) {
       id: notificationId,
       conversationId: identity.id,
       conversationUrl: identity.url,
-      title: cleanSessionTitle(message?.sessionTitle || sender.tab?.title || 'ChatGPT'),
+      title: fullTabTitle(sender, message),
       preview: truncateResponse(message?.response),
       completedAt: new Date().toISOString()
     }
