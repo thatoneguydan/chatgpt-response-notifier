@@ -25,13 +25,13 @@ jobs:
           $ErrorActionPreference = 'Stop'
           node --check .\extension\service-worker.js
           node --check .\extension\content-script.js
-          node --check .\extension\recovery-watchdog.js
-          node --check .\extension\lib\conversation.js
-          node --check .\extension\lib\server-capture.js
+          node --check .\extension\persistence-script.js
           node --check .\extension\popup.js
+          node --test .\tests\extension\architecture.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Extension architecture tests failed.' }
 
           $manifest = Get-Content -LiteralPath .\extension\manifest.json -Raw | ConvertFrom-Json
-          foreach ($forbidden in @('downloads', 'alarms', 'storage', 'nativeMessaging')) {
+          foreach ($forbidden in @('downloads', 'alarms', 'storage', 'nativeMessaging', 'notifications', 'offscreen')) {
             if ($manifest.permissions -contains $forbidden) { throw "Forbidden extension permission present: $forbidden" }
           }
           if ($manifest.host_permissions -contains 'https://github.com/*') { throw 'Extension must not depend on GitHub browser permissions.' }
@@ -98,7 +98,7 @@ jobs:
             gh release create $tag $managedZip $setupExe `
               --target $sourceCommit `
               --title "ChatGPT Response Notifier $version" `
-              --notes "Persistent stacked Windows ChatGPT response notifications. This release captures completed responses outside frozen background tabs and retains the localhost helper-owned updater."
+              --notes "Restores Ram Haidar's upstream prompt-bound completion monitor unchanged, with no ChatGPT API polling. Completion events are routed to the persistent stacked Windows helper, with managed automatic updates retained."
             if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
           }
           else {
