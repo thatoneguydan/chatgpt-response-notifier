@@ -7,7 +7,7 @@
   const DB_NAME = 'chatgpt-response-notifier-history';
   const DB_VERSION = 1;
   const STORE_NAME = 'notifications';
-  const MAX_HISTORY = 10;
+  const MAX_HISTORY = 20;
   let databasePromise = null;
 
   function conversationFromUrl(rawUrl) {
