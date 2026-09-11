@@ -183,6 +183,56 @@ export function latestCompletedAssistant(payload) {
   return candidates[0]?.capture || null;
 }
 
+function safeSuffix(value) {
+  const text = String(value || '').trim();
+  return text.length <= 8 ? text : text.slice(-8);
+}
+
+function summarizeMessageMetadata(message) {
+  if (!message) return null;
+  return {
+    idSuffix: safeSuffix(message.id),
+    parentSuffix: safeSuffix(messageParentId(message)),
+    role: messageRole(message),
+    recipient: messageRecipient(message),
+    channel: messageChannel(message),
+    endTurn: typeof message.end_turn === 'boolean' ? message.end_turn : null,
+    status: String(message.status || '').trim().toLowerCase().slice(0, 80),
+    hidden: isVisuallyHidden(message),
+    hasText: Boolean(extractServerMessageText(message)),
+    contentType: String(message?.content?.content_type || '').trim().toLowerCase().slice(0, 80)
+  };
+}
+
+export function summarizeConversationTerminalState(payload) {
+  const normalized = normalizeConversationPayload(payload);
+  const byId = new Map();
+  for (const message of normalized.messages) {
+    const id = String(message?.id || '').trim();
+    if (id) byId.set(id, message);
+  }
+
+  const ancestry = [];
+  let currentId = normalized.currentNode;
+  const seen = new Set();
+  for (let depth = 0; currentId && depth < 12; depth += 1) {
+    if (seen.has(currentId)) break;
+    seen.add(currentId);
+    const message = byId.get(currentId);
+    if (!message) break;
+    const summary = summarizeMessageMetadata(message);
+    if (summary) ancestry.push(summary);
+    currentId = messageParentId(message);
+  }
+
+  return {
+    messageCount: normalized.messages.length,
+    currentNodeSuffix: safeSuffix(normalized.currentNode),
+    currentNodePresent: Boolean(normalized.currentNode && byId.has(normalized.currentNode)),
+    ancestry
+  };
+}
+
 export function captureIsFreshForRequest(capture, requestStartedAt, toleranceMs = 5000) {
   if (!capture?.response) return false;
   const startedAt = Number(requestStartedAt);

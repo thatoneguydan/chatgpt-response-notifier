@@ -14,6 +14,9 @@ public sealed class NativeMessage
     public int? WindowTop { get; init; }
     public int? WindowWidth { get; init; }
     public int? WindowHeight { get; init; }
+    public int? Limit { get; init; }
+    public JsonElement? Diagnostic { get; init; }
+    public JsonElement? Probe { get; init; }
     public NotificationRecord? Notification { get; init; }
 
     public static NativeMessage Parse(JsonElement root)
@@ -28,6 +31,11 @@ public sealed class NativeMessage
         int? ReadInt32(string name) =>
             root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Number && value.TryGetInt32(out var number)
                 ? number
+                : null;
+
+        JsonElement? ReadObject(string name) =>
+            root.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.Object
+                ? value.Clone()
                 : null;
 
         NotificationRecord? notification = null;
@@ -50,6 +58,9 @@ public sealed class NativeMessage
             WindowTop = ReadInt32("windowTop"),
             WindowWidth = ReadInt32("windowWidth"),
             WindowHeight = ReadInt32("windowHeight"),
+            Limit = ReadInt32("limit"),
+            Diagnostic = ReadObject("diagnostic"),
+            Probe = ReadObject("probe"),
             Notification = notification
         };
 
