@@ -5,6 +5,7 @@ const updateButton = document.getElementById('checkUpdate');
 const status = document.getElementById('status');
 const updateStatus = document.getElementById('updateStatus');
 const captureStatus = document.getElementById('captureStatus');
+const backgroundStatus = document.getElementById('backgroundStatus');
 const captureHistory = document.getElementById('captureHistory');
 
 function formatUpdateState(value) {
@@ -49,6 +50,30 @@ async function refreshHostStatus() {
   } catch (error) {
     status.textContent = `Helper check failed: ${error.message}`;
     updateStatus.textContent = 'Managed update status unavailable.';
+  }
+}
+
+
+function formatBackgroundCapture(capture) {
+  if (!capture || typeof capture !== 'object') return 'none observed since this extension worker started';
+  const details = [];
+  if (capture.triggerPath) details.push(capture.triggerPath);
+  if (capture.conversationId) details.push(`chat …${String(capture.conversationId).slice(-8)}`);
+  if (capture.reason) details.push(capture.reason);
+  if (capture.statusCode) details.push(`HTTP ${capture.statusCode}`);
+  if (Number.isFinite(capture.elapsedMs)) details.push(`${capture.elapsedMs} ms`);
+  if (capture.frozen === true) details.push('tab frozen');
+  if (capture.discarded === true) details.push('tab discarded');
+  return `${capture.status || 'unknown'}${details.length ? `; ${details.join('; ')}` : ''}.`;
+}
+
+async function refreshBackgroundStatus() {
+  backgroundStatus.textContent = 'Background watcher: checking...';
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'GET_BACKGROUND_CAPTURE_DIAGNOSTIC' });
+    backgroundStatus.textContent = `Background watcher: ${formatBackgroundCapture(result?.capture)}`;
+  } catch (error) {
+    backgroundStatus.textContent = `Background watcher unavailable: ${error.message}`;
   }
 }
 
@@ -108,4 +133,5 @@ updateButton.addEventListener('click', async () => {
 });
 
 refreshHostStatus();
+refreshBackgroundStatus();
 refreshCaptureStatus();
