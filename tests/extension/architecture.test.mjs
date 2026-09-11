@@ -12,12 +12,13 @@ function gitBlobSha(buffer) {
   return createHash('sha1').update(header).update(buffer).digest('hex');
 }
 
-test('completion content script remains byte-for-byte upstream 1.0.8', () => {
-  const contentScript = read('extension/content-script.js');
+test('completion content script remains upstream 1.0.8', () => {
+  const checkoutText = text('extension/content-script.js');
+  const repositoryBytes = Buffer.from(checkoutText.replace(/\r\n/g, '\n'), 'utf8');
   assert.equal(
-    gitBlobSha(contentScript),
+    gitBlobSha(repositoryBytes),
     'fcea2bd286e1436d94addd9fe8c3b79feb0ad919',
-    'content-script.js must remain identical to ramhaidar upstream revision cbe00dcfcff8a571f407c6109ed4d5f97cef60a9'
+    'content-script.js must remain identical to ramhaidar upstream revision cbe00dcfcff8a571f407c6109ed4d5f97cef60a9 apart from checkout line-ending conversion'
   );
 });
 
