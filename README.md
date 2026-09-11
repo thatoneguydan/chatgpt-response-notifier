@@ -19,7 +19,7 @@ Persistent, independently stacked Windows notifications for completed ChatGPT re
 - checks, downloads, verifies, and installs updates silently in the Windows helper;
 - plays the existing two-note completion chime from the helper.
 
-The custom Windows notification contains the chat title, response preview, completion time, and dismiss button. It does not include an extra "click to return" instruction.
+The Windows toast is intentionally compact and light themed. It renders only the full Chrome tab title plus the dismiss button. The response preview and completion timestamp remain in the notification payload/persisted model for popup history and possible future toast layouts, but are not rendered in the Windows toast.
 
 ## Completion-monitor boundary
 
@@ -50,7 +50,7 @@ The Windows helper owns active notification lifetime and stacking. Outstanding n
 
 ## Popup history
 
-The pinned extension popup is intentionally minimal. Its main surface is the 10 most recent real ChatGPT completion notifications, newest first. Each item contains the chat title, response preview, and completion time and can be clicked to focus or reopen that conversation. This history is stored in extension-local IndexedDB and is separate from active Windows-toast state, so dismissing a toast does not remove it from recent history. Test notifications are not added to history.
+The pinned extension popup is intentionally minimal. Its main surface is the 10 most recent real ChatGPT completion notifications, newest first. Each item contains the full tab title, response preview, and completion time and can be clicked to focus or reopen that conversation. This history is stored in extension-local IndexedDB and is separate from active Windows-toast state, so dismissing a toast does not remove it from recent history. Test notifications are not added to history.
 
 The footer contains only the extension version plus compact **Update** and **Test** buttons.
 
