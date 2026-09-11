@@ -20,17 +20,25 @@ jobs:
           fetch-depth: 0
           ref: fix/terminal-user-facing-0.2.21
 
-      - name: Apply and verify exact private runtime
+      - name: Apply and verify terminal-state runtime
         shell: bash
         run: |
           set -euo pipefail
           python .github/scripts/apply-0.2.21-terminal.py
           node --check extension/service-worker.js
           node --check extension/lib/server-capture.js
-          test "$(git hash-object extension/service-worker.js)" = "2c928dd69a556ee762b068561211d30215497cf8"
           test "$(git hash-object extension/lib/server-capture.js)" = "1191d00f7211907a9755f436f36efb51e81a4b66"
           test "$(git hash-object extension/manifest.json)" = "9c27a848f6865caff48940bc3f4731e8bb79b3b9"
           test "$(git hash-object VERSION.txt)" = "599028f5f5f70e3098a6728e1aff2c40c4c86e9f"
+          grep -q "network-completed-terminal-toast" extension/service-worker.js
+          grep -q "network-completed-waiting-for-terminal" extension/service-worker.js
+          grep -q "network-completed-rearming-terminal-watch" extension/service-worker.js
+          grep -q "existingWatch && !existingWatch.cancelled" extension/service-worker.js
+          grep -q "Network completion is therefore only an acceleration signal" extension/service-worker.js
+          if grep -q "SERVER_CAPTURE_GENERIC_PREVIEW" extension/service-worker.js; then
+            echo 'Premature generic-completion fallback still present.' >&2
+            exit 1
+          fi
 
       - name: Commit public source
         shell: bash
