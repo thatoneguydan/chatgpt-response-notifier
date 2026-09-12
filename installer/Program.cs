@@ -183,8 +183,12 @@ internal static class SetupEngine
 
     public static void Uninstall()
     {
+        var isolatedInstall = IsolatedInstallRootIsActive();
         StopExistingHosts();
-        try { StartupRegistration.Unregister(); } catch { }
+        if (!isolatedInstall)
+        {
+            try { StartupRegistration.Unregister(); } catch { }
+        }
         try
         {
             if (Directory.Exists(NativeHostInstaller.InstallRoot))
@@ -218,12 +222,42 @@ internal static class SetupEngine
         }
     }
 
+    private static bool IsolatedInstallRootIsActive()
+    {
+        return !string.IsNullOrWhiteSpace(
+            Environment.GetEnvironmentVariable(NativeHostInstaller.InstallRootOverrideEnvironmentVariable));
+    }
+
     private static void StopExistingHosts()
     {
+        var isolatedInstall = IsolatedInstallRootIsActive();
+        var isolatedRoot = isolatedInstall
+            ? Path.GetFullPath(NativeHostInstaller.InstallRoot)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar
+            : string.Empty;
+
         foreach (var process in Process.GetProcessesByName("ChatGPTResponseNotifier.Host"))
         {
             using (process)
             {
+                if (isolatedInstall)
+                {
+                    string processPath;
+                    try
+                    {
+                        processPath = process.MainModule?.FileName ?? string.Empty;
+                        if (string.IsNullOrWhiteSpace(processPath)) continue;
+                        processPath = Path.GetFullPath(processPath);
+                    }
+                    catch (Exception error)
+                    {
+                        SetupLog.Write($"Skipped helper process {process.Id} because its executable path could not be verified", error);
+                        continue;
+                    }
+
+                    if (!processPath.StartsWith(isolatedRoot, StringComparison.OrdinalIgnoreCase)) continue;
+                }
+
                 try
                 {
                     process.Kill(entireProcessTree: true);
