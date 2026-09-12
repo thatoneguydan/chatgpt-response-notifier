@@ -33,7 +33,7 @@ test('only the canonical seven exact terminal footer codes qualify', () => {
 
 test('background composition loads policy, unified automation owner, recovery and normal continuation fuse in dependency order', () => {
   const wrapper = text('extension/background.js');
-  assert.match(wrapper, /status-code\.js[\s\S]*status-policy\.js[\s\S]*recovery-model\.js[\s\S]*coordinator-background\.js[\s\S]*recovery-background\.js[\s\S]*history-background\.js[\s\S]*monitor-background\.js[\s\S]*monitor-query-compat-background\.js[\s\S]*recovery-control-background\.js[\s\S]*bounded-recovery-background\.js[\s\S]*bounded-recovery-attachment-background\.js[\s\S]*service-worker\.js[\s\S]*normal-continuation-budget-hook\.js/);
+  assert.match(wrapper, /status-code\.js[\s\S]*status-policy\.js[\s\S]*recovery-model\.js[\s\S]*coordinator-background\.js[\s\S]*delivery-dedupe-hook\.js[\s\S]*recovery-background\.js[\s\S]*history-background\.js[\s\S]*monitor-background\.js[\s\S]*monitor-query-compat-background\.js[\s\S]*recovery-control-background\.js[\s\S]*bounded-recovery-background\.js[\s\S]*bounded-recovery-attachment-background\.js[\s\S]*service-worker\.js[\s\S]*normal-continuation-budget-hook\.js/);
 });
 
 test('monitoring and bounded recovery observe page/request state but create no ChatGPT HTTP traffic', () => {
@@ -42,6 +42,7 @@ test('monitoring and bounded recovery observe page/request state but create no C
     text('extension/recovery-background.js'),
     text('extension/status-script.js'),
     text('extension/coordinator-background.js'),
+    text('extension/delivery-dedupe-hook.js'),
     text('extension/monitor-background.js'),
     text('extension/monitor-script.js'),
     text('extension/bounded-recovery-background.js'),
@@ -49,8 +50,8 @@ test('monitoring and bounded recovery observe page/request state but create no C
     text('extension/normal-continuation-budget-hook.js')
   ];
   const worker = sources[0];
-  const monitor = sources[4];
-  const bounded = sources[6];
+  const monitor = sources[5];
+  const bounded = sources[7];
   assert.match(worker, /chrome\.webRequest\.onCompleted\.addListener/);
   assert.match(worker, /chrome\.webRequest\.onBeforeRequest\.addListener/);
   assert.match(worker, /chrome\.webRequest\.onHeadersReceived\.addListener/);
@@ -273,6 +274,18 @@ test('durable coordinator owns turns and unresolved clicks reconcile to notifica
   assert.doesNotMatch(worker, /reconcileUnresolvedTurns[\s\S]{0,1200}requestContinuation/);
 });
 
+test('logical-turn delivery dedupe coalesces rerendered revisions and settles generic titles', () => {
+  const hook = text('extension/delivery-dedupe-hook.js');
+  assert.match(hook, /logicalDeliveryKey/);
+  assert.match(hook, /conversationId\}\|\$\{promptKey\}\|\$\{assistantKey/);
+  assert.match(hook, /already-delivered-logical-turn/);
+  assert.match(hook, /logical-turn-in-flight/);
+  assert.match(hook, /PENDING_LEASE_MS = 30_000/);
+  assert.match(hook, /meaningfulTitle/);
+  assert.match(hook, /chrome\.tabs\.get\(owner\.tabId\)/);
+  assert.match(hook, /notificationTitle:\s*title/);
+});
+
 test('bounded recovery persists human-run lineage, incidents, profile lease and action counters before side effects', () => {
   const bounded = text('extension/bounded-recovery-background.js');
   assert.match(bounded, /HUMAN_RUN_STORE = 'human-runs'/);
@@ -420,7 +433,7 @@ test('versioned updates self-activate helper and extension runtime without foreg
 
 test('manifest adds only reviewed alarms permission for scheduled recovery wake', () => {
   const manifest = JSON.parse(text('extension/manifest.json'));
-  assert.equal(manifest.version, '0.9.2');
+  assert.equal(manifest.version, '0.9.3');
   assert.deepEqual(manifest.permissions.sort(), ['alarms','scripting','tabs','webRequest'].sort());
   assert.deepEqual(manifest.host_permissions.sort(), ['https://chatgpt.com/*','ws://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].js, [
@@ -431,7 +444,7 @@ test('manifest adds only reviewed alarms permission for scheduled recovery wake'
 test('local JavaScript is syntactically valid', () => {
   for (const relative of [
     'extension/background.js','extension/service-worker.js','extension/attachment-script.js','extension/coordinator-background.js',
-    'extension/recovery-background.js','extension/recovery-script.js','extension/history-background.js','extension/status-code.js',
+    'extension/delivery-dedupe-hook.js','extension/recovery-background.js','extension/recovery-script.js','extension/history-background.js','extension/status-code.js',
     'extension/status-policy.js','extension/status-script.js','extension/monitor-background.js','extension/monitor-script.js',
     'extension/recovery-model.js','extension/monitor-query-compat-background.js','extension/recovery-control-background.js',
     'extension/bounded-recovery-background.js','extension/bounded-recovery-attachment-background.js','extension/bounded-recovery-script.js',
