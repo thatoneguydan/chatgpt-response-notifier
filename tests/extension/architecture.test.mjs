@@ -387,9 +387,37 @@ test('history remains a rolling 20 coded notifications', () => {
   assert.match(history, /GET_RECENT_NOTIFICATIONS/);
 });
 
+test('split rendered assistant blocks preserve terminal footer evidence and suppress format repair', () => {
+  const status = text('extension/status-script.js');
+  const monitor = text('extension/monitor-script.js');
+  for (const source of [status, monitor]) {
+    assert.match(source, /function renderedBlocks/);
+    assert.match(source, /querySelectorAll\?\.\('\.markdown'\)/);
+    assert.match(source, /blocks\.map\(nodeText\)\.filter\(Boolean\)\.join\('\\n'\)/);
+  }
+  assert.match(monitor, /function assistantHasStatusEvidence/);
+  assert.match(monitor, /hasStatusEvidence:\s*turnState\.hasStatusEvidence === true/);
+  assert.match(monitor, /current\.statusCode \|\| current\.hasStatusEvidence/);
+  assert.match(monitor, /next\.statusCode \|\| next\.hasStatusEvidence/);
+  assert.match(monitor, /api\.isStatusCode\(match\[1\]\)/);
+});
+
+test('versioned updates self-activate helper and extension runtime without foregrounding Chrome', () => {
+  const worker = text('extension/service-worker.js');
+  const app = text('src/ChatGPTResponseNotifier.Host/NativeHostApplication.cs');
+  const updater = text('src/ChatGPTResponseNotifier.Host/PublicUpdateService.cs');
+  assert.match(worker, /function maybeReloadForInstalledVersion/);
+  assert.match(worker, /chrome\.runtime\.reload\(\)/);
+  assert.match(app, /StartupRegistration\.Register\(result\.InstalledBundle\.HostExecutablePath\)/);
+  assert.match(app, /ScheduleReplacementIfNeeded/);
+  assert.match(app, /CreateNoWindow = true/);
+  assert.match(app, /--wait-for-pid/);
+  assert.match(updater, /BundleInstaller\.InstallArchive/);
+});
+
 test('manifest adds only reviewed alarms permission for scheduled recovery wake', () => {
   const manifest = JSON.parse(text('extension/manifest.json'));
-  assert.equal(manifest.version, '0.9.0');
+  assert.equal(manifest.version, '0.9.1');
   assert.deepEqual(manifest.permissions.sort(), ['alarms','scripting','tabs','webRequest'].sort());
   assert.deepEqual(manifest.host_permissions.sort(), ['https://chatgpt.com/*','ws://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].js, [
