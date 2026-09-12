@@ -14,7 +14,7 @@ jobs:
   release:
     # Release source is trusted same-repository main/workflow_dispatch code and
     # runs only on the repository-scoped Glass runner. There is no hosted fallback.
-    runs-on: [self-hosted, Windows, X64, glass-builder, glass-chatgpt-response-notifier]
+    runs-on: [self-hosted, Windows, X64, glass-builder]
     timeout-minutes: 30
     steps:
       - name: Checkout
@@ -113,6 +113,8 @@ jobs:
             if (-not (Test-Path -LiteralPath $setupExe -PathType Leaf)) { throw 'Setup.exe output is missing.' }
 
             # Prove the actual installer can install, launch the helper, and complete its built-in localhost ping/pong.
+            # Cleanup is restricted to helper processes whose executable path is inside this disposable test root;
+            # never stop the user's live notifier helper by process name.
             $testInstallRoot = Join-Path $env:RUNNER_TEMP ('chatgpt-response-notifier-install-' + [Guid]::NewGuid().ToString('N'))
             $env:CHATGPT_RESPONSE_NOTIFIER_INSTALL_ROOT = $testInstallRoot
             try {
@@ -122,7 +124,15 @@ jobs:
               if ($setupProcess.ExitCode -ne 0) { throw "Setup.exe acceptance test failed with exit code $($setupProcess.ExitCode)." }
             }
             finally {
-              Get-Process -Name 'ChatGPTResponseNotifier.Host' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+              $testRootFull = [IO.Path]::GetFullPath($testInstallRoot).TrimEnd('\') + '\'
+              Get-Process -Name 'ChatGPTResponseNotifier.Host' -ErrorAction SilentlyContinue | ForEach-Object {
+                try {
+                  $processPath = [IO.Path]::GetFullPath([string]$_.Path)
+                  if ($processPath.StartsWith($testRootFull, [StringComparison]::OrdinalIgnoreCase)) {
+                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                  }
+                } catch {}
+              }
               Remove-Item Env:CHATGPT_RESPONSE_NOTIFIER_INSTALL_ROOT -ErrorAction SilentlyContinue
               Remove-Item -LiteralPath $testInstallRoot -Recurse -Force -ErrorAction SilentlyContinue
             }
