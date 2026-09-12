@@ -133,7 +133,7 @@ internal sealed class SetupForm : Form
             else
             {
                 var result = await Task.Run(() => SetupEngine.Install(_skipStartup));
-                _status.Text = $"Installed {result.Version}. Windows helper is running.\n\nChrome extension files: {result.ExtensionPath}\nReload the existing unpacked extension once if Chrome still shows the previous version.";
+                _status.Text = $"Installed {result.Version}. Windows helper is running.\n\nChrome extension files: {result.ExtensionPath}\nChrome reloads the extension runtime automatically when the installed version advances.";
                 _openChrome.Enabled = true;
             }
             _progress.Style = ProgressBarStyle.Continuous;
