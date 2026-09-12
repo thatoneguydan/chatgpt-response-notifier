@@ -358,13 +358,16 @@ test('completion is bound to originating conversation, document and rendered res
   assert.match(worker, /currentIdentity\.id !== originIdentity\.id/);
 });
 
-test('split-footer completion binding accepts exact detector body while preserving identity checks', () => {
+test('split-footer completion binding accepts exact detector body and stable turn identity while preserving identity checks', () => {
   const wrapper = text('extension/background.js');
   assert.match(wrapper, /statusBoundToCompletionSplitRenderCompat/);
   assert.match(wrapper, /String\(status\.conversationId \|\| ''\) !== originIdentity\.id/);
   assert.match(wrapper, /!status\.documentId \|\| !status\.promptKey \|\| !status\.assistantKey \|\| !status\.revision/);
   assert.match(wrapper, /upstream === fullObserved/);
   assert.match(wrapper, /upstream === parsedBody/);
+  assert.match(wrapper, /parseCompletionFingerprint/);
+  assert.match(wrapper, /context\.promptTurnId === promptTurnId/);
+  assert.match(wrapper, /context\.assistantKey === String\(status\.assistantKey/);
 });
 
 test('notification delivery is durable until exact helper persistence acknowledgment', () => {
@@ -442,7 +445,7 @@ test('versioned updates self-activate helper and extension runtime without foreg
 
 test('manifest adds only reviewed alarms permission for scheduled recovery wake', () => {
   const manifest = JSON.parse(text('extension/manifest.json'));
-  assert.equal(manifest.version, '0.9.4');
+  assert.equal(manifest.version, '0.9.5');
   assert.deepEqual(manifest.permissions.sort(), ['alarms','scripting','tabs','webRequest'].sort());
   assert.deepEqual(manifest.host_permissions.sort(), ['https://chatgpt.com/*','ws://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].js, [
