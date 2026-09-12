@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 3;
+  const RUNTIME_VERSION = 4;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const AUTO_CONTINUE_TEXT = 'continue until you finish or need something from me';
   const DEFAULT_WAIT_MS = 30000;
@@ -44,12 +44,17 @@
   function turnId(turn, role, index) {
     return String(turn?.getAttribute?.('data-testid') || turn?.id || `${role}-${index}`).trim();
   }
+  function roleRoot(turn, role) {
+    try {
+      const selector = `[data-message-author-role="${role}"]`;
+      return turn?.matches?.(selector) ? turn : turn?.querySelector?.(selector);
+    } catch { return null; }
+  }
   function renderedBlocks(roleNode) {
     try {
       const markdown = Array.from(roleNode?.querySelectorAll?.('.markdown') || []);
-      const candidates = markdown.length > 0
-        ? markdown
-        : Array.from(roleNode?.querySelectorAll?.('[class*="prose"]') || []);
+      const prose = Array.from(roleNode?.querySelectorAll?.('[class*="prose"]') || []);
+      const candidates = Array.from(new Set([...markdown, ...prose]));
       return candidates.filter((node) => !candidates.some((other) => other !== node && other?.contains?.(node)));
     } catch { return []; }
   }
@@ -58,13 +63,32 @@
   }
   function turnText(turn, role) {
     try {
-      const selector = `[data-message-author-role="${role}"]`;
-      const roleNode = turn?.matches?.(selector) ? turn : turn?.querySelector?.(selector);
+      const roleNode = roleRoot(turn, role);
       if (!roleNode) return '';
       const blocks = renderedBlocks(roleNode);
       const joined = blocks.map(nodeText).filter(Boolean).join('\n');
       return joined || nodeText(roleNode);
     } catch { return ''; }
+  }
+  function assistantStatusCodeFromDom(turn) {
+    try {
+      const api = globalThis.ChatGPTNotifierStatusCode;
+      if (typeof api?.isStatusCode !== 'function') return '';
+      const source = roleRoot(turn, 'assistant');
+      if (!source) return '';
+      const copy = source.cloneNode(true);
+      for (const excluded of copy.querySelectorAll?.('pre, code, blockquote, ul, ol, li, [data-message-author-role="tool"], [data-tool]') || []) excluded.remove();
+      const candidates = [copy, ...(copy.querySelectorAll?.('p, div, span') || [])];
+      for (let index = candidates.length - 1; index >= 0; index -= 1) {
+        const value = String(candidates[index]?.textContent || '')
+          .replace(/[\u200B-\u200D\uFEFF]/g, '')
+          .replace(/\r\n?/g, '\n')
+          .trim();
+        const match = value.match(/^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/);
+        if (match && api.isStatusCode(match[1])) return match[1];
+      }
+    } catch {}
+    return '';
   }
   function revisionOf(text) {
     const value = String(text || '');
@@ -106,6 +130,9 @@
     }
     if (assistantIndex < 0 || !responseText) return null;
     const parsed = api.parseTerminalStatus(responseText);
+    const domStatusCode = assistantStatusCodeFromDom(nodes[assistantIndex]);
+    const statusCode = parsed.statusCode || domStatusCode || '';
+    const statusLine = parsed.statusLine || (statusCode ? `[GITHUB_STATUS: ${statusCode}]` : '');
     const userId = turnId(nodes[userIndex], 'user', userIndex);
     return {
       conversationId: identity.id,
@@ -117,8 +144,8 @@
       revision: revisionOf(responseText),
       responseText,
       responseBody: parsed.body,
-      statusCode: parsed.statusCode,
-      statusLine: parsed.statusLine
+      statusCode,
+      statusLine
     };
   }
 
