@@ -9,5 +9,6 @@ importScripts(
   'coordinator-background.js',
   'recovery-background.js',
   'history-background.js',
+  'monitor-background.js',
   'service-worker.js'
 );
