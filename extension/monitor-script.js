@@ -96,8 +96,11 @@
       if (!source) return false;
       const copy = source.cloneNode(true);
       for (const excluded of copy.querySelectorAll?.('pre, code, blockquote') || []) excluded.remove();
-      const text = String(copy.textContent || '').replace(/\r\n?/g, '\n');
-      return text.split('\n').some((line) => line.trim() === WORK_START_LINE);
+      const candidates = [copy, ...(copy.querySelectorAll?.('p, li, div, span') || [])];
+      return candidates.some((candidate) => String(candidate.textContent || '')
+        .replace(/\r\n?/g, '\n')
+        .split('\n')
+        .some((line) => line.trim() === WORK_START_LINE));
     } catch { return false; }
   }
 
