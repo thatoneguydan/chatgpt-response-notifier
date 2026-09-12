@@ -21,7 +21,7 @@
   // This list is checked against the generated grammar fixture bundled with
   // the extension. The canonical meanings remain in DevelopmentInfrastructure.
   const CONTRACT_ID = 'github-work-status/v1';
-  const CONTRACT_SEMANTIC_SHA256 = 'a3174936b76fb05bd9c6bfb78754fb7fa0dfc14d1320ca5e8e952eb44ee36fe2';
+  const CONTRACT_SEMANTIC_SHA256 = '776d5e0ac9f3a9d5df3b0ddd3045454d8f664adacecbc604130a31a5bcefc1f5';
   const VALID_STATUS_CODES = Object.freeze([
     'PLANNING_ACTIVE',
     'COMPLETE_APPLIED',
