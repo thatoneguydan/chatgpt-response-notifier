@@ -31,28 +31,35 @@ test('only the canonical seven exact terminal footer codes qualify', () => {
   assert.equal(parser.parseTerminalStatus('Body\n[GITHUB_STATUS: FUTURE_CODE]').statusCode, '');
 });
 
-test('background composition keeps canonical policy/coordinator ahead of monitoring and the normal worker', () => {
+test('background composition loads policy, passive observation, recovery ownership and normal continuation fuse in dependency order', () => {
   const wrapper = text('extension/background.js');
-  assert.match(wrapper, /status-code\.js[\s\S]*status-policy\.js[\s\S]*coordinator-background\.js[\s\S]*recovery-background\.js[\s\S]*history-background\.js[\s\S]*monitor-background\.js[\s\S]*service-worker\.js/);
+  assert.match(wrapper, /status-code\.js[\s\S]*status-policy\.js[\s\S]*recovery-model\.js[\s\S]*coordinator-background\.js[\s\S]*recovery-background\.js[\s\S]*history-background\.js[\s\S]*monitor-background\.js[\s\S]*monitor-query-compat-background\.js[\s\S]*recovery-control-background\.js[\s\S]*bounded-recovery-background\.js[\s\S]*bounded-recovery-attachment-background\.js[\s\S]*service-worker\.js[\s\S]*normal-continuation-budget-hook\.js/);
 });
 
-test('monitoring observes page/request state but creates no ChatGPT HTTP traffic', () => {
+test('monitoring and bounded recovery observe page/request state but create no ChatGPT HTTP traffic', () => {
   const sources = [
     text('extension/service-worker.js'),
     text('extension/recovery-background.js'),
     text('extension/status-script.js'),
     text('extension/coordinator-background.js'),
     text('extension/monitor-background.js'),
-    text('extension/monitor-script.js')
+    text('extension/monitor-script.js'),
+    text('extension/bounded-recovery-background.js'),
+    text('extension/bounded-recovery-script.js'),
+    text('extension/normal-continuation-budget-hook.js')
   ];
   const worker = sources[0];
   const monitor = sources[4];
+  const bounded = sources[6];
   assert.match(worker, /chrome\.webRequest\.onCompleted\.addListener/);
   assert.match(worker, /chrome\.webRequest\.onBeforeRequest\.addListener/);
   assert.match(worker, /chrome\.webRequest\.onHeadersReceived\.addListener/);
   assert.match(monitor, /chrome\.webRequest\.onBeforeRequest\.addListener/);
   assert.match(monitor, /chrome\.webRequest\.onCompleted\.addListener/);
   assert.match(monitor, /chrome\.webRequest\.onErrorOccurred\.addListener/);
+  assert.match(bounded, /chrome\.webRequest\.onBeforeRequest\.addListener/);
+  assert.match(bounded, /chrome\.webRequest\.onHeadersReceived\.addListener/);
+  assert.match(bounded, /chrome\.webRequest\.onErrorOccurred\.addListener/);
   for (const source of sources) {
     assert.doesNotMatch(source, /\bfetch\s*\(/);
     assert.doesNotMatch(source, /XMLHttpRequest/);
@@ -101,13 +108,27 @@ test('passive monitored-build observer persists identity without raw prompt or a
   assert.doesNotMatch(monitor, /responseText\s*:/);
 });
 
-test('monitoring enrollment is explicit before first footer and may auto-enroll only from a valid terminal code', () => {
+test('monitor query compatibility preserves the passive wrapper while exposing direct identity fields to recovery', () => {
+  const compat = text('extension/monitor-query-compat-background.js');
+  assert.match(compat, /message\?\.type !== 'CHATGPT_MONITOR_QUERY'/);
+  assert.match(compat, /result\?\.snapshot/);
+  assert.match(compat, /\{ \.\.\.result\.snapshot, \.\.\.result, snapshot: result\.snapshot \}/);
+});
+
+test('monitoring enrollment is explicit and recovery is a second per-conversation opt-in', () => {
   const monitor = text('extension/monitor-background.js');
+  const recoveryControl = text('extension/recovery-control-background.js');
   const popup = text('extension/popup.js');
   assert.match(monitor, /SET_ACTIVE_CHAT_MONITORING/);
   assert.match(monitor, /source:\s*String\(source \|\| 'operator'\)/);
   assert.match(monitor, /statusIsValid[\s\S]*setEnrollment\([^)]*true, 'coded-turn'\)/);
+  assert.match(recoveryControl, /SET_ACTIVE_CHAT_RECOVERY/);
+  assert.match(recoveryControl, /recoveryEnabled:\s*recoveryEnabled === true/);
+  assert.match(recoveryControl, /operator-recovery/);
+  assert.match(recoveryControl, /RESUME_ACTIVE_CHAT_RECOVERY/);
   assert.match(popup, /SET_ACTIVE_CHAT_MONITORING/);
+  assert.match(popup, /SET_ACTIVE_CHAT_RECOVERY/);
+  assert.match(popup, /RESUME_ACTIVE_CHAT_RECOVERY/);
   assert.doesNotMatch(monitor, /github|repository/i);
 });
 
@@ -138,9 +159,10 @@ test('known interruption text is scoped to application alerts, not quoted assist
   assert.match(page, /rate limit/);
 });
 
-test('active user and draft safeguards are explicit and trusted-event based', () => {
+test('active user, draft, upload and manual-stop safeguards are explicit and trusted-event based', () => {
   const status = text('extension/status-script.js');
   const monitor = text('extension/monitor-script.js');
+  const boundedPage = text('extension/bounded-recovery-script.js');
   const policy = text('extension/status-policy.js');
   assert.match(status, /event\?\.isTrusted === true/);
   assert.match(status, /pointerdown/);
@@ -149,18 +171,27 @@ test('active user and draft safeguards are explicit and trusted-event based', ()
   assert.match(status, /compositionstart/);
   assert.match(monitor, /event\?\.isTrusted !== true/);
   assert.match(monitor, /manualStopped = true/);
+  assert.match(boundedPage, /snapshot\?\.hasUpload/);
+  assert.match(boundedPage, /snapshot\?\.manualStopped/);
+  assert.match(boundedPage, /snapshot\?\.authRequired/);
+  assert.match(boundedPage, /snapshot\?\.approvalRequired/);
+  assert.match(boundedPage, /snapshot\?\.rateLimited/);
   assert.match(policy, /composer-not-empty/);
   assert.match(policy, /active-user-interaction/);
 });
 
-test('version-aware attachment re-arms stale listeners without changing upstream source', () => {
+test('version-aware attachment re-arms stale listeners without activating frozen or discarded pages', () => {
   const attachment = text('extension/attachment-script.js');
+  const boundedAttachment = text('extension/bounded-recovery-attachment-background.js');
   assert.match(attachment, /chrome\.runtime\.getManifest\(\)\.version/);
   assert.match(attachment, /__chatgptPromptBoundNotifierInstalled = false/);
   assert.match(attachment, /__chatgptNotifierStatusDomInstalled = false/);
   assert.match(text('extension/service-worker.js'), /attachment-script\.js/);
   assert.match(text('extension/recovery-background.js'), /attachment-script\.js/);
   assert.match(text('extension/monitor-background.js'), /monitor-script\.js/);
+  assert.match(boundedAttachment, /bounded-recovery-script\.js/);
+  assert.match(boundedAttachment, /tab\.discarded === true \|\| tab\.frozen === true/);
+  assert.doesNotMatch(boundedAttachment, /tabs\.update\([^)]*active:\s*true/);
 });
 
 test('durable coordinator owns turns and unresolved clicks reconcile to notification, never replay', () => {
@@ -174,6 +205,58 @@ test('durable coordinator owns turns and unresolved clicks reconcile to notifica
   assert.match(worker, /listUnresolvedTurns\(\)/);
   assert.match(worker, /without-replay/);
   assert.doesNotMatch(worker, /reconcileUnresolvedTurns[\s\S]{0,1200}requestContinuation/);
+});
+
+test('bounded recovery persists human-run lineage, incidents, profile lease and action counters before side effects', () => {
+  const bounded = text('extension/bounded-recovery-background.js');
+  assert.match(bounded, /HUMAN_RUN_STORE = 'human-runs'/);
+  assert.match(bounded, /GENERATION_STORE = 'generations'/);
+  assert.match(bounded, /INCIDENT_STORE = 'incidents'/);
+  assert.match(bounded, /PROFILE_STORE = 'profile'/);
+  assert.match(bounded, /MAPPING_STORE = 'automatic-prompts'/);
+  assert.match(bounded, /database\.transaction\(\[HUMAN_RUN_STORE, INCIDENT_STORE, PROFILE_STORE\], 'readwrite'\)/);
+  assert.match(bounded, /model\(\)\.claimAction/);
+  assert.match(bounded, /humans\.put\(claimed\.humanRun\)/);
+  assert.match(bounded, /profiles\.put\(\{ key: PROFILE_KEY, \.\.\.claimed\.profile \}\)/);
+  assert.match(bounded, /incidents\.put\(claimed\.incident\)/);
+  assert.match(bounded, /await chrome\.tabs\.reload\(generation\.ownerTabId\)/);
+});
+
+test('bounded recovery uses one earliest-deadline alarm and never foregrounds a tab automatically', () => {
+  const bounded = text('extension/bounded-recovery-background.js');
+  assert.match(bounded, /ALARM_NAME = 'chatgpt-notifier-recovery-deadline'/);
+  assert.match(bounded, /chrome\.alarms\.create\(ALARM_NAME, \{ when \}\)/);
+  assert.match(bounded, /incidents\[0\][\s\S]*processIncident\(incidents\[0\]\.incidentId\)/);
+  assert.match(bounded, /chrome\.tabs\.reload\(generation\.ownerTabId\)/);
+  assert.doesNotMatch(bounded, /tabs\.update\([^)]*active:\s*true/);
+  assert.doesNotMatch(bounded, /windows\.update\([^)]*focused:\s*true/);
+});
+
+test('guarded recovery adapter sends only exact continuation or exact format repair after identity checks', () => {
+  const page = text('extension/bounded-recovery-script.js');
+  const contract = JSON.parse(text('extension/github-work-status-contract.v1.json'));
+  assert.ok(page.includes(contract.formatRepairPrompt));
+  assert.match(page, /AUTO_CONTINUE_TEXT = 'continue until you finish or need something from me'/);
+  assert.match(page, /current\.conversationId !== expected\.conversationId/);
+  assert.match(page, /current\.documentId !== expected\.documentId/);
+  assert.match(page, /current\.promptKey !== expected\.promptKey/);
+  assert.match(page, /current\.assistantKey === expected\.assistantKey/);
+  assert.match(page, /current\.assistantRevision/);
+  assert.match(page, /recovery-identity-changed-before-send/);
+  assert.match(page, /matchingNewUserTurn/);
+  assert.doesNotMatch(page, /regenerate/i);
+  assert.doesNotMatch(page, /originalPrompt|original-prompt|resendPrompt/i);
+});
+
+test('existing INCOMPLETE_LIMIT continuation is admitted through the same whole-run fuse and passive request evidence', () => {
+  const hook = text('extension/normal-continuation-budget-hook.js');
+  assert.match(hook, /originalRequestContinuation = globalThis\.requestContinuation/);
+  assert.match(hook, /admitNormalContinuation/);
+  assert.match(hook, /finishNormalContinuation/);
+  assert.match(hook, /continuationUserKey/);
+  assert.match(hook, /evidence\?\.accepted === true/);
+  assert.match(hook, /sameConversation/);
+  assert.match(hook, /registerAutomaticPrompt|newPromptKey/);
 });
 
 test('continuation acceptance requires matching user turn plus passive accepted request evidence', () => {
@@ -214,10 +297,11 @@ test('notification delivery is durable until exact helper persistence acknowledg
   assert.match(accepted, /MaxAcceptedIds = 512/);
 });
 
-test('recovery is cleared only after a durable outcome and frozen/discarded pages are not activated to recover', () => {
+test('recovery clears only after durable outcomes and all automation refuses frozen/discarded pages', () => {
   const recovery = text('extension/recovery-background.js');
   const worker = text('extension/service-worker.js');
   const monitor = text('extension/monitor-background.js');
+  const bounded = text('extension/bounded-recovery-background.js');
   assert.match(recovery, /finalizeConversation:\s*clearPending/);
   assert.doesNotMatch(recovery, /message\?\.type === 'CHATGPT_RESPONSE_COMPLETE'[\s\S]{0,300}clearPending/);
   assert.match(worker, /finalizeRecovery\(turnRecord\.conversationId\)/);
@@ -225,7 +309,9 @@ test('recovery is cleared only after a durable outcome and frozen/discarded page
   assert.match(recovery, /tab\.discarded === true \|\| tab\.frozen === true/);
   assert.match(monitor, /tab\.discarded === true \|\| tab\.frozen === true/);
   assert.match(monitor, /page-unobservable/);
+  assert.match(bounded, /tab\.discarded === true \|\| tab\.frozen === true/);
   assert.doesNotMatch(monitor, /tabs\.update\([^)]*active:\s*true/);
+  assert.doesNotMatch(bounded, /tabs\.update\([^)]*active:\s*true/);
 });
 
 test('history remains a rolling 20 coded notifications', () => {
@@ -235,13 +321,13 @@ test('history remains a rolling 20 coded notifications', () => {
   assert.match(history, /GET_RECENT_NOTIFICATIONS/);
 });
 
-test('manifest adds monitoring with no new privileges', () => {
+test('manifest adds only reviewed alarms permission for scheduled recovery wake', () => {
   const manifest = JSON.parse(text('extension/manifest.json'));
   assert.equal(manifest.version, '0.9.0');
-  assert.deepEqual(manifest.permissions.sort(), ['scripting','tabs','webRequest']);
+  assert.deepEqual(manifest.permissions.sort(), ['alarms','scripting','tabs','webRequest'].sort());
   assert.deepEqual(manifest.host_permissions.sort(), ['https://chatgpt.com/*','ws://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].js, [
-    'attachment-script.js','content-script.js','persistence-script.js','status-code.js','status-policy.js','monitor-script.js','status-script.js','recovery-script.js'
+    'attachment-script.js','content-script.js','persistence-script.js','status-code.js','status-policy.js','monitor-script.js','bounded-recovery-script.js','status-script.js','recovery-script.js'
   ]);
 });
 
@@ -250,7 +336,9 @@ test('local JavaScript is syntactically valid', () => {
     'extension/background.js','extension/service-worker.js','extension/attachment-script.js','extension/coordinator-background.js',
     'extension/recovery-background.js','extension/recovery-script.js','extension/history-background.js','extension/status-code.js',
     'extension/status-policy.js','extension/status-script.js','extension/monitor-background.js','extension/monitor-script.js',
-    'extension/persistence-script.js','extension/popup.js'
+    'extension/recovery-model.js','extension/monitor-query-compat-background.js','extension/recovery-control-background.js',
+    'extension/bounded-recovery-background.js','extension/bounded-recovery-attachment-background.js','extension/bounded-recovery-script.js',
+    'extension/normal-continuation-budget-hook.js','extension/persistence-script.js','extension/popup.js'
   ]) {
     const path = fileURLToPath(new URL(relative, root));
     const result = spawnSync(process.execPath, ['--check', path], { encoding: 'utf8' });
