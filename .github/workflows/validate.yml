@@ -75,6 +75,7 @@ jobs:
             .\tests\extension\architecture.test.mjs `
             .\tests\extension\coordinator.behavior.test.mjs `
             .\tests\extension\status-policy.behavior.test.mjs `
+            .\tests\extension\automation-control.behavior.test.mjs `
             .\tests\extension\bounded-recovery.behavior.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Extension architecture/behavior tests failed.' }
 
