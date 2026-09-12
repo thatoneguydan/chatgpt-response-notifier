@@ -79,6 +79,11 @@
         ? { kind: '', reason: 'format-repair-spent' }
         : { kind: 'format-repair', reason };
     }
+    if (reason === 'post-reload-silent-stop') {
+      return incident.budget.continuations >= 1
+        ? { kind: '', reason: 'continuation-spent' }
+        : { kind: 'continue', reason };
+    }
 
     const reloadEligible = new Set([
       'silent-stop-confirmed', 'connection-interrupted', 'request-error', 'request-rejected',
