@@ -153,21 +153,21 @@ test('incident budget permits at most one reload, one recovery continuation, one
   assert.equal(reload.allowed, true);
   ({ humanRun: run, incident: currentIncident, profile: shared } = model.finishAction(reload.humanRun, reload.incident, reload.profile, { leaseId: 'r', state: 'scheduled' }, { now: now + 1 }));
   now = shared.nextProfileActionAt;
-  assert.equal(model.admissionDecision('reload', run, currentIncident, shared, baseObservation(), { now, recoveryEnabled: true }).reason, 'incident-reload-spent');
+  assert.equal(model.admissionDecision('reload', run, currentIncident, shared, baseObservation(), { now, recoveryEnabled: true }).reason, 'incident-reload-cap-reached');
 
   currentIncident.reason = 'post-reload-silent-stop';
   const continuation = model.claimAction('continue', run, currentIncident, shared, baseObservation(), { now, leaseId: 'c', recoveryEnabled: true });
   assert.equal(continuation.allowed, true);
   ({ humanRun: run, incident: currentIncident, profile: shared } = model.finishAction(continuation.humanRun, continuation.incident, continuation.profile, { leaseId: 'c', state: 'scheduled' }, { now: now + 1 }));
   now = shared.nextProfileActionAt;
-  assert.equal(model.admissionDecision('continue', run, currentIncident, shared, baseObservation(), { now, recoveryEnabled: true }).reason, 'incident-continuation-spent');
+  assert.equal(model.admissionDecision('continue', run, currentIncident, shared, baseObservation(), { now, recoveryEnabled: true }).reason, 'incident-continuation-cap-reached');
 
   currentIncident.reason = 'status-missing';
   const repair = model.claimAction('format-repair', run, currentIncident, shared, baseObservation({ assistantKey: 'assistant-1', silentIdleConfirmations: 0 }), { now, leaseId: 'f', recoveryEnabled: true });
   assert.equal(repair.allowed, true);
   ({ humanRun: run, incident: currentIncident, profile: shared } = model.finishAction(repair.humanRun, repair.incident, repair.profile, { leaseId: 'f', state: 'scheduled' }, { now: now + 1 }));
   now = shared.nextProfileActionAt;
-  assert.equal(model.admissionDecision('format-repair', run, currentIncident, shared, baseObservation({ assistantKey: 'assistant-1', silentIdleConfirmations: 0 }), { now, recoveryEnabled: true }).reason, 'incident-format-repair-spent');
+  assert.equal(model.admissionDecision('format-repair', run, currentIncident, shared, baseObservation({ assistantKey: 'assistant-1', silentIdleConfirmations: 0 }), { now, recoveryEnabled: true }).reason, 'incident-format-repair-cap-reached');
   assert.equal(currentIncident.budget.automaticMessages, 2);
 });
 
