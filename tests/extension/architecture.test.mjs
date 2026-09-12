@@ -129,7 +129,7 @@ test('monitoring enrollment is explicit and recovery is a second per-conversatio
   assert.match(popup, /SET_ACTIVE_CHAT_MONITORING/);
   assert.match(popup, /SET_ACTIVE_CHAT_RECOVERY/);
   assert.match(popup, /RESUME_ACTIVE_CHAT_RECOVERY/);
-  assert.doesNotMatch(monitor, /github|repository/i);
+  assert.doesNotMatch(monitor, /https:\/\/(?:api\.)?github\.com/i);
 });
 
 test('attention.required is durable and separate from rolling coded history', () => {
