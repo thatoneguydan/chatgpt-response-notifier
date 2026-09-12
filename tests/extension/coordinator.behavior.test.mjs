@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
+import './delivery-dedupe.behavior.test.mjs';
 
 const root = new URL('../../', import.meta.url);
 const source = readFileSync(new URL('extension/coordinator-background.js', root), 'utf8');
