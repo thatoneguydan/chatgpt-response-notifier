@@ -278,11 +278,26 @@
     };
   }
 
+  function closeDerivedReason(reason) {
+    return String(reason || '').includes('owner-tab-closed');
+  }
+
   async function updateRun(snapshotValue, sender = {}) {
     const snapshot = sanitizedSnapshot(snapshotValue);
     const key = runKey(snapshot);
     if (!key) return null;
     const current = await getRecord(RUN_STORE, key);
+    if (current?.state === 'detached' && current?.reason === 'owner-tab-closed-quiet') {
+      let liveOwner = false;
+      const senderTabId = sender?.tab?.id;
+      if (Number.isInteger(senderTabId)) {
+        try {
+          const tab = await chrome.tabs.get(senderTabId);
+          liveOwner = conversationFromUrl(tab?.url || '')?.id === snapshot.conversationId;
+        } catch {}
+      }
+      if (!liveOwner) return current;
+    }
     const classification = globalThis.ChatGPTNotifierContinuationPolicy?.classifyObservation?.(snapshot) || {
       state: 'waiting', reason: 'monitor-policy-unavailable', automaticActionAllowed: false
     };
@@ -326,10 +341,13 @@
   }
 
   async function ensureAttention(run, reason) {
-    if (!run?.runKey || !reason || String(reason) === 'owner-tab-closed') return null;
+    const reasonText = String(reason || '');
+    if (!run?.runKey || !reasonText || closeDerivedReason(reasonText)) return null;
+    const currentRun = await getRecord(RUN_STORE, run.runKey);
+    if (currentRun?.state === 'detached' && currentRun?.reason === 'owner-tab-closed-quiet') return null;
     const enrollment = await getEnrollment(run.conversationId);
     if (enrollment?.enabled !== true || enrollment?.userPaused === true) return null;
-    const attentionId = `attention:${run.runId}:${reason}`;
+    const attentionId = `attention:${run.runId}:${reasonText}`;
     const existing = await getRecord(ATTENTION_STORE, attentionId);
     if (existing) return existing;
     const now = Date.now();
@@ -341,8 +359,8 @@
       conversationId: run.conversationId,
       conversationUrl: run.conversationUrl,
       title: run.tabTitle || 'ChatGPT',
-      reason: String(reason),
-      preview: attentionPreview(reason),
+      reason: reasonText,
+      preview: attentionPreview(reasonText),
       delivered: false,
       acknowledged: false,
       createdAt: now,
@@ -388,9 +406,14 @@
     attentionFlushPromise = (async () => {
       if (typeof sendNativeRequest !== 'function') return;
       const records = (await getAll(ATTENTION_STORE))
-        .filter((item) => !item.delivered && !item.acknowledged && item.reason !== 'owner-tab-closed')
+        .filter((item) => !item.delivered && !item.acknowledged && !closeDerivedReason(item.reason))
         .sort((left, right) => Number(left.createdAt || 0) - Number(right.createdAt || 0));
       for (const record of records) {
+        const currentRun = await getRecord(RUN_STORE, record.runKey);
+        if (currentRun?.state === 'detached' && currentRun?.reason === 'owner-tab-closed-quiet') {
+          await acknowledgeAttention(record.attentionId);
+          continue;
+        }
         const enrollment = await getEnrollment(record.conversationId);
         if (enrollment?.enabled !== true || enrollment?.userPaused === true) continue;
         const response = await sendNativeRequest({
@@ -623,7 +646,7 @@
     });
     const attentionRecords = await getAll(ATTENTION_STORE);
     for (const record of attentionRecords) {
-      if (record.runKey === run.runKey && record.reason === 'owner-tab-closed' && !record.acknowledged) await acknowledgeAttention(record.attentionId);
+      if (record.runKey === run.runKey && closeDerivedReason(record.reason) && !record.acknowledged) await acknowledgeAttention(record.attentionId);
     }
   }
 
