@@ -166,9 +166,13 @@ internal static class SetupEngine
         try
         {
             ExtractEmbeddedPayload(tempRoot);
+
+            // Stop the currently installed helper before copying the new payload. This
+            // is required when installing a different source candidate with the same
+            // semantic version because Windows keeps the running .exe locked.
+            StopExistingHosts();
             var installed = BundleInstaller.InstallExtractedBundle(tempRoot);
 
-            StopExistingHosts();
             if (!skipStartup) StartupRegistration.Register(installed.HostExecutablePath);
             StartHelper(installed.HostExecutablePath);
             WaitForHelperAsync(TimeSpan.FromSeconds(12)).GetAwaiter().GetResult();
