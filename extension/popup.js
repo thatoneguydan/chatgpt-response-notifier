@@ -235,7 +235,7 @@ function normalizeOverview(result) {
   };
 }
 
-async function loadAutomationOverview({ preserveOnFailure = true } = {}) {
+async function loadAutomationOverview({ preserveOnFailure = true, preserveExistingError = false } = {}) {
   try {
     const result = await chrome.runtime.sendMessage({ type: 'GET_BUILD_AUTOMATION_OVERVIEW' });
     if (!result?.ok) throw new Error(result?.error || 'Build automation overview unavailable.');
@@ -245,7 +245,7 @@ async function loadAutomationOverview({ preserveOnFailure = true } = {}) {
     }
     verifiedAutomation = next;
     automationConfirmed = true;
-    clearAutomationError();
+    if (!preserveExistingError) clearAutomationError();
     renderAutomation(next, { confirmed: true });
     return next;
   } catch (error) {
@@ -291,12 +291,16 @@ async function setBuildAutomation() {
     automationConfirmed = true;
     renderAutomation(next, { confirmed: true });
   } catch (error) {
+    const commandError = String(error?.message || error || 'Build automation change failed.');
     automationConfirmed = false;
-    showAutomationError(String(error?.message || error || 'Build automation change failed.'));
+    showAutomationError(commandError);
     renderAutomation(verifiedAutomation, { confirmed: false });
     // Reconcile an unknown outcome. A successful committed write may have lost
     // its response, so never invert the previous boolean or blindly retry it.
-    await loadAutomationOverview({ preserveOnFailure: true });
+    // If readback succeeds, keep the command failure visible until the next
+    // deliberate control action or popup reopen instead of silently erasing it.
+    await loadAutomationOverview({ preserveOnFailure: true, preserveExistingError: true });
+    if (!monitorError.textContent) showAutomationError(commandError);
   } finally {
     automationBusy = false;
     renderAutomation(verifiedAutomation, { confirmed: automationConfirmed });
