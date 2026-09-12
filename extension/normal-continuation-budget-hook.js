@@ -13,6 +13,7 @@
   };
   const watchers = new Map();
   const codedCompletionRequests = new Set();
+  const codedSnapshotObservations = new Set();
 
   function normalizePathname(url) {
     try { return new URL(url).pathname.replace(/\/+$/, ''); } catch { return ''; }
@@ -124,6 +125,34 @@
     }
   }
 
+  function scheduleObservedStatusDelivery(message, sender) {
+    if (message?.type !== 'CHATGPT_MONITOR_STATE') return;
+    const snapshot = message?.snapshot || {};
+    const statusCode = String(snapshot.statusCode || '');
+    if (!globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode)) return;
+    const tabId = sender?.tab?.id;
+    if (!Number.isInteger(tabId)) return;
+    const logicalKey = [
+      tabId,
+      String(snapshot.conversationId || ''),
+      String(snapshot.promptKey || ''),
+      String(snapshot.assistantKey || ''),
+      statusCode,
+      String(snapshot.assistantRevision || '')
+    ].join('|');
+    if (!snapshot.conversationId || !snapshot.promptKey || !snapshot.assistantKey || codedSnapshotObservations.has(logicalKey)) return;
+    codedSnapshotObservations.add(logicalKey);
+    if (codedSnapshotObservations.size > 200) codedSnapshotObservations.delete(codedSnapshotObservations.values().next().value);
+    Promise.resolve()
+      .then(() => observeCodedCompletion(tabId, `monitor-status:${logicalKey}`))
+      .catch((error) => console.warn('Observed coded status delivery failed', error));
+  }
+
+  chrome.runtime.onMessage.addListener((message, sender) => {
+    scheduleObservedStatusDelivery(message, sender);
+    return false;
+  });
+
   chrome.webRequest.onCompleted.addListener((details) => {
     if (!isAnswerStreamRequest(details)) return;
     if (details.statusCode < 200 || details.statusCode >= 300) return;
@@ -194,7 +223,8 @@
   });
 
   globalThis.__chatgptNotifierNormalContinuationBudgetHook = Object.freeze({
-    version: 3,
-    observeCodedCompletion
+    version: 4,
+    observeCodedCompletion,
+    scheduleObservedStatusDelivery
   });
 })();
