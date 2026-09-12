@@ -3,6 +3,9 @@
   "contractId": "github-work-status/v1",
   "statusLinePattern": "^\\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\\]$",
   "finalSyntax": "[GITHUB_STATUS: CODE]",
+  "workStartSignal": "[GITHUB_WORK: START]",
+  "workStartLinePattern": "^\\[GITHUB_WORK: START\\]$",
+  "workStartTerminal": false,
   "validCodes": [
     "PLANNING_ACTIVE",
     "COMPLETE_APPLIED",
@@ -22,9 +25,10 @@
     "footer_required_for_segment",
     "terminal_only",
     "final_syntax",
+    "work_start_signal",
     "codes",
     "current_work",
     "next_action"
   ],
-  "canonicalSemanticSha256": "776d5e0ac9f3a9d5df3b0ddd3045454d8f664adacecbc604130a31a5bcefc1f5"
+  "canonicalSemanticSha256": "9c60a07bc26b639c15a6456b08707c2e92fa06fe98baa21b6b731b3f9dda4cd1"
 }
