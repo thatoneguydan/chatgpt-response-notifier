@@ -10,9 +10,13 @@ permissions:
 
 jobs:
   validate:
-    # Public pull requests are an untrusted-code boundary; do not attach Dan's
-    # workstation runner to this workflow. Use an isolated hosted runner here.
-    runs-on: windows-latest
+    # Dan's workstation runner may execute only trusted same-repository source.
+    # Fork PRs remain visible but never receive a self-hosted job assignment.
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.head.repo.owner.login == github.repository_owner) }}
+    runs-on: [self-hosted, Windows, X64, glass-builder, glass-chatgpt-response-notifier]
     timeout-minutes: 15
     steps:
       - name: Checkout
@@ -37,19 +41,33 @@ jobs:
             '.\extension\recovery-background.js',
             '.\extension\recovery-script.js',
             '.\extension\history-background.js',
+            '.\extension\monitor-background.js',
+            '.\extension\monitor-script.js',
+            '.\extension\recovery-model.js',
+            '.\extension\monitor-query-compat-background.js',
+            '.\extension\recovery-control-background.js',
+            '.\extension\bounded-recovery-background.js',
+            '.\extension\bounded-recovery-attachment-background.js',
+            '.\extension\bounded-recovery-script.js',
+            '.\extension\normal-continuation-budget-hook.js',
             '.\extension\popup.js'
           )) {
             node --check $script
             if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax validation failed: $script" }
           }
 
-          node --test .\tests\extension\architecture.test.mjs .\tests\extension\coordinator.behavior.test.mjs .\tests\extension\status-policy.behavior.test.mjs
+          node --test `
+            .\tests\extension\architecture.test.mjs `
+            .\tests\extension\coordinator.behavior.test.mjs `
+            .\tests\extension\status-policy.behavior.test.mjs `
+            .\tests\extension\bounded-recovery.behavior.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Extension architecture/behavior tests failed.' }
 
           $manifest = Get-Content -LiteralPath .\extension\manifest.json -Raw | ConvertFrom-Json
-          foreach ($forbidden in @('downloads', 'alarms', 'storage', 'nativeMessaging', 'notifications', 'offscreen')) {
+          foreach ($forbidden in @('downloads', 'storage', 'nativeMessaging', 'notifications', 'offscreen')) {
             if ($manifest.permissions -contains $forbidden) { throw "Forbidden extension permission present: $forbidden" }
           }
+          if ($manifest.permissions -notcontains 'alarms') { throw 'Bounded recovery requires the reviewed alarms permission.' }
           if ($manifest.host_permissions -contains 'https://github.com/*') { throw 'Extension must not depend on GitHub browser permissions.' }
           if ($manifest.host_permissions -notcontains 'ws://127.0.0.1/*') { throw 'Loopback WebSocket permission is missing.' }
 
