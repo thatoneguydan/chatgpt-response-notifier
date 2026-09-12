@@ -6,12 +6,15 @@ const version = document.getElementById('version');
 const testButton = document.getElementById('test');
 const updateButton = document.getElementById('checkUpdate');
 const monitorToggle = document.getElementById('monitorToggle');
+const recoveryToggle = document.getElementById('recoveryToggle');
+const resumeRecovery = document.getElementById('resumeRecovery');
 const monitorDetail = document.getElementById('monitorDetail');
 const attentionSection = document.getElementById('attentionSection');
 const attentionRoot = document.getElementById('attention');
 
 version.textContent = `v${chrome.runtime.getManifest().version}`;
 let activeMonitoring = false;
+let activeRecovery = false;
 
 function formatTime(value) {
   try {
@@ -138,23 +141,50 @@ async function loadHistory() {
   }
 }
 
-function monitorDescription(overview) {
+function monitorDescription(overview, recoveryOverview) {
   if (!overview?.activeConversationId) return 'Open a ChatGPT conversation';
   if (!overview.monitoring) return 'Off for this conversation';
   const run = overview.run;
-  if (!run) return 'On — waiting for the next request';
-  const reason = String(run.reason || run.state || 'observing').replaceAll('-', ' ');
-  return `On — ${reason}`;
+  const reason = run ? String(run.reason || run.state || 'observing').replaceAll('-', ' ') : 'waiting for the next request';
+  const recovery = recoveryOverview?.recoveryEnabled === true ? 'recovery on' : 'recovery off';
+  return `On — ${reason} · ${recovery}`;
+}
+
+function recoveryNeedsResume(overview) {
+  const recovery = overview?.recovery;
+  if (!recovery) return false;
+  if (recovery.profile?.breakerOpen === true) return true;
+  if (Number(recovery.humanRun?.generationActions || 0) >= 12) return true;
+  return recovery.incident?.state === 'attention' && recoveryEnabledReason(recovery.incident?.reason);
+}
+
+function recoveryEnabledReason(reason) {
+  return ['run-action-cap-reached', 'action-outcome-uncertain', 'action-interrupted-uncertain', 'profile-breaker-open', 'rate-limited'].includes(String(reason || ''));
 }
 
 async function loadMonitorOverview() {
   try {
-    const overview = await chrome.runtime.sendMessage({ type: 'GET_MONITOR_OVERVIEW' });
+    const [overview, recoveryOverview] = await Promise.all([
+      chrome.runtime.sendMessage({ type: 'GET_MONITOR_OVERVIEW' }),
+      chrome.runtime.sendMessage({ type: 'GET_BOUNDED_RECOVERY_OVERVIEW' })
+    ]);
     if (!overview?.ok) throw new Error(overview?.error || 'Monitor overview unavailable.');
+
     activeMonitoring = overview.monitoring === true;
+    activeRecovery = recoveryOverview?.ok === true && recoveryOverview.recoveryEnabled === true;
     monitorToggle.disabled = !overview.activeConversationId;
     monitorToggle.textContent = activeMonitoring ? 'Stop' : 'Monitor';
-    monitorDetail.textContent = monitorDescription(overview);
+    monitorToggle.classList.toggle('enabled', activeMonitoring);
+
+    recoveryToggle.disabled = !overview.activeConversationId;
+    recoveryToggle.textContent = activeRecovery ? 'Recover ✓' : 'Recover';
+    recoveryToggle.classList.toggle('enabled', activeRecovery);
+    recoveryToggle.title = activeRecovery
+      ? 'Bounded automatic recovery is enabled for this conversation'
+      : 'Enable bounded automatic recovery for this conversation';
+
+    resumeRecovery.hidden = !(activeRecovery && recoveryNeedsResume(recoveryOverview));
+    monitorDetail.textContent = monitorDescription(overview, recoveryOverview);
 
     const attention = Array.isArray(overview.attention) ? overview.attention.slice(0, 20) : [];
     attentionRoot.replaceChildren();
@@ -162,6 +192,8 @@ async function loadMonitorOverview() {
     attentionSection.hidden = attention.length === 0;
   } catch {
     monitorToggle.disabled = true;
+    recoveryToggle.disabled = true;
+    resumeRecovery.hidden = true;
     monitorDetail.textContent = 'Monitoring state unavailable';
     attentionSection.hidden = true;
   }
@@ -202,6 +234,22 @@ monitorToggle.addEventListener('click', async () => {
     if (result?.ok) activeMonitoring = result.monitoring === true;
   } catch {}
   await loadMonitorOverview();
+});
+
+recoveryToggle.addEventListener('click', async () => {
+  recoveryToggle.disabled = true;
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'SET_ACTIVE_CHAT_RECOVERY', enabled: !activeRecovery });
+    if (result?.ok) activeRecovery = result.recoveryEnabled === true;
+  } catch {}
+  await loadMonitorOverview();
+});
+
+resumeRecovery.addEventListener('click', async () => {
+  resumeRecovery.disabled = true;
+  try { await chrome.runtime.sendMessage({ type: 'RESUME_ACTIVE_CHAT_RECOVERY' }); } catch {}
+  await loadMonitorOverview();
+  resumeRecovery.disabled = false;
 });
 
 Promise.all([loadHistory(), loadMonitorOverview()]).catch(() => {});
