@@ -8,7 +8,7 @@ The unified build-automation amendment is implemented without changing roadmap n
 
 Live workstation correlation proved Dan's installed v0.9.0 was source `bdcea39eaba9b960ce3579016c9b1308585d5e8b`, not the validated unified-control source line. The first exact-candidate Setup attempt exposed a same-version replacement defect: Setup copied `Host\0.9.0\ChatGPTResponseNotifier.Host.exe` before stopping the running helper at that same path, so Windows could reject the overwrite and silent Setup exited 1. The installer now stops the path-scoped existing helper before copying the new payload. Glass validation installs the same candidate twice into one isolated root while the first helper is running, then verifies exact `install-state.json` source identity and localhost helper handshake. The release gate mirrors this regression proof.
 
-This roadmap intentionally does **not** pin the latest candidate SHA in its own prose. PR #33, issue #34, and active-work #283 own the exact current acceptance commit/artifact/hash so updating those trackers does not mutate the candidate source and trigger another self-referential rebuild.
+This roadmap does **not** pin a candidate SHA or artifact ID in its own contents. PR #33, issue #34, and active-work #283 own the exact current acceptance identity. That prevents documentation bookkeeping from mutating the source solely to record the source's own SHA.
 
 This repair remains inside **ChatGPT Response Notifier → Workstream 5/5 → Stage 4/4 → Step 1/1 → Gate 1/1 → Task 2/3** as prerequisite work for live browser acceptance. No public release or PR merge is authorized by deterministic proof alone.
 
