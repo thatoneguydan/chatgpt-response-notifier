@@ -133,7 +133,7 @@ jobs:
           }
           $candidateManifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $artifactRoot 'candidate-manifest.json') -Encoding UTF8
 
-      - name: Prove isolated Setup and localhost helper handshake
+      - name: Prove isolated Setup, same-version replacement, and localhost helper handshake
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -151,10 +151,18 @@ jobs:
           $env:CHATGPT_RESPONSE_NOTIFIER_INSTALL_ROOT = $testInstallRoot
           $env:CHATGPT_RESPONSE_NOTIFIER_TEST_BRIDGE_PORT = [string]$testPort
           try {
-            $setupProcess = Start-Process -FilePath $candidateSetup -ArgumentList '--silent','--skip-startup' -PassThru
-            Wait-Process -Id $setupProcess.Id -Timeout 45
-            $setupProcess.Refresh()
-            if ($setupProcess.ExitCode -ne 0) { throw "Setup.exe isolated acceptance failed with exit code $($setupProcess.ExitCode)." }
+            foreach ($attempt in 1..2) {
+              $setupProcess = Start-Process -FilePath $candidateSetup -ArgumentList '--silent','--skip-startup' -PassThru
+              Wait-Process -Id $setupProcess.Id -Timeout 45
+              $setupProcess.Refresh()
+              if ($setupProcess.ExitCode -ne 0) { throw "Setup.exe isolated acceptance attempt $attempt failed with exit code $($setupProcess.ExitCode)." }
+            }
+
+            $statePath = Join-Path $testInstallRoot 'Data\install-state.json'
+            if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { throw 'Isolated install-state.json is missing after replacement.' }
+            $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+            if ($state.version -ne $version) { throw "Isolated install version mismatch: $($state.version)" }
+            if ($state.sourceCommit -ne $env:SOURCE_SHA) { throw "Isolated install source mismatch: $($state.sourceCommit)" }
           }
           finally {
             $testRootFull = [IO.Path]::GetFullPath($testInstallRoot).TrimEnd('\') + '\'
