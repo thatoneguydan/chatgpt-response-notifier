@@ -142,17 +142,21 @@ test('whole human-started run fuse allows exactly twelve generation-producing ac
   assert.equal(model.admissionDecision('normal-continue', run, null, shared, baseObservation(), { now: now + 1_000_000, recoveryEnabled: false }).reason, 'run-action-cap-reached');
 });
 
-test('incident budget permits at most one reload, one recovery continuation, one repair, and two automatic messages', () => {
-  const { model } = loadModel();
+test('incident budget permits at most three reloads, one recovery continuation, one repair, and two automatic messages', () => {
+  const { policy, model } = loadModel();
+  assert.equal(policy.thresholds.incidentReloadCap, 3);
   let run = humanRun();
   let shared = profile();
   let currentIncident = incident({ reason: 'silent-stop-confirmed' });
   let now = 1_000;
 
-  const reload = model.claimAction('reload', run, currentIncident, shared, baseObservation(), { now, leaseId: 'r', recoveryEnabled: true });
-  assert.equal(reload.allowed, true);
-  ({ humanRun: run, incident: currentIncident, profile: shared } = model.finishAction(reload.humanRun, reload.incident, reload.profile, { leaseId: 'r', state: 'scheduled' }, { now: now + 1 }));
-  now = shared.nextProfileActionAt;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const reload = model.claimAction('reload', run, currentIncident, shared, baseObservation(), { now, leaseId: `r-${attempt}`, recoveryEnabled: true });
+    assert.equal(reload.allowed, true, `reload ${attempt}`);
+    ({ humanRun: run, incident: currentIncident, profile: shared } = model.finishAction(reload.humanRun, reload.incident, reload.profile, { leaseId: `r-${attempt}`, state: 'scheduled' }, { now: now + 1 }));
+    now = shared.nextProfileActionAt;
+  }
+  assert.equal(currentIncident.budget.reloads, 3);
   assert.equal(model.admissionDecision('reload', run, currentIncident, shared, baseObservation(), { now, recoveryEnabled: true }).reason, 'incident-reload-cap-reached');
 
   currentIncident.reason = 'post-reload-silent-stop';
@@ -171,7 +175,7 @@ test('incident budget permits at most one reload, one recovery continuation, one
   assert.equal(currentIncident.budget.automaticMessages, 2);
 });
 
-test('post-reload state machine never guesses: identity changes and same document require attention', () => {
+test('post-reload state machine retries up to three refreshes, then continues only if still silently idle', () => {
   const { model } = loadModel();
   const expected = { conversationId: 'conversation-1', promptKey: 'conversation-1|user-1', documentId: 'doc-old' };
   const base = {
@@ -189,7 +193,10 @@ test('post-reload state machine never guesses: identity changes and same documen
   assert.deepEqual({ ...model.postReloadDecision({ ...base, statusCode: 'INCOMPLETE_LIMIT' }, expected) }, { kind: '', state: 'resolved', reason: 'coded:INCOMPLETE_LIMIT' });
   assert.deepEqual({ ...model.postReloadDecision({ ...base, assistantKey: 'assistant-1', stableTerminal: true, silentIdleConfirmations: 0 }, expected) }, { kind: 'format-repair', state: 'scheduled', reason: 'status-missing' });
   assert.deepEqual({ ...model.postReloadDecision({ ...base, assistantKey: '', silentIdleConfirmations: 2 }, expected) }, { kind: 'continue', state: 'scheduled', reason: 'post-reload-silent-stop' });
-  assert.equal(model.recoveryCandidate({ state: 'attention', reason: 'post-reload-silent-stop' }, base, incident({ reason: 'post-reload-silent-stop', budget: { reloads: 1 } })).kind, 'continue');
+  assert.equal(model.recoveryCandidate({ state: 'attention', reason: 'post-reload-silent-stop' }, base, incident({ reason: 'post-reload-silent-stop', budget: { reloads: 1 } })).kind, 'reload');
+  assert.equal(model.recoveryCandidate({ state: 'attention', reason: 'post-reload-silent-stop' }, base, incident({ reason: 'post-reload-silent-stop', budget: { reloads: 2 } })).kind, 'reload');
+  assert.equal(model.recoveryCandidate({ state: 'attention', reason: 'post-reload-silent-stop' }, base, incident({ reason: 'post-reload-silent-stop', budget: { reloads: 3 } })).kind, 'continue');
+  assert.equal(model.recoveryCandidate({ state: 'attention', reason: 'post-reload-silent-stop' }, baseObservation({ stopGenerating: true }), incident({ reason: 'post-reload-silent-stop', budget: { reloads: 1 } })).reason, 'generation-active');
 });
 
 test('restart never replays an in-flight side effect and uncertainty remains sticky', () => {
