@@ -31,9 +31,9 @@ test('only the canonical seven exact terminal footer codes qualify', () => {
   assert.equal(parser.parseTerminalStatus('Body\n[GITHUB_STATUS: FUTURE_CODE]').statusCode, '');
 });
 
-test('background composition loads policy, unified automation owner, recovery and normal continuation fuse in dependency order', () => {
+test('background composition loads policy, unified automation owner, recovery and diagnostics in dependency order', () => {
   const wrapper = text('extension/background.js');
-  assert.match(wrapper, /status-code\.js[\s\S]*status-policy\.js[\s\S]*recovery-model\.js[\s\S]*coordinator-background\.js[\s\S]*delivery-dedupe-hook\.js[\s\S]*recovery-background\.js[\s\S]*history-background\.js[\s\S]*monitor-background\.js[\s\S]*monitor-query-compat-background\.js[\s\S]*recovery-control-background\.js[\s\S]*bounded-recovery-background\.js[\s\S]*bounded-recovery-attachment-background\.js[\s\S]*service-worker\.js[\s\S]*normal-continuation-budget-hook\.js/);
+  assert.match(wrapper, /status-code\.js[\s\S]*status-policy\.js[\s\S]*recovery-model\.js[\s\S]*coordinator-background\.js[\s\S]*delivery-dedupe-hook\.js[\s\S]*recovery-background\.js[\s\S]*history-background\.js[\s\S]*monitor-background\.js[\s\S]*monitor-query-compat-background\.js[\s\S]*recovery-control-background\.js[\s\S]*bounded-recovery-background\.js[\s\S]*bounded-recovery-attachment-background\.js[\s\S]*service-worker\.js[\s\S]*normal-continuation-budget-hook\.js[\s\S]*delivery-diagnostics-hook\.js/);
 });
 
 test('monitoring and bounded recovery observe page/request state but create no ChatGPT HTTP traffic', () => {
@@ -47,7 +47,8 @@ test('monitoring and bounded recovery observe page/request state but create no C
     text('extension/monitor-script.js'),
     text('extension/bounded-recovery-background.js'),
     text('extension/bounded-recovery-script.js'),
-    text('extension/normal-continuation-budget-hook.js')
+    text('extension/normal-continuation-budget-hook.js'),
+    text('extension/delivery-diagnostics-hook.js')
   ];
   const worker = sources[0];
   const monitor = sources[5];
@@ -247,12 +248,14 @@ test('active user, draft, upload and manual-stop safeguards are explicit and tru
   assert.match(policy, /active-user-interaction/);
 });
 
-test('version-aware attachment re-arms stale listeners without activating frozen or discarded pages', () => {
+test('version-aware attachment re-arms stale listeners and wakes sleeping workers without foregrounding', () => {
   const attachment = text('extension/attachment-script.js');
   const boundedAttachment = text('extension/bounded-recovery-attachment-background.js');
   assert.match(attachment, /chrome\.runtime\.getManifest\(\)\.version/);
   assert.match(attachment, /__chatgptPromptBoundNotifierInstalled = false/);
   assert.match(attachment, /__chatgptNotifierStatusDomInstalled = false/);
+  assert.match(attachment, /PING_NATIVE_HOST/);
+  assert.match(attachment, /setInterval\(pingHelperVersion, 30000\)/);
   assert.match(text('extension/service-worker.js'), /attachment-script\.js/);
   assert.match(text('extension/recovery-background.js'), /attachment-script\.js/);
   assert.match(text('extension/monitor-background.js'), /monitor-script\.js/);
@@ -349,6 +352,22 @@ test('DOM-observed terminal monitor state drives the durable coded-delivery path
   assert.match(hook, /queueDurableNotification\(record, 'coded-completion-status-observer'\)/);
 });
 
+test('coded delivery and background bootstrap failures persist sanitized helper diagnostics', () => {
+  const wrapper = text('extension/background.js');
+  const diagnostics = text('extension/delivery-diagnostics-hook.js');
+  assert.match(wrapper, /reportBootstrapFailure/);
+  assert.match(wrapper, /diagnostics\.event/);
+  assert.match(wrapper, /import-scripts-failed/);
+  assert.match(wrapper, /completion-binding-failed/);
+  assert.match(diagnostics, /CHATGPT_MONITOR_STATE/);
+  assert.match(diagnostics, /monitor-terminal-seen/);
+  assert.match(diagnostics, /status-query-valid/);
+  assert.match(diagnostics, /delivery-turn-missing/);
+  assert.match(diagnostics, /delivery-outbox-pending/);
+  assert.match(diagnostics, /conversationSuffix/);
+  assert.doesNotMatch(diagnostics, /promptText|assistantText|responseText|responseBody/);
+});
+
 test('continuation acceptance requires matching user turn plus passive accepted request evidence', () => {
   const status = text('extension/status-script.js');
   const worker = text('extension/service-worker.js');
@@ -443,10 +462,13 @@ test('split rendered assistant blocks preserve terminal footer evidence and supp
 
 test('versioned updates self-activate helper and extension runtime without foregrounding Chrome', () => {
   const worker = text('extension/service-worker.js');
+  const attachment = text('extension/attachment-script.js');
   const app = text('src/ChatGPTResponseNotifier.Host/NativeHostApplication.cs');
   const updater = text('src/ChatGPTResponseNotifier.Host/PublicUpdateService.cs');
   assert.match(worker, /function maybeReloadForInstalledVersion/);
   assert.match(worker, /chrome\.runtime\.reload\(\)/);
+  assert.match(attachment, /PING_NATIVE_HOST/);
+  assert.match(attachment, /activation-heartbeat/);
   assert.match(app, /StartupRegistration\.Register\(result\.InstalledBundle\.HostExecutablePath\)/);
   assert.match(app, /ScheduleReplacementIfNeeded/);
   assert.match(app, /CreateNoWindow = true/);
@@ -456,7 +478,7 @@ test('versioned updates self-activate helper and extension runtime without foreg
 
 test('manifest adds only reviewed alarms permission for scheduled recovery wake', () => {
   const manifest = JSON.parse(text('extension/manifest.json'));
-  assert.equal(manifest.version, '0.9.6');
+  assert.equal(manifest.version, '0.9.7');
   assert.deepEqual(manifest.permissions.sort(), ['alarms','scripting','tabs','webRequest'].sort());
   assert.deepEqual(manifest.host_permissions.sort(), ['https://chatgpt.com/*','ws://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].js, [
@@ -467,7 +489,7 @@ test('manifest adds only reviewed alarms permission for scheduled recovery wake'
 test('local JavaScript is syntactically valid', () => {
   for (const relative of [
     'extension/background.js','extension/service-worker.js','extension/attachment-script.js','extension/coordinator-background.js',
-    'extension/delivery-dedupe-hook.js','extension/recovery-background.js','extension/recovery-script.js','extension/history-background.js','extension/status-code.js',
+    'extension/delivery-dedupe-hook.js','extension/delivery-diagnostics-hook.js','extension/recovery-background.js','extension/recovery-script.js','extension/history-background.js','extension/status-code.js',
     'extension/status-policy.js','extension/status-script.js','extension/monitor-background.js','extension/monitor-script.js',
     'extension/recovery-model.js','extension/monitor-query-compat-background.js','extension/recovery-control-background.js',
     'extension/bounded-recovery-background.js','extension/bounded-recovery-attachment-background.js','extension/bounded-recovery-script.js',
