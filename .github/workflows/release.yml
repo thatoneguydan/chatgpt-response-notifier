@@ -113,8 +113,10 @@ jobs:
             $setupExe = Join-Path $setupOutput "ChatGPT-Response-Notifier-Setup-$version.exe"
             if (-not (Test-Path -LiteralPath $setupExe -PathType Leaf)) { throw 'Setup.exe output is missing.' }
 
-            # Prove the actual installer can install, launch the helper, and complete its built-in localhost ping/pong.
-            # Both install root and bridge port are disposable, so acceptance cannot stop or bind over the live notifier.
+            # Prove the actual installer can install, launch the helper, replace the
+            # same semantic version while that helper is running, and complete its
+            # built-in localhost ping/pong both times. Both install root and bridge
+            # port are disposable, so acceptance cannot stop or bind over the live notifier.
             $testInstallRoot = Join-Path $env:RUNNER_TEMP ('chatgpt-response-notifier-install-' + [Guid]::NewGuid().ToString('N'))
             $portProbe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
             $portProbe.Start()
@@ -127,10 +129,18 @@ jobs:
             $env:CHATGPT_RESPONSE_NOTIFIER_INSTALL_ROOT = $testInstallRoot
             $env:CHATGPT_RESPONSE_NOTIFIER_TEST_BRIDGE_PORT = [string]$testBridgePort
             try {
-              $setupProcess = Start-Process -FilePath $setupExe -ArgumentList '--silent','--skip-startup' -PassThru
-              Wait-Process -Id $setupProcess.Id -Timeout 45
-              $setupProcess.Refresh()
-              if ($setupProcess.ExitCode -ne 0) { throw "Setup.exe acceptance test failed with exit code $($setupProcess.ExitCode)." }
+              foreach ($attempt in 1..2) {
+                $setupProcess = Start-Process -FilePath $setupExe -ArgumentList '--silent','--skip-startup' -PassThru
+                Wait-Process -Id $setupProcess.Id -Timeout 45
+                $setupProcess.Refresh()
+                if ($setupProcess.ExitCode -ne 0) { throw "Setup.exe acceptance attempt $attempt failed with exit code $($setupProcess.ExitCode)." }
+              }
+
+              $statePath = Join-Path $testInstallRoot 'Data\install-state.json'
+              if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { throw 'Release acceptance install-state.json is missing after replacement.' }
+              $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+              if ($state.version -ne $version) { throw "Release acceptance version mismatch: $($state.version)" }
+              if ($state.sourceCommit -ne $sourceCommit) { throw "Release acceptance source mismatch: $($state.sourceCommit)" }
             }
             finally {
               $testRootFull = [IO.Path]::GetFullPath($testInstallRoot).TrimEnd('\') + '\'
