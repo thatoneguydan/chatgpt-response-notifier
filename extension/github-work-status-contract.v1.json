@@ -1,0 +1,29 @@
+{
+  "generatedFrom": "thatoneguydan/DevelopmentInfrastructure/GITHUB-WORK-STATUS-CONTRACT.json",
+  "contractId": "github-work-status/v1",
+  "statusLinePattern": "^\\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\\]$",
+  "finalSyntax": "[GITHUB_STATUS: CODE]",
+  "validCodes": [
+    "PLANNING_ACTIVE",
+    "COMPLETE_APPLIED",
+    "COMPLETE_NO_CHANGES",
+    "BLOCKED_HUMAN",
+    "INCOMPLETE_LIMIT",
+    "INCOMPLETE_TOOL_FAILURE",
+    "INCOMPLETE_HANDOFF"
+  ],
+  "autoContinuationCodes": [
+    "INCOMPLETE_LIMIT"
+  ],
+  "formatRepairPrompt": "Classify the existing work result and supply the missing final GitHub status. Do not rerun tools, builds, deployments, writes, or completed actions. Use the actual current end state and end with exactly one valid `[GITHUB_STATUS: CODE]` line.",
+  "capsuleRequiredFields": [
+    "contract",
+    "footer_required_for_segment",
+    "terminal_only",
+    "final_syntax",
+    "codes",
+    "current_work",
+    "next_action"
+  ],
+  "canonicalSemanticSha256": "a3174936b76fb05bd9c6bfb78754fb7fa0dfc14d1320ca5e8e952eb44ee36fe2"
+}
