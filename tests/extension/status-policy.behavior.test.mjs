@@ -113,9 +113,14 @@ test('bundled grammar fixture is self-consistent and runtime taxonomy plus START
   assert.equal(api.contractSemanticSha256, contractFixture.canonicalSemanticSha256);
   assert.equal(api.workStartSignal, contractFixture.workStartSignal);
   assert.equal(api.isWorkStartSignal(contractFixture.workStartSignal), true);
-  assert.equal(api.isWorkStartSignal(' [GITHUB_WORK: START] '), true);
-  assert.equal(api.isWorkStartSignal('[GITHUB_WORK: STARTED]'), false);
-  assert.equal(api.isWorkStartSignal('[GITHUB_STATUS: START]'), false);
+  for (const nonExact of [
+    ' [GITHUB_WORK: START]',
+    '[GITHUB_WORK: START] ',
+    '> [GITHUB_WORK: START]',
+    '- [GITHUB_WORK: START]',
+    '[GITHUB_WORK: STARTED]',
+    '[GITHUB_STATUS: START]'
+  ]) assert.equal(api.isWorkStartSignal(nonExact), false, nonExact);
   assert.equal(contractFixture.workStartTerminal, false);
   assert.deepEqual(Array.from(api.validStatusCodes), contractFixture.validCodes);
   assert.deepEqual(contractFixture.autoContinuationCodes, ['INCOMPLETE_LIMIT']);
