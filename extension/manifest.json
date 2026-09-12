@@ -34,6 +34,7 @@
         "status-code.js",
         "status-policy.js",
         "monitor-script.js",
+        "bounded-recovery-script.js",
         "status-script.js",
         "recovery-script.js"
       ],
