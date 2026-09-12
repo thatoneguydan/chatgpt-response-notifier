@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const AUTO_CONTINUE_TEXT = 'continue until you finish or need something from me';
   const DEFAULT_WAIT_MS = 30000;
@@ -44,12 +44,26 @@
   function turnId(turn, role, index) {
     return String(turn?.getAttribute?.('data-testid') || turn?.id || `${role}-${index}`).trim();
   }
+  function renderedBlocks(roleNode) {
+    try {
+      const markdown = Array.from(roleNode?.querySelectorAll?.('.markdown') || []);
+      const candidates = markdown.length > 0
+        ? markdown
+        : Array.from(roleNode?.querySelectorAll?.('[class*="prose"]') || []);
+      return candidates.filter((node) => !candidates.some((other) => other !== node && other?.contains?.(node)));
+    } catch { return []; }
+  }
+  function nodeText(node) {
+    return String(node?.innerText || node?.textContent || '').replace(/\r\n?/g, '\n').trimEnd();
+  }
   function turnText(turn, role) {
     try {
       const selector = `[data-message-author-role="${role}"]`;
       const roleNode = turn?.matches?.(selector) ? turn : turn?.querySelector?.(selector);
-      const node = roleNode?.querySelector?.('.markdown, [class*="prose"]') || roleNode;
-      return String(node?.innerText || node?.textContent || '').replace(/\r\n?/g, '\n').trimEnd();
+      if (!roleNode) return '';
+      const blocks = renderedBlocks(roleNode);
+      const joined = blocks.map(nodeText).filter(Boolean).join('\n');
+      return joined || nodeText(roleNode);
     } catch { return ''; }
   }
   function revisionOf(text) {
