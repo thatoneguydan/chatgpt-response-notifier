@@ -1,13 +1,14 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   try { globalThis.__chatgptNotifierMonitorRuntime?.dispose?.(); } catch {}
 
   const abortController = new AbortController();
   const documentId = (() => { try { return crypto.randomUUID(); } catch { return `${Date.now()}-${Math.random()}`; } })();
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const STOP_SELECTOR = 'button[data-testid="stop-button"], button[data-testid="fruitjuice-stop-button"], button[aria-label="Stop generating"]';
+  const WORK_START_LINE = '[GITHUB_WORK: START]';
   const thresholds = globalThis.ChatGPTNotifierContinuationPolicy?.thresholds || {};
   const MISSING_FOOTER_GRACE_MS = Number(thresholds.missingFooterGraceMs || 30_000);
   const SILENT_IDLE_FIRST_MS = Number(thresholds.silentIdleFirstMs || 90_000);
@@ -73,13 +74,31 @@
     return String(turn?.getAttribute?.('data-testid') || turn?.id || `${role}-${index}`).trim();
   }
 
-  function turnText(turn, role) {
+  function roleRoot(turn, role) {
     try {
       const selector = `[data-message-author-role="${role}"]`;
-      const roleNode = turn?.matches?.(selector) ? turn : turn?.querySelector?.(selector);
+      return turn?.matches?.(selector) ? turn : turn?.querySelector?.(selector);
+    } catch { return null; }
+  }
+
+  function turnText(turn, role) {
+    try {
+      const roleNode = roleRoot(turn, role);
       const node = roleNode?.querySelector?.('.markdown, [class*="prose"]') || roleNode;
       return String(node?.innerText || node?.textContent || '').replace(/\r\n?/g, '\n').trimEnd();
     } catch { return ''; }
+  }
+
+  function assistantHasWorkStart(turn) {
+    try {
+      const roleNode = roleRoot(turn, 'assistant');
+      const source = roleNode?.querySelector?.('.markdown, [class*="prose"]') || roleNode;
+      if (!source) return false;
+      const copy = source.cloneNode(true);
+      for (const excluded of copy.querySelectorAll?.('pre, code, blockquote') || []) excluded.remove();
+      const text = String(copy.textContent || '').replace(/\r\n?/g, '\n');
+      return text.split('\n').some((line) => line.trim() === WORK_START_LINE);
+    } catch { return false; }
   }
 
   function composerElement() {
@@ -143,7 +162,7 @@
     const nodes = turns();
     let userIndex = -1;
     for (let index = 0; index < nodes.length; index += 1) if (roleOf(nodes[index]) === 'user') userIndex = index;
-    if (!identity || userIndex < 0) return { identity, promptKey: '', promptRevision: '', assistantKey: '', assistantRevision: '', statusCode: '' };
+    if (!identity || userIndex < 0) return { identity, promptKey: '', promptRevision: '', assistantKey: '', assistantRevision: '', statusCode: '', workStartSignal: false };
 
     const userId = turnId(nodes[userIndex], 'user', userIndex);
     const userText = turnText(nodes[userIndex], 'user');
@@ -163,7 +182,8 @@
       promptRevision: revisionOf(userText),
       assistantKey: assistantIndex >= 0 ? turnId(nodes[assistantIndex], 'assistant', assistantIndex) : '',
       assistantRevision: assistantText ? revisionOf(assistantText) : '',
-      statusCode: String(parsed?.statusCode || '')
+      statusCode: String(parsed?.statusCode || ''),
+      workStartSignal: assistantIndex >= 0 && assistantHasWorkStart(nodes[assistantIndex])
     };
   }
 
@@ -186,6 +206,7 @@
       assistantKey: turnState.assistantKey,
       assistantRevision: turnState.assistantRevision,
       statusCode: turnState.statusCode,
+      workStartSignal: turnState.workStartSignal === true,
       observable,
       online: navigator.onLine !== false,
       manualStopped,
@@ -338,6 +359,7 @@
   globalThis.__chatgptNotifierMonitorRuntime = Object.freeze({
     version: RUNTIME_VERSION,
     documentId,
+    workStartLine: WORK_START_LINE,
     snapshot,
     dispose() {
       disposed = true;
