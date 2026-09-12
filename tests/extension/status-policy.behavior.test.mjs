@@ -192,28 +192,33 @@ test('observation classifier distinguishes active work, missing status, silent s
   assert.equal(policy.classifyObservation({ workingDurationMs: 15 * 60_000 }).reason, 'long-thinking-diagnostic');
 });
 
-test('recovery budget permits at most one reload, one continuation, one format repair and two automatic messages per incident', () => {
+test('recovery budget permits at most three reloads, one continuation, one format repair and two automatic messages per incident', () => {
   const policy = loadPolicy();
-  const start = policy.beginRecoveryAction('reload', {}, { now: 1_000 });
-  assert.equal(start.allowed, true);
-  assert.equal(start.budget.reloads, 1);
-  assert.equal(start.budget.automaticMessages, 0);
-  assert.equal(policy.recoveryActionDecision('reload', start.budget, { now: 31_000 }).reason, 'incident-reload-cap-reached');
+  assert.equal(policy.thresholds.incidentReloadCap, 3);
+  let budget = {};
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const started = policy.beginRecoveryAction('reload', budget, { now: 1_000 + ((attempt - 1) * 30_000) });
+    assert.equal(started.allowed, true, `reload ${attempt}`);
+    assert.equal(started.budget.reloads, attempt);
+    assert.equal(started.budget.automaticMessages, 0);
+    budget = started.budget;
+  }
+  assert.equal(policy.recoveryActionDecision('reload', budget, { now: 91_000 }).reason, 'incident-reload-cap-reached');
 
-  const continued = policy.beginRecoveryAction('continue', start.budget, { now: 31_000 });
+  const continued = policy.beginRecoveryAction('continue', budget, { now: 91_000 });
   assert.equal(continued.allowed, true);
   assert.equal(continued.budget.continuations, 1);
   assert.equal(continued.budget.automaticMessages, 1);
   assert.equal(continued.budget.runGenerationActions, 1);
 
-  const repaired = policy.beginRecoveryAction('format-repair', continued.budget, { now: 61_000 });
+  const repaired = policy.beginRecoveryAction('format-repair', continued.budget, { now: 121_000 });
   assert.equal(repaired.allowed, true);
   assert.equal(repaired.budget.formatRepairs, 1);
   assert.equal(repaired.budget.automaticMessages, 2);
   assert.equal(repaired.budget.runGenerationActions, 2);
 
-  assert.equal(policy.recoveryActionDecision('continue', repaired.budget, { now: 91_000 }).allowed, false);
-  assert.equal(policy.recoveryActionDecision('format-repair', repaired.budget, { now: 91_000 }).allowed, false);
+  assert.equal(policy.recoveryActionDecision('continue', repaired.budget, { now: 151_000 }).allowed, false);
+  assert.equal(policy.recoveryActionDecision('format-repair', repaired.budget, { now: 151_000 }).allowed, false);
 });
 
 test('uncertain action, profile breaker, spacing and whole-run cap fail closed', () => {
