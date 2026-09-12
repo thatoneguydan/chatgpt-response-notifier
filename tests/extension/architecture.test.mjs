@@ -146,12 +146,17 @@ test('one authoritative automation state enables monitoring and recovery togethe
 });
 
 test('build START scope is exact, assistant-only, fresh-request-bound and terminal code remains fallback', () => {
+  const parser = text('extension/status-code.js');
   const page = text('extension/monitor-script.js');
   const monitor = text('extension/monitor-background.js');
-  assert.match(page, /WORK_START_LINE = '\[GITHUB_WORK: START\]'/);
+  assert.match(parser, /WORK_START_SIGNAL = '\[GITHUB_WORK: START\]'/);
+  assert.match(parser, /WORK_START_LINE_PATTERN = \/\^\\\[GITHUB_WORK: START\\\]\$\//);
   assert.match(page, /assistantHasWorkStart/);
-  assert.match(page, /querySelectorAll\?\.\('pre, code, blockquote'\)/);
-  assert.match(page, /line\.trim\(\) === WORK_START_LINE/);
+  assert.match(page, /ChatGPTNotifierStatusCode\?\.isWorkStartSignal/);
+  assert.match(page, /pre, code, blockquote, ul, ol, li/);
+  assert.match(page, /data-message-author-role=\\"tool\\"/);
+  assert.match(page, /parser\(line\) === true/);
+  assert.doesNotMatch(page, /WORK_START_LINE\s*=/);
   assert.match(monitor, /freshRequestEvidence/);
   assert.match(monitor, /clean\.workStartSignal === true \|\| statusIsValid/);
   assert.match(monitor, /enrollment\?\.userPaused !== true/);
@@ -174,7 +179,9 @@ test('closing a tab is quiet and duplicate conversation ownership is reconciled 
   assert.match(monitor, /owner-transferred-after-close/);
   assert.match(monitor, /owner-tab-closed-quiet/);
   assert.match(monitor, /state:\s*'detached'/);
-  assert.match(monitor, /reason\) === 'owner-tab-closed'/);
+  assert.match(monitor, /function closeDerivedReason/);
+  assert.match(monitor, /includes\('owner-tab-closed'\)/);
+  assert.match(monitor, /const conversationId = tabConversations\.get\(tabId\) \|\| '';\s*const provisional = await getProvisional\(tabId\)/);
   assert.doesNotMatch(monitor, /noteTabUnobservable\(tabId, 'owner-tab-closed'\)/);
   assert.doesNotMatch(monitor, /tabs\.update\([^)]*active:\s*true/);
   assert.doesNotMatch(monitor, /windows\.update\([^)]*focused:\s*true/);
@@ -199,7 +206,8 @@ test('attention.required is durable and separate from rolling coded history', ()
   assert.match(monitor, /kind:\s*'attention\.required'/);
   assert.match(monitor, /\['toast\.accepted'\]/);
   assert.match(monitor, /delivered:\s*true/);
-  assert.match(monitor, /item\.reason !== 'owner-tab-closed'/);
+  assert.match(monitor, /!closeDerivedReason\(item\.reason\)/);
+  assert.match(monitor, /currentRun\?\.state === 'detached'/);
   assert.match(popup, /ACK_RECOVERY_ATTENTION/);
   assert.match(record, /Kind \{ get; init; \} = "coded-result"/);
   assert.match(record, /"coded-result" or "attention\.required"/);
