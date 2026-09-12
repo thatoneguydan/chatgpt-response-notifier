@@ -6,6 +6,7 @@
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAgKfb4PQfnoU73bEG3hR+ryqQs8YytrhH9OvATHAHdaCbbOlGBwrb23bBL4lFFSFgyl7av7ra6ajkx5JH3zG116RMAnZ5iO4jgg/eNeoD3p4/fEqEE75GqzMkoDB4+/nDfbe57R1D/+OVzwBPRPAYzQukMpWn5CbQY8HnawFQ60VDh75UGpNYeGBoBlJfOr6JxsSdt6FL22n7zpoKIc3V7ZvIw6CJRIQ3Uif6wIXpFeAmAK3F2TfI2q5bWTTb+3msWiKHZ/ngqjlEPguNefjSs+z+y7StVAm2vU6tg9t3HZQaTzar+rVxTQ5fUY2tYYPPCI16sGMfydKRRsNh1hJfpwIDAQAB",
   "minimum_chrome_version": "116",
   "permissions": [
+    "alarms",
     "scripting",
     "tabs",
     "webRequest"
