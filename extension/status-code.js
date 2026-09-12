@@ -47,7 +47,7 @@
   }
 
   function isWorkStartSignal(value) {
-    return WORK_START_LINE_PATTERN.test(String(value || '').trim());
+    return WORK_START_LINE_PATTERN.test(String(value || ''));
   }
 
   function outsideFenceFlags(lines) {
