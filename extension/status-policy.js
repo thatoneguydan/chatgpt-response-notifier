@@ -1,9 +1,10 @@
 'use strict';
 
 (() => {
-  if (globalThis.ChatGPTNotifierContinuationPolicy) return;
+  const RUNTIME_VERSION = 2;
+  if (globalThis.ChatGPTNotifierContinuationPolicy?.runtimeVersion === RUNTIME_VERSION) return;
 
-  const MONITOR_POLICY_VERSION = 1;
+  const MONITOR_POLICY_VERSION = 2;
   const MISSING_FOOTER_GRACE_MS = 30_000;
   const SILENT_IDLE_FIRST_MS = 90_000;
   const SILENT_IDLE_CONFIRM_MS = 30_000;
@@ -122,6 +123,7 @@
   }
 
   globalThis.ChatGPTNotifierContinuationPolicy = Object.freeze({
+    runtimeVersion: RUNTIME_VERSION,
     monitorPolicyVersion: MONITOR_POLICY_VERSION,
     thresholds: Object.freeze({
       missingFooterGraceMs: MISSING_FOOTER_GRACE_MS,
