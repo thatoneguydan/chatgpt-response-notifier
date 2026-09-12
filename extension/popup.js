@@ -5,16 +5,17 @@ const empty = document.getElementById('empty');
 const version = document.getElementById('version');
 const testButton = document.getElementById('test');
 const updateButton = document.getElementById('checkUpdate');
-const monitorToggle = document.getElementById('monitorToggle');
-const recoveryToggle = document.getElementById('recoveryToggle');
-const resumeRecovery = document.getElementById('resumeRecovery');
+const automationToggle = document.getElementById('automationToggle');
 const monitorDetail = document.getElementById('monitorDetail');
+const monitorError = document.getElementById('monitorError');
 const attentionSection = document.getElementById('attentionSection');
 const attentionRoot = document.getElementById('attention');
 
 version.textContent = `v${chrome.runtime.getManifest().version}`;
-let activeMonitoring = false;
-let activeRecovery = false;
+
+let verifiedAutomation = null;
+let automationConfirmed = false;
+let automationBusy = false;
 
 function formatTime(value) {
   try {
@@ -141,61 +142,164 @@ async function loadHistory() {
   }
 }
 
-function monitorDescription(overview, recoveryOverview) {
-  if (!overview?.activeConversationId) return 'Open a ChatGPT conversation';
-  if (!overview.monitoring) return 'Off for this conversation';
-  const run = overview.run;
-  const reason = run ? String(run.reason || run.state || 'observing').replaceAll('-', ' ') : 'waiting for the next request';
-  const recovery = recoveryOverview?.recoveryEnabled === true ? 'recovery on' : 'recovery off';
-  return `On — ${reason} · ${recovery}`;
+function humanizeReason(value) {
+  return String(value || '').replaceAll('-', ' ').trim();
 }
 
-function recoveryNeedsResume(overview) {
+function recoveryPauseReason(overview) {
   const recovery = overview?.recovery;
-  if (!recovery) return false;
-  if (recovery.profile?.breakerOpen === true) return true;
-  if (Number(recovery.humanRun?.generationActions || 0) >= 12) return true;
-  return recovery.incident?.state === 'attention' && recoveryEnabledReason(recovery.incident?.reason);
+  if (recovery?.profile?.breakerOpen === true) return recovery.profile.breakerReason || 'recovery breaker open';
+  if (Number(recovery?.humanRun?.generationActions || 0) >= 12) return 'run action limit reached';
+  if (recovery?.incident?.state === 'attention') return recovery.incident.reason || 'recovery needs attention';
+  return '';
 }
 
-function recoveryEnabledReason(reason) {
-  return ['run-action-cap-reached', 'action-outcome-uncertain', 'action-interrupted-uncertain', 'profile-breaker-open', 'rate-limited'].includes(String(reason || ''));
+function detailForOverview(overview) {
+  if (!Number.isInteger(overview?.activeTabId)) return 'Open ChatGPT';
+  if (overview.pausedByUser === true) return 'Paused by you';
+  const guarded = recoveryPauseReason(overview);
+  if (overview.automationEnabled === true && guarded) return `Paused — ${humanizeReason(guarded)}`;
+  if (overview.automationEnabled === true) {
+    const reason = overview?.run?.reason || overview?.run?.state || (overview.provisional ? 'waiting for the next request' : 'waiting for build work');
+    return `Monitoring + recovery on — ${humanizeReason(reason)}`;
+  }
+  if (overview.provisional) return 'Ready — monitoring + recovery will attach to the next submitted request';
+  if (!overview.activeConversationId) return 'Ready — monitor the next build request';
+  return 'Ready — build work will enable automatically when recognized';
 }
 
-async function loadMonitorOverview() {
-  try {
-    const [overview, recoveryOverview] = await Promise.all([
-      chrome.runtime.sendMessage({ type: 'GET_MONITOR_OVERVIEW' }),
-      chrome.runtime.sendMessage({ type: 'GET_BOUNDED_RECOVERY_OVERVIEW' })
-    ]);
-    if (!overview?.ok) throw new Error(overview?.error || 'Monitor overview unavailable.');
+function buttonMode(overview) {
+  if (!Number.isInteger(overview?.activeTabId)) return { label: 'Monitor', disabled: true, enabledClass: false, warningClass: false, desired: true, resume: false };
+  if (overview.pausedByUser === true) return { label: 'Resume', disabled: false, enabledClass: false, warningClass: true, desired: true, resume: true };
+  if (overview.automationEnabled === true && recoveryPauseReason(overview)) {
+    return { label: 'Resume', disabled: false, enabledClass: true, warningClass: true, desired: true, resume: true };
+  }
+  if (overview.automationEnabled === true) return { label: 'Pause', disabled: false, enabledClass: true, warningClass: false, desired: false, resume: false };
+  return { label: 'Monitor', disabled: false, enabledClass: false, warningClass: false, desired: true, resume: false };
+}
 
-    activeMonitoring = overview.monitoring === true;
-    activeRecovery = recoveryOverview?.ok === true && recoveryOverview.recoveryEnabled === true;
-    monitorToggle.disabled = !overview.activeConversationId;
-    monitorToggle.textContent = activeMonitoring ? 'Stop' : 'Monitor';
-    monitorToggle.classList.toggle('enabled', activeMonitoring);
+function renderAttention(overview) {
+  const attention = Array.isArray(overview?.attention) ? overview.attention.slice(0, 20) : [];
+  attentionRoot.replaceChildren();
+  for (const record of attention) attentionRoot.append(makeAttentionItem(record));
+  attentionSection.hidden = attention.length === 0;
+}
 
-    recoveryToggle.disabled = !overview.activeConversationId;
-    recoveryToggle.textContent = activeRecovery ? 'Recover ✓' : 'Recover';
-    recoveryToggle.classList.toggle('enabled', activeRecovery);
-    recoveryToggle.title = activeRecovery
-      ? 'Bounded automatic recovery is enabled for this conversation'
-      : 'Enable bounded automatic recovery for this conversation';
+function showAutomationError(message) {
+  monitorError.hidden = false;
+  monitorError.textContent = message || 'Build automation state could not be verified.';
+}
 
-    resumeRecovery.hidden = !(activeRecovery && recoveryNeedsResume(recoveryOverview));
-    monitorDetail.textContent = monitorDescription(overview, recoveryOverview);
+function clearAutomationError() {
+  monitorError.hidden = true;
+  monitorError.textContent = '';
+}
 
-    const attention = Array.isArray(overview.attention) ? overview.attention.slice(0, 20) : [];
-    attentionRoot.replaceChildren();
-    for (const record of attention) attentionRoot.append(makeAttentionItem(record));
-    attentionSection.hidden = attention.length === 0;
-  } catch {
-    monitorToggle.disabled = true;
-    recoveryToggle.disabled = true;
-    resumeRecovery.hidden = true;
-    monitorDetail.textContent = 'Monitoring state unavailable';
+function renderAutomation(overview, { confirmed = true } = {}) {
+  const state = overview || verifiedAutomation;
+  if (!state) {
+    monitorDetail.textContent = 'Build automation state unavailable';
+    automationToggle.textContent = 'Monitor';
+    automationToggle.disabled = true;
+    automationToggle.classList.remove('enabled', 'warning');
     attentionSection.hidden = true;
+    return;
+  }
+
+  const mode = buttonMode(state);
+  monitorDetail.textContent = `${detailForOverview(state)}${confirmed ? '' : ' · state unconfirmed'}`;
+  automationToggle.textContent = mode.label;
+  automationToggle.disabled = automationBusy || mode.disabled;
+  automationToggle.classList.toggle('enabled', mode.enabledClass);
+  automationToggle.classList.toggle('warning', mode.warningClass);
+  renderAttention(state);
+}
+
+function normalizeOverview(result) {
+  return {
+    activeTabId: Number.isInteger(result?.activeTabId) ? result.activeTabId : null,
+    activeConversationId: String(result?.activeConversationId || ''),
+    activeConversationUrl: String(result?.activeConversationUrl || ''),
+    automationEnabled: result?.automationEnabled === true,
+    monitoring: result?.monitoring === true,
+    recoveryEnabled: result?.recoveryEnabled === true,
+    pausedByUser: result?.pausedByUser === true,
+    stateRevision: Math.max(0, Number(result?.stateRevision || 0)),
+    enrollmentSource: String(result?.enrollmentSource || ''),
+    provisional: result?.provisional === true,
+    run: result?.run || null,
+    recovery: result?.recovery || null,
+    attention: Array.isArray(result?.attention) ? result.attention : [],
+    profile: result?.profile || null,
+    helperConnected: result?.helperConnected === true
+  };
+}
+
+async function loadAutomationOverview({ preserveOnFailure = true } = {}) {
+  try {
+    const result = await chrome.runtime.sendMessage({ type: 'GET_BUILD_AUTOMATION_OVERVIEW' });
+    if (!result?.ok) throw new Error(result?.error || 'Build automation overview unavailable.');
+    const next = normalizeOverview(result);
+    if (next.automationEnabled !== next.recoveryEnabled || next.automationEnabled !== next.monitoring) {
+      throw new Error('Build automation state is inconsistent; monitoring and recovery must match.');
+    }
+    verifiedAutomation = next;
+    automationConfirmed = true;
+    clearAutomationError();
+    renderAutomation(next, { confirmed: true });
+    return next;
+  } catch (error) {
+    automationConfirmed = false;
+    showAutomationError(String(error?.message || error || 'Build automation state unavailable.'));
+    if (!preserveOnFailure) verifiedAutomation = null;
+    renderAutomation(verifiedAutomation, { confirmed: false });
+    return null;
+  }
+}
+
+async function setBuildAutomation() {
+  if (automationBusy || !verifiedAutomation || !Number.isInteger(verifiedAutomation.activeTabId)) return;
+  const mode = buttonMode(verifiedAutomation);
+  const requestId = crypto.randomUUID();
+  const before = verifiedAutomation;
+  automationBusy = true;
+  automationToggle.disabled = true;
+  clearAutomationError();
+
+  try {
+    const result = await chrome.runtime.sendMessage({
+      type: 'SET_BUILD_AUTOMATION_STATE',
+      enabled: mode.desired,
+      resumeExistingRun: mode.resume,
+      tabId: before.activeTabId,
+      conversationId: before.activeConversationId,
+      expectedRevision: before.stateRevision,
+      requestId
+    });
+    if (!result?.ok) throw new Error(result?.error || result?.reason || 'Build automation change was rejected.');
+    if (String(result.requestId || '') !== requestId) throw new Error('Build automation confirmation did not match this request.');
+
+    const next = normalizeOverview(result);
+    const expectedEnabled = mode.desired === true;
+    if (next.automationEnabled !== expectedEnabled || next.recoveryEnabled !== expectedEnabled || next.monitoring !== expectedEnabled) {
+      throw new Error('Build automation write could not be verified from readback.');
+    }
+    if (mode.desired === false && next.pausedByUser !== true) throw new Error('Pause was not persisted as an operator override.');
+    if (next.stateRevision <= before.stateRevision) throw new Error('Build automation revision did not advance.');
+
+    verifiedAutomation = next;
+    automationConfirmed = true;
+    renderAutomation(next, { confirmed: true });
+  } catch (error) {
+    automationConfirmed = false;
+    showAutomationError(String(error?.message || error || 'Build automation change failed.'));
+    renderAutomation(verifiedAutomation, { confirmed: false });
+    // Reconcile an unknown outcome. A successful committed write may have lost
+    // its response, so never invert the previous boolean or blindly retry it.
+    await loadAutomationOverview({ preserveOnFailure: true });
+  } finally {
+    automationBusy = false;
+    renderAutomation(verifiedAutomation, { confirmed: automationConfirmed });
   }
 }
 
@@ -226,30 +330,6 @@ updateButton.addEventListener('click', () => {
   runTinyAction(updateButton, { type: 'CHECK_MANAGED_UPDATE' });
 });
 
-monitorToggle.addEventListener('click', async () => {
-  monitorToggle.disabled = true;
-  const desired = !activeMonitoring;
-  try {
-    const result = await chrome.runtime.sendMessage({ type: 'SET_ACTIVE_CHAT_MONITORING', enabled: desired });
-    if (result?.ok) activeMonitoring = result.monitoring === true;
-  } catch {}
-  await loadMonitorOverview();
-});
+automationToggle.addEventListener('click', setBuildAutomation);
 
-recoveryToggle.addEventListener('click', async () => {
-  recoveryToggle.disabled = true;
-  try {
-    const result = await chrome.runtime.sendMessage({ type: 'SET_ACTIVE_CHAT_RECOVERY', enabled: !activeRecovery });
-    if (result?.ok) activeRecovery = result.recoveryEnabled === true;
-  } catch {}
-  await loadMonitorOverview();
-});
-
-resumeRecovery.addEventListener('click', async () => {
-  resumeRecovery.disabled = true;
-  try { await chrome.runtime.sendMessage({ type: 'RESUME_ACTIVE_CHAT_RECOVERY' }); } catch {}
-  await loadMonitorOverview();
-  resumeRecovery.disabled = false;
-});
-
-Promise.all([loadHistory(), loadMonitorOverview()]).catch(() => {});
+Promise.all([loadHistory(), loadAutomationOverview({ preserveOnFailure: false })]).catch(() => {});
