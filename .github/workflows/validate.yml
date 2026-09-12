@@ -16,7 +16,9 @@ jobs:
       ${{ github.event_name == 'workflow_dispatch' ||
           (github.event.pull_request.head.repo.full_name == github.repository &&
            github.event.pull_request.head.repo.owner.login == github.repository_owner) }}
-    runs-on: [self-hosted, Windows, X64, glass-builder, glass-chatgpt-response-notifier]
+    # Repository scope isolates this job to the chatgpt-response-notifier runner;
+    # the runner name itself is not a GitHub Actions label.
+    runs-on: [self-hosted, Windows, X64, glass-builder]
     timeout-minutes: 15
     steps:
       - name: Checkout
