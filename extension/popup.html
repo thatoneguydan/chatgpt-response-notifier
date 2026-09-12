@@ -25,9 +25,11 @@
     #monitorState { min-width: 0; flex: 1; color: #a9a9a9; line-height: 1.25; }
     #monitorState strong { display: block; color: #e7e7e7; font-size: 11.5px; }
     #monitorDetail { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; }
+    #monitorError { display: block; margin-top: 3px; color: #e6a39a; font-size: 10.5px; line-height: 1.25; white-space: normal; }
+    #monitorError[hidden] { display: none; }
     #monitorControls { display: flex; gap: 5px; align-items: center; }
     #attentionSection { border-bottom: 1px solid #303030; }
-    #attentionSection[hidden], #resumeRecovery[hidden] { display: none; }
+    #attentionSection[hidden] { display: none; }
     .section-title { padding: 7px 9px 3px; color: #d8a85c; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
     .attention-item {
       display: grid;
@@ -96,15 +98,14 @@
   </style>
 </head>
 <body>
-  <section id="monitorBar" aria-label="Build monitoring">
+  <section id="monitorBar" aria-label="Build automation">
     <div id="monitorState">
-      <strong>Build monitoring</strong>
-      <span id="monitorDetail">Open a ChatGPT conversation</span>
+      <strong>Build automation</strong>
+      <span id="monitorDetail">Open ChatGPT</span>
+      <span id="monitorError" role="status" hidden></span>
     </div>
     <div id="monitorControls">
-      <button class="mini" id="monitorToggle" disabled>Monitor</button>
-      <button class="mini" id="recoveryToggle" disabled title="Allow bounded background recovery for this conversation">Recover</button>
-      <button class="mini warning" id="resumeRecovery" hidden title="Reset the run fuse and resume bounded recovery after an explicit stop">Resume</button>
+      <button class="mini" id="automationToggle" disabled>Monitor</button>
     </div>
   </section>
   <section id="attentionSection" aria-label="Recovery attention" hidden>
