@@ -9,6 +9,7 @@
   const RUN_STORE = 'runs';
   const ATTENTION_STORE = 'attention';
   const PROFILE_STORE = 'profile';
+  const AUTOMATION_SCHEMA_VERSION = 2;
   const MAX_RUN_AGE_MS = 14 * 24 * 60 * 60 * 1000;
   const MAX_ATTENTION = 20;
   const REQUEST_FILTER = {
@@ -47,9 +48,7 @@
     return path === '/backend-api/f/conversation' || path === '/backend-api/conversation';
   }
 
-  function clone(value) {
-    return value ? structuredClone(value) : value;
-  }
+  const clone = (value) => value ? structuredClone(value) : value;
 
   function openDatabase() {
     if (databasePromise) return databasePromise;
@@ -95,6 +94,17 @@
     return clone(record);
   }
 
+  async function deleteRecord(storeName, key) {
+    const database = await openDatabase();
+    await new Promise((resolve, reject) => {
+      const transaction = database.transaction(storeName, 'readwrite');
+      transaction.objectStore(storeName).delete(key);
+      transaction.oncomplete = resolve;
+      transaction.onerror = () => reject(transaction.error || new Error(`Could not delete ${storeName}.`));
+      transaction.onabort = () => reject(transaction.error || new Error(`${storeName} delete was aborted.`));
+    });
+  }
+
   async function getAll(storeName) {
     const database = await openDatabase();
     const transaction = database.transaction(storeName, 'readonly');
@@ -102,15 +112,64 @@
     return (Array.isArray(records) ? records : []).map(clone);
   }
 
-  async function setEnrollment(identity, enabled, source = 'operator') {
+  function operatorPauseSource(source) {
+    return String(source || '') === 'operator-pause';
+  }
+
+  function operatorEnableSource(source) {
+    return ['operator', 'operator-resume', 'operator-recovery', 'operator-provisional'].includes(String(source || ''));
+  }
+
+  async function migrateEnrollmentRecord(record) {
+    if (!record || Number(record.schemaVersion || 0) >= AUTOMATION_SCHEMA_VERSION) return record;
+    const explicitLegacyPause = record.enabled === false && String(record.source || '') === 'operator';
+    const migrated = {
+      ...record,
+      schemaVersion: AUTOMATION_SCHEMA_VERSION,
+      revision: Math.max(1, Number(record.revision || 0) + 1),
+      enabled: explicitLegacyPause ? false : record.enabled === true,
+      recoveryEnabled: explicitLegacyPause ? false : record.enabled === true,
+      userPaused: explicitLegacyPause,
+      source: explicitLegacyPause ? 'operator-pause' : String(record.source || 'migration'),
+      updatedAt: Date.now()
+    };
+    await putRecord(ENROLLMENT_STORE, migrated);
+    return migrated;
+  }
+
+  async function getEnrollment(conversationId) {
+    const record = await getRecord(ENROLLMENT_STORE, String(conversationId || ''));
+    return await migrateEnrollmentRecord(record);
+  }
+
+  async function setEnrollment(identity, enabled, source = 'operator', options = {}) {
     if (!identity?.id) return null;
-    const existing = await getRecord(ENROLLMENT_STORE, identity.id);
+    const existing = await getEnrollment(identity.id);
+    const expectedRevision = options.expectedRevision;
+    if (expectedRevision !== undefined && expectedRevision !== null && Number(expectedRevision) !== Number(existing?.revision || 0)) {
+      const error = new Error('Automation state changed before this command was applied.');
+      error.code = 'state-revision-mismatch';
+      error.current = existing;
+      throw error;
+    }
     const now = Date.now();
+    const sourceName = String(source || 'operator');
+    const paused = operatorPauseSource(sourceName)
+      ? true
+      : operatorEnableSource(sourceName)
+        ? false
+        : existing?.userPaused === true;
+    const isEnabled = enabled === true && !paused;
     const record = {
+      ...(existing || {}),
       conversationId: identity.id,
-      conversationUrl: identity.url,
-      enabled: enabled === true,
-      source: String(source || 'operator'),
+      conversationUrl: identity.url || existing?.conversationUrl || '',
+      schemaVersion: AUTOMATION_SCHEMA_VERSION,
+      revision: Number(existing?.revision || 0) + 1,
+      enabled: isEnabled,
+      recoveryEnabled: isEnabled,
+      userPaused: paused,
+      source: sourceName,
       enrolledAt: existing?.enrolledAt || now,
       updatedAt: now
     };
@@ -118,8 +177,38 @@
     return record;
   }
 
-  async function getEnrollment(conversationId) {
-    return await getRecord(ENROLLMENT_STORE, String(conversationId || ''));
+  const provisionalKey = (tabId) => `automation-provisional:${Number(tabId)}`;
+
+  async function getProvisional(tabId) {
+    if (!Number.isInteger(tabId)) return null;
+    return await getRecord(PROFILE_STORE, provisionalKey(tabId));
+  }
+
+  async function setProvisional(tabId, enabled, source, expectedRevision = null) {
+    const key = provisionalKey(tabId);
+    const existing = await getRecord(PROFILE_STORE, key);
+    if (expectedRevision !== null && expectedRevision !== undefined && Number(expectedRevision) !== Number(existing?.revision || 0)) {
+      const error = new Error('Automation state changed before this command was applied.');
+      error.code = 'state-revision-mismatch';
+      error.current = existing;
+      throw error;
+    }
+    const now = Date.now();
+    const paused = operatorPauseSource(source);
+    const record = {
+      key,
+      schemaVersion: AUTOMATION_SCHEMA_VERSION,
+      revision: Number(existing?.revision || 0) + 1,
+      tabId,
+      enabled: enabled === true && !paused,
+      recoveryEnabled: enabled === true && !paused,
+      userPaused: paused,
+      source: String(source || 'operator'),
+      armedRequestId: String(existing?.armedRequestId || ''),
+      armedAt: Number(existing?.armedAt || 0),
+      updatedAt: now
+    };
+    return await putRecord(PROFILE_STORE, record);
   }
 
   function runKey(snapshot) {
@@ -141,6 +230,7 @@
       assistantKey: String(snapshot.assistantKey || ''),
       assistantRevision: String(snapshot.assistantRevision || ''),
       statusCode: String(snapshot.statusCode || ''),
+      workStartSignal: snapshot.workStartSignal === true,
       observable: snapshot.observable !== false,
       online: snapshot.online !== false,
       manualStopped: snapshot.manualStopped === true,
@@ -230,14 +320,15 @@
       'rate-limited': 'ChatGPT reported a rate limit. Automatic recovery is paused until you explicitly resume it.',
       'auth-required': 'ChatGPT requires authentication. Automatic recovery will not interact with sign-in controls.',
       'approval-required': 'ChatGPT requires an approval or confirmation. Automatic recovery will not approve it.',
-      'page-unobservable': 'The monitored ChatGPT page cannot currently be observed. No reload or Send action was attempted.',
-      'owner-tab-closed': 'The monitored ChatGPT tab was closed before the run reached a visible terminal outcome.'
+      'page-unobservable': 'The monitored ChatGPT page cannot currently be observed. No reload or Send action was attempted.'
     };
     return labels[reason] || `The monitored build needs attention: ${reason}.`;
   }
 
   async function ensureAttention(run, reason) {
-    if (!run?.runKey || !reason) return null;
+    if (!run?.runKey || !reason || String(reason) === 'owner-tab-closed') return null;
+    const enrollment = await getEnrollment(run.conversationId);
+    if (enrollment?.enabled !== true || enrollment?.userPaused === true) return null;
     const attentionId = `attention:${run.runId}:${reason}`;
     const existing = await getRecord(ATTENTION_STORE, attentionId);
     if (existing) return existing;
@@ -278,18 +369,18 @@
     }
   }
 
+  async function acknowledgeAttention(attentionId) {
+    const record = await getRecord(ATTENTION_STORE, String(attentionId || ''));
+    if (!record) return false;
+    await putRecord(ATTENTION_STORE, { ...record, acknowledged: true, updatedAt: Date.now() });
+    try { if (typeof sendNative === 'function') sendNative({ type: 'toast.dismissEvent', notificationId: record.attentionId }); } catch {}
+    return true;
+  }
+
   async function pruneAttention() {
     const records = await getAll(ATTENTION_STORE);
     records.sort((left, right) => Number(right.createdAt || 0) - Number(left.createdAt || 0));
-    for (const stale of records.slice(MAX_ATTENTION)) {
-      const database = await openDatabase();
-      await new Promise((resolve, reject) => {
-        const transaction = database.transaction(ATTENTION_STORE, 'readwrite');
-        transaction.objectStore(ATTENTION_STORE).delete(stale.attentionId);
-        transaction.oncomplete = resolve;
-        transaction.onerror = () => reject(transaction.error || new Error('Could not prune attention state.'));
-      });
-    }
+    for (const stale of records.slice(MAX_ATTENTION)) await deleteRecord(ATTENTION_STORE, stale.attentionId);
   }
 
   async function flushAttention() {
@@ -297,9 +388,11 @@
     attentionFlushPromise = (async () => {
       if (typeof sendNativeRequest !== 'function') return;
       const records = (await getAll(ATTENTION_STORE))
-        .filter((item) => !item.delivered && !item.acknowledged)
+        .filter((item) => !item.delivered && !item.acknowledged && item.reason !== 'owner-tab-closed')
         .sort((left, right) => Number(left.createdAt || 0) - Number(right.createdAt || 0));
       for (const record of records) {
+        const enrollment = await getEnrollment(record.conversationId);
+        if (enrollment?.enabled !== true || enrollment?.userPaused === true) continue;
         const response = await sendNativeRequest({
           type: 'toast.show',
           notification: {
@@ -320,17 +413,38 @@
     return await attentionFlushPromise;
   }
 
+  async function migrateProvisionalIfReady(clean, sender) {
+    const tabId = sender?.tab?.id;
+    if (!Number.isInteger(tabId) || !clean.conversationId) return null;
+    const provisional = await getProvisional(tabId);
+    if (!provisional) return null;
+    if (Number(provisional.armedAt || 0) <= 0) {
+      await deleteRecord(PROFILE_STORE, provisionalKey(tabId));
+      return null;
+    }
+    const identity = { id: clean.conversationId, url: clean.conversationUrl };
+    const record = await setEnrollment(identity, provisional.enabled === true, provisional.userPaused ? 'operator-pause' : 'operator-provisional');
+    await deleteRecord(PROFILE_STORE, provisionalKey(tabId));
+    return record;
+  }
+
   async function handleSnapshot(snapshot, sender) {
     const clean = sanitizedSnapshot(snapshot);
     if (!clean.conversationId || !clean.promptKey) return null;
     if (Number.isInteger(sender?.tab?.id)) tabConversations.set(sender.tab.id, clean.conversationId);
 
+    let enrollment = await migrateProvisionalIfReady(clean, sender) || await getEnrollment(clean.conversationId);
     const statusIsValid = Boolean(globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(clean.statusCode));
-    let enrollment = await getEnrollment(clean.conversationId);
-    if (statusIsValid && enrollment?.enabled !== true) {
-      enrollment = await setEnrollment({ id: clean.conversationId, url: clean.conversationUrl }, true, 'coded-turn');
+    const freshRequestEvidence = clean.requestStartedAt > 0 && ['started', 'completed', 'error'].includes(clean.requestPhase);
+    const recognizedScope = freshRequestEvidence && (clean.workStartSignal === true || statusIsValid);
+    if (recognizedScope && enrollment?.enabled !== true && enrollment?.userPaused !== true) {
+      enrollment = await setEnrollment(
+        { id: clean.conversationId, url: clean.conversationUrl },
+        true,
+        clean.workStartSignal === true ? 'work-start-signal' : 'coded-turn'
+      );
     }
-    if (enrollment?.enabled !== true) return null;
+    if (enrollment?.enabled !== true || enrollment?.userPaused === true) return null;
     return await updateRun(clean, sender);
   }
 
@@ -354,6 +468,17 @@
     } catch {}
   }
 
+  async function armProvisionalForRequest(tabId, requestId) {
+    const provisional = await getProvisional(tabId);
+    if (!provisional || provisional.enabled !== true || provisional.userPaused === true) return;
+    await putRecord(PROFILE_STORE, {
+      ...provisional,
+      armedRequestId: String(requestId || ''),
+      armedAt: Date.now(),
+      updatedAt: Date.now()
+    });
+  }
+
   async function injectMonitorIntoExistingTabs() {
     let tabs = [];
     try { tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] }); } catch { return; }
@@ -372,17 +497,25 @@
     }
   }
 
-  async function activeChatIdentity() {
+  async function activeChatTarget() {
     let tabs = [];
-    try { tabs = await chrome.tabs.query({ active: true, currentWindow: true }); } catch { return null; }
+    try { tabs = await chrome.tabs.query({ active: true, currentWindow: true, url: ['https://chatgpt.com/*'] }); } catch { return null; }
     const tab = tabs[0];
-    const identity = conversationFromUrl(tab?.url || '');
-    return identity && Number.isInteger(tab?.id) ? { ...identity, tab } : null;
+    if (!Number.isInteger(tab?.id)) return null;
+    const identity = conversationFromUrl(tab.url || '');
+    return { tab, id: identity?.id || '', url: identity?.url || String(tab.url || '') };
+  }
+
+  async function activeChatIdentity() {
+    const active = await activeChatTarget();
+    return active?.id ? active : null;
   }
 
   async function monitorOverview(identity = null) {
-    const active = identity || await activeChatIdentity();
+    const active = identity || await activeChatTarget();
     const enrollment = active?.id ? await getEnrollment(active.id) : null;
+    const provisional = !active?.id && Number.isInteger(active?.tab?.id) ? await getProvisional(active.tab.id) : null;
+    const state = enrollment || provisional;
     const run = active?.id ? await latestRunForConversation(active.id) : null;
     const attention = (await getAll(ATTENTION_STORE))
       .filter((item) => !item.acknowledged)
@@ -391,36 +524,113 @@
     const profile = await readProfileState();
     let helperConnected = false;
     try { helperConnected = typeof bridgeSocket !== 'undefined' && bridgeSocket?.readyState === WebSocket.OPEN; } catch {}
+    let recovery = null;
+    try { if (active?.id) recovery = await globalThis.__chatgptNotifierBoundedRecovery?.overview?.(active.id) || null; } catch {}
     return {
+      activeTabId: Number.isInteger(active?.tab?.id) ? active.tab.id : null,
       activeConversationId: active?.id || '',
       activeConversationUrl: active?.url || '',
-      monitoring: enrollment?.enabled === true,
-      enrollmentSource: enrollment?.source || '',
+      automationEnabled: state?.enabled === true && state?.userPaused !== true,
+      monitoring: state?.enabled === true && state?.userPaused !== true,
+      recoveryEnabled: state?.enabled === true && state?.userPaused !== true,
+      pausedByUser: state?.userPaused === true,
+      stateRevision: Number(state?.revision || 0),
+      enrollmentSource: state?.source || '',
+      provisional: !active?.id && Boolean(provisional),
       run,
+      recovery,
       attention,
       profile,
       helperConnected
     };
   }
 
-  async function acknowledgeAttention(attentionId) {
-    const record = await getRecord(ATTENTION_STORE, String(attentionId || ''));
-    if (!record) return false;
-    await putRecord(ATTENTION_STORE, { ...record, acknowledged: true, updatedAt: Date.now() });
-    try { if (typeof sendNative === 'function') sendNative({ type: 'toast.dismissEvent', notificationId: record.attentionId }); } catch {}
-    return true;
+  async function setActiveAutomation(message) {
+    const active = await activeChatTarget();
+    if (!active) return { ok: false, error: 'Open ChatGPT to change build automation.' };
+    if (Number.isInteger(message?.tabId) && message.tabId !== active.tab.id) return { ok: false, error: 'The active ChatGPT tab changed before the command was applied.', reason: 'target-tab-changed' };
+    if (message?.conversationId && String(message.conversationId) !== String(active.id || '')) return { ok: false, error: 'The active ChatGPT conversation changed before the command was applied.', reason: 'target-conversation-changed' };
+
+    const enabled = message?.enabled === true;
+    const source = enabled ? (message?.resumeExistingRun === true ? 'operator-resume' : 'operator') : 'operator-pause';
+    try {
+      if (active.id) {
+        await setEnrollment(active, enabled, source, { expectedRevision: message?.expectedRevision });
+        if (enabled) {
+          try {
+            const result = await chrome.tabs.sendMessage(active.tab.id, { type: 'CHATGPT_MONITOR_QUERY' });
+            const snapshot = result?.snapshot || result;
+            if (snapshot?.conversationId) await handleSnapshot(snapshot, { tab: active.tab, documentId: snapshot.documentId || '' });
+          } catch {}
+          if (message?.resumeExistingRun === true) {
+            try { await globalThis.__chatgptNotifierBoundedRecovery?.resumeConversation?.(active.id); } catch {}
+          }
+        }
+      } else {
+        await setProvisional(active.tab.id, enabled, source, message?.expectedRevision);
+      }
+      const overview = await monitorOverview(active);
+      return { ok: true, requestId: String(message?.requestId || ''), ...overview };
+    } catch (error) {
+      const overview = await monitorOverview(active).catch(() => null);
+      return {
+        ok: false,
+        error: String(error?.message || error),
+        reason: String(error?.code || 'automation-state-write-failed'),
+        requestId: String(message?.requestId || ''),
+        ...(overview || {})
+      };
+    }
   }
 
-  async function noteTabUnobservable(tabId, reason) {
+  async function noteTabClosedQuiet(tabId) {
+    const provisional = await getProvisional(tabId);
+    if (provisional) await deleteRecord(PROFILE_STORE, provisionalKey(tabId));
     const conversationId = tabConversations.get(tabId) || '';
-    if (!conversationId || (await getEnrollment(conversationId))?.enabled !== true) return;
+    if (!conversationId) return;
+    const enrollment = await getEnrollment(conversationId);
+    if (enrollment?.enabled !== true) return;
     const run = await latestRunForConversation(conversationId);
-    if (run && run.state !== 'coded-terminal') await ensureAttention(run, reason);
+    if (!run || run.state === 'coded-terminal') return;
+
+    let tabs = [];
+    try { tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] }); } catch {}
+    const replacement = tabs.find((tab) => Number.isInteger(tab.id)
+      && tab.id !== tabId
+      && tab.discarded !== true
+      && tab.frozen !== true
+      && conversationFromUrl(tab.url || '')?.id === conversationId);
+    if (replacement) {
+      await putRecord(RUN_STORE, {
+        ...run,
+        ownerTabId: replacement.id,
+        ownerDocumentId: '',
+        state: 'observing',
+        reason: 'owner-transferred-after-close',
+        updatedAt: Date.now()
+      });
+      try { await chrome.scripting.executeScript({ target: { tabId: replacement.id }, files: ['status-code.js', 'status-policy.js', 'monitor-script.js'] }); } catch {}
+      return;
+    }
+
+    await putRecord(RUN_STORE, {
+      ...run,
+      ownerTabId: null,
+      ownerDocumentId: '',
+      state: 'detached',
+      reason: 'owner-tab-closed-quiet',
+      updatedAt: Date.now()
+    });
+    const attentionRecords = await getAll(ATTENTION_STORE);
+    for (const record of attentionRecords) {
+      if (record.runKey === run.runKey && record.reason === 'owner-tab-closed' && !record.acknowledged) await acknowledgeAttention(record.attentionId);
+    }
   }
 
   chrome.webRequest.onBeforeRequest.addListener((details) => {
     if (!isAnswerStreamRequest(details)) return;
     requestTabs.set(String(details.requestId || ''), details.tabId);
+    armProvisionalForRequest(details.tabId, details.requestId).catch(() => {});
     sendRequestPhase(details.tabId, 'started', details).catch(() => {});
   }, REQUEST_FILTER);
 
@@ -443,25 +653,26 @@
       return true;
     }
 
-    if (message?.type === 'GET_MONITOR_OVERVIEW') {
+    if (message?.type === 'GET_BUILD_AUTOMATION_OVERVIEW' || message?.type === 'GET_MONITOR_OVERVIEW') {
       monitorOverview().then((overview) => sendResponse?.({ ok: true, ...overview }))
         .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
       return true;
     }
 
+    if (message?.type === 'SET_BUILD_AUTOMATION_STATE') {
+      setActiveAutomation(message).then((result) => sendResponse?.(result))
+        .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
+      return true;
+    }
+
     if (message?.type === 'SET_ACTIVE_CHAT_MONITORING') {
-      (async () => {
-        const active = await activeChatIdentity();
-        if (!active) { sendResponse?.({ ok: false, error: 'Open a ChatGPT conversation to change monitoring.' }); return; }
-        const record = await setEnrollment(active, message.enabled === true, 'operator');
-        if (message.enabled === true) {
-          try {
-            const result = await chrome.tabs.sendMessage(active.tab.id, { type: 'CHATGPT_MONITOR_QUERY' });
-            if (result?.snapshot) await handleSnapshot(result.snapshot, { tab: active.tab, documentId: result.snapshot.documentId || '' });
-          } catch {}
-        }
-        sendResponse?.({ ok: true, monitoring: record?.enabled === true });
-      })().catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
+      setActiveAutomation({
+        enabled: message.enabled === true,
+        expectedRevision: message.expectedRevision,
+        requestId: message.requestId,
+        resumeExistingRun: false
+      }).then((result) => sendResponse?.({ ...result, monitoring: result.monitoring === true }))
+        .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
       return true;
     }
 
@@ -477,36 +688,55 @@
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     const identity = conversationFromUrl(changeInfo.url || tab?.url || '');
     if (identity) tabConversations.set(tabId, identity.id);
-    if (changeInfo.discarded === true || changeInfo.frozen === true) noteTabUnobservable(tabId, 'page-unobservable').catch(() => {});
+    if (changeInfo.discarded === true || changeInfo.frozen === true) {
+      const conversationId = identity?.id || tabConversations.get(tabId) || '';
+      if (conversationId) {
+        (async () => {
+          if ((await getEnrollment(conversationId))?.enabled !== true) return;
+          const run = await latestRunForConversation(conversationId);
+          if (run && run.state !== 'coded-terminal') await ensureAttention(run, 'page-unobservable');
+        })().catch(() => {});
+      }
+    }
+    if (identity) {
+      (async () => {
+        const provisional = await getProvisional(tabId);
+        if (!provisional) return;
+        if (Number(provisional.armedAt || 0) <= 0) {
+          await deleteRecord(PROFILE_STORE, provisionalKey(tabId));
+          return;
+        }
+        await setEnrollment(identity, provisional.enabled === true, provisional.userPaused ? 'operator-pause' : 'operator-provisional');
+        await deleteRecord(PROFILE_STORE, provisionalKey(tabId));
+      })().catch(() => {});
+    }
   });
 
   chrome.tabs.onRemoved.addListener((tabId) => {
-    noteTabUnobservable(tabId, 'owner-tab-closed').catch(() => {});
+    noteTabClosedQuiet(tabId).catch(() => {});
     tabConversations.delete(tabId);
   });
 
   async function pruneOldRuns(now = Date.now()) {
     const records = await getAll(RUN_STORE);
-    const database = await openDatabase();
     for (const record of records) {
       if (Number(record.createdAt || 0) <= 0 || now - Number(record.createdAt || 0) <= MAX_RUN_AGE_MS) continue;
-      await new Promise((resolve, reject) => {
-        const transaction = database.transaction(RUN_STORE, 'readwrite');
-        transaction.objectStore(RUN_STORE).delete(record.runKey);
-        transaction.oncomplete = resolve;
-        transaction.onerror = () => reject(transaction.error || new Error('Could not prune monitored run.'));
-      });
+      await deleteRecord(RUN_STORE, record.runKey);
     }
   }
 
   globalThis.__chatgptNotifierMonitorBackground = Object.freeze({
-    version: 1,
+    version: 2,
+    automationSchemaVersion: AUTOMATION_SCHEMA_VERSION,
     getEnrollment,
     setEnrollment,
     latestRunForConversation,
     monitorOverview,
+    setActiveAutomation,
     ensureAttention,
+    raiseAttention: ensureAttention,
     resolveAttentionForRun,
+    acknowledgeAttention,
     readProfileState,
     updateRun,
     flushAttention
