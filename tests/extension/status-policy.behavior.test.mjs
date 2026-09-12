@@ -92,11 +92,14 @@ test('continuation acceptance requires both page-turn and request evidence in th
   assert.equal(policy.continuationOutcome({ pageTurnConfirmed: true, requestAccepted: true, sameConversation: false }).accepted, false);
 });
 
-test('bundled grammar fixture is self-consistent and runtime taxonomy matches it exactly', () => {
+test('bundled grammar fixture is self-consistent and runtime taxonomy plus START signal match it exactly', () => {
   const semantic = {
     contractId: contractFixture.contractId,
     statusLinePattern: contractFixture.statusLinePattern,
     finalSyntax: contractFixture.finalSyntax,
+    workStartSignal: contractFixture.workStartSignal,
+    workStartLinePattern: contractFixture.workStartLinePattern,
+    workStartTerminal: contractFixture.workStartTerminal,
     validCodes: contractFixture.validCodes,
     autoContinuationCodes: contractFixture.autoContinuationCodes,
     formatRepairPrompt: contractFixture.formatRepairPrompt,
@@ -108,8 +111,15 @@ test('bundled grammar fixture is self-consistent and runtime taxonomy matches it
   const api = loadStatusCode();
   assert.equal(api.contractId, contractFixture.contractId);
   assert.equal(api.contractSemanticSha256, contractFixture.canonicalSemanticSha256);
+  assert.equal(api.workStartSignal, contractFixture.workStartSignal);
+  assert.equal(api.isWorkStartSignal(contractFixture.workStartSignal), true);
+  assert.equal(api.isWorkStartSignal(' [GITHUB_WORK: START] '), true);
+  assert.equal(api.isWorkStartSignal('[GITHUB_WORK: STARTED]'), false);
+  assert.equal(api.isWorkStartSignal('[GITHUB_STATUS: START]'), false);
+  assert.equal(contractFixture.workStartTerminal, false);
   assert.deepEqual(Array.from(api.validStatusCodes), contractFixture.validCodes);
   assert.deepEqual(contractFixture.autoContinuationCodes, ['INCOMPLETE_LIMIT']);
+  assert.equal(contractFixture.validCodes.includes('START'), false);
 });
 
 test('terminal grammar accepts one exact outside-fence final line and rejects ambiguous status-looking text', () => {
