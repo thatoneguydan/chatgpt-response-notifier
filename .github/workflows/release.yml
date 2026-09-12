@@ -58,6 +58,7 @@ jobs:
             .\tests\extension\architecture.test.mjs `
             .\tests\extension\coordinator.behavior.test.mjs `
             .\tests\extension\status-policy.behavior.test.mjs `
+            .\tests\extension\automation-control.behavior.test.mjs `
             .\tests\extension\bounded-recovery.behavior.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Extension architecture/behavior tests failed.' }
 
@@ -149,7 +150,7 @@ jobs:
             gh release create $tag $managedZip $setupExe `
               --target $sourceCommit `
               --title "ChatGPT Response Notifier $version" `
-              --notes "Adds opt-in bounded recovery for monitored build chats: durable incident/run budgets, one exact-tab background reload, guarded continuation or footer-format repair, a whole-run 12-generation fuse, rate-limit/uncertainty circuit breakers, and explicit Resume. Existing coded completion history and INCOMPLETE_LIMIT continuation remain supported. No ChatGPT API polling or authentication access is added."
+              --notes "Adds unified build automation for recognized GitHub work chats: monitoring and bounded recovery enable together, explicit persistent Pause/Resume, early build-scope recognition, quiet tab closure, durable incident/run budgets, one exact-tab background reload, guarded continuation or footer-format repair, a whole-run 12-generation fuse, and rate-limit/uncertainty circuit breakers. Existing coded completion history and INCOMPLETE_LIMIT continuation remain supported. No ChatGPT API polling or authentication access is added."
             if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
           }
           else {
