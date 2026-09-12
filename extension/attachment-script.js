@@ -17,8 +17,44 @@
     globalThis.__chatgptNotifierStatusDomInstalled = false;
   }
 
-  globalThis.__chatgptNotifierAttachmentRuntime = Object.freeze({
+  const oldHeartbeat = globalThis.__chatgptNotifierActivationHeartbeat;
+  if (oldHeartbeat?.timerId) {
+    try { clearInterval(oldHeartbeat.timerId); } catch {}
+  }
+  if (oldHeartbeat?.initialTimerId) {
+    try { clearTimeout(oldHeartbeat.initialTimerId); } catch {}
+  }
+
+  let timerId = null;
+  let initialTimerId = null;
+  const pingHelperVersion = () => {
+    try {
+      chrome.runtime.sendMessage({ type: 'PING_NATIVE_HOST', source: 'activation-heartbeat' }, () => {
+        try { void chrome.runtime.lastError; } catch {}
+      });
+    } catch {
+      if (timerId !== null) {
+        try { clearInterval(timerId); } catch {}
+        timerId = null;
+      }
+    }
+  };
+
+  // This does not activate or foreground the page. It only wakes the extension
+  // worker so an already-open tab can help an old runtime discover that Setup
+  // installed a newer manifest/helper version. Once per 30 seconds is enough to
+  // close the sleeping-worker gap without polling ChatGPT or creating web traffic.
+  initialTimerId = setTimeout(pingHelperVersion, 2000);
+  timerId = setInterval(pingHelperVersion, 30000);
+  globalThis.__chatgptNotifierActivationHeartbeat = {
     version: 1,
+    extensionVersion,
+    timerId,
+    initialTimerId
+  };
+
+  globalThis.__chatgptNotifierAttachmentRuntime = Object.freeze({
+    version: 2,
     extensionVersion
   });
 })();
