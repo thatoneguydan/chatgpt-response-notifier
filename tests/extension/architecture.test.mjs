@@ -31,22 +31,28 @@ test('only the canonical seven exact terminal footer codes qualify', () => {
   assert.equal(parser.parseTerminalStatus('Body\n[GITHUB_STATUS: FUTURE_CODE]').statusCode, '');
 });
 
-test('background composition keeps policy/coordinator before recovery and monitoring', () => {
+test('background composition keeps canonical policy/coordinator ahead of monitoring and the normal worker', () => {
   const wrapper = text('extension/background.js');
-  assert.match(wrapper, /status-code\.js[\s\S]*status-policy\.js[\s\S]*coordinator-background\.js[\s\S]*recovery-background\.js[\s\S]*history-background\.js[\s\S]*service-worker\.js/);
+  assert.match(wrapper, /status-code\.js[\s\S]*status-policy\.js[\s\S]*coordinator-background\.js[\s\S]*recovery-background\.js[\s\S]*history-background\.js[\s\S]*monitor-background\.js[\s\S]*service-worker\.js/);
 });
 
-test('monitoring observes the page request but creates no ChatGPT HTTP traffic', () => {
+test('monitoring observes page/request state but creates no ChatGPT HTTP traffic', () => {
   const sources = [
     text('extension/service-worker.js'),
     text('extension/recovery-background.js'),
     text('extension/status-script.js'),
-    text('extension/coordinator-background.js')
+    text('extension/coordinator-background.js'),
+    text('extension/monitor-background.js'),
+    text('extension/monitor-script.js')
   ];
   const worker = sources[0];
+  const monitor = sources[4];
   assert.match(worker, /chrome\.webRequest\.onCompleted\.addListener/);
   assert.match(worker, /chrome\.webRequest\.onBeforeRequest\.addListener/);
   assert.match(worker, /chrome\.webRequest\.onHeadersReceived\.addListener/);
+  assert.match(monitor, /chrome\.webRequest\.onBeforeRequest\.addListener/);
+  assert.match(monitor, /chrome\.webRequest\.onCompleted\.addListener/);
+  assert.match(monitor, /chrome\.webRequest\.onErrorOccurred\.addListener/);
   for (const source of sources) {
     assert.doesNotMatch(source, /\bfetch\s*\(/);
     assert.doesNotMatch(source, /XMLHttpRequest/);
@@ -77,14 +83,72 @@ test('status observation is read-only and continuation is separately authorized'
   assert.match(policy, /current\.revision === expected\.revision/);
 });
 
+test('passive monitored-build observer persists identity without raw prompt or assistant content', () => {
+  const page = text('extension/monitor-script.js');
+  const monitor = text('extension/monitor-background.js');
+  assert.match(page, /promptRevision/);
+  assert.match(page, /assistantRevision/);
+  assert.match(page, /CHATGPT_MONITOR_STATE/);
+  assert.match(page, /silentIdleConfirmations/);
+  assert.match(page, /stableTerminal/);
+  assert.match(monitor, /ENROLLMENT_STORE = 'enrollments'/);
+  assert.match(monitor, /RUN_STORE = 'runs'/);
+  assert.match(monitor, /runKey\(snapshot\)/);
+  assert.match(monitor, /promptRevision:/);
+  assert.match(monitor, /assistantRevision:/);
+  assert.doesNotMatch(monitor, /promptText\s*:/);
+  assert.doesNotMatch(monitor, /assistantText\s*:/);
+  assert.doesNotMatch(monitor, /responseText\s*:/);
+});
+
+test('monitoring enrollment is explicit before first footer and may auto-enroll only from a valid terminal code', () => {
+  const monitor = text('extension/monitor-background.js');
+  const popup = text('extension/popup.js');
+  assert.match(monitor, /SET_ACTIVE_CHAT_MONITORING/);
+  assert.match(monitor, /source:\s*String\(source \|\| 'operator'\)/);
+  assert.match(monitor, /statusIsValid[\s\S]*setEnrollment\([^)]*true, 'coded-turn'\)/);
+  assert.match(popup, /SET_ACTIVE_CHAT_MONITORING/);
+  assert.doesNotMatch(monitor, /github|repository/i);
+});
+
+test('attention.required is durable and separate from rolling coded history', () => {
+  const monitor = text('extension/monitor-background.js');
+  const history = text('extension/history-background.js');
+  const popup = text('extension/popup.js');
+  const record = text('src/ChatGPTResponseNotifier.Core/NotificationRecord.cs');
+  assert.match(monitor, /ATTENTION_STORE = 'attention'/);
+  assert.match(monitor, /eventKind:\s*'attention\.required'/);
+  assert.match(monitor, /kind:\s*'attention\.required'/);
+  assert.match(monitor, /\['toast\.accepted'\]/);
+  assert.match(monitor, /delivered:\s*true/);
+  assert.match(popup, /ACK_RECOVERY_ATTENTION/);
+  assert.match(record, /Kind \{ get; init; \} = "coded-result"/);
+  assert.match(record, /"coded-result" or "attention\.required"/);
+  assert.match(history, /const MAX_HISTORY = 20/);
+  assert.doesNotMatch(history, /attention\.required/);
+});
+
+test('known interruption text is scoped to application alerts, not quoted assistant turn content', () => {
+  const page = text('extension/monitor-script.js');
+  assert.match(page, /\[role="alert"\]/);
+  assert.match(page, /node\.closest\(TURN_SELECTOR\)/);
+  assert.match(page, /connection interrupted/);
+  assert.match(page, /taking longer than expected/);
+  assert.match(page, /timed out/);
+  assert.match(page, /rate limit/);
+});
+
 test('active user and draft safeguards are explicit and trusted-event based', () => {
   const status = text('extension/status-script.js');
+  const monitor = text('extension/monitor-script.js');
   const policy = text('extension/status-policy.js');
   assert.match(status, /event\?\.isTrusted === true/);
   assert.match(status, /pointerdown/);
   assert.match(status, /keydown/);
   assert.match(status, /beforeinput/);
   assert.match(status, /compositionstart/);
+  assert.match(monitor, /event\?\.isTrusted !== true/);
+  assert.match(monitor, /manualStopped = true/);
   assert.match(policy, /composer-not-empty/);
   assert.match(policy, /active-user-interaction/);
 });
@@ -96,6 +160,7 @@ test('version-aware attachment re-arms stale listeners without changing upstream
   assert.match(attachment, /__chatgptNotifierStatusDomInstalled = false/);
   assert.match(text('extension/service-worker.js'), /attachment-script\.js/);
   assert.match(text('extension/recovery-background.js'), /attachment-script\.js/);
+  assert.match(text('extension/monitor-background.js'), /monitor-script\.js/);
 });
 
 test('durable coordinator owns turns and unresolved clicks reconcile to notification, never replay', () => {
@@ -152,11 +217,15 @@ test('notification delivery is durable until exact helper persistence acknowledg
 test('recovery is cleared only after a durable outcome and frozen/discarded pages are not activated to recover', () => {
   const recovery = text('extension/recovery-background.js');
   const worker = text('extension/service-worker.js');
+  const monitor = text('extension/monitor-background.js');
   assert.match(recovery, /finalizeConversation:\s*clearPending/);
   assert.doesNotMatch(recovery, /message\?\.type === 'CHATGPT_RESPONSE_COMPLETE'[\s\S]{0,300}clearPending/);
   assert.match(worker, /finalizeRecovery\(turnRecord\.conversationId\)/);
   assert.match(worker, /tab\.discarded === true \|\| tab\.frozen === true/);
   assert.match(recovery, /tab\.discarded === true \|\| tab\.frozen === true/);
+  assert.match(monitor, /tab\.discarded === true \|\| tab\.frozen === true/);
+  assert.match(monitor, /page-unobservable/);
+  assert.doesNotMatch(monitor, /tabs\.update\([^)]*active:\s*true/);
 });
 
 test('history remains a rolling 20 coded notifications', () => {
@@ -166,13 +235,13 @@ test('history remains a rolling 20 coded notifications', () => {
   assert.match(history, /GET_RECENT_NOTIFICATIONS/);
 });
 
-test('manifest adds no privileges and installs version-aware local scripts', () => {
+test('manifest adds monitoring with no new privileges', () => {
   const manifest = JSON.parse(text('extension/manifest.json'));
   assert.equal(manifest.version, '0.9.0');
   assert.deepEqual(manifest.permissions.sort(), ['scripting','tabs','webRequest']);
   assert.deepEqual(manifest.host_permissions.sort(), ['https://chatgpt.com/*','ws://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].js, [
-    'attachment-script.js','content-script.js','persistence-script.js','status-code.js','status-policy.js','status-script.js','recovery-script.js'
+    'attachment-script.js','content-script.js','persistence-script.js','status-code.js','status-policy.js','monitor-script.js','status-script.js','recovery-script.js'
   ]);
 });
 
@@ -180,7 +249,8 @@ test('local JavaScript is syntactically valid', () => {
   for (const relative of [
     'extension/background.js','extension/service-worker.js','extension/attachment-script.js','extension/coordinator-background.js',
     'extension/recovery-background.js','extension/recovery-script.js','extension/history-background.js','extension/status-code.js',
-    'extension/status-policy.js','extension/status-script.js','extension/persistence-script.js','extension/popup.js'
+    'extension/status-policy.js','extension/status-script.js','extension/monitor-background.js','extension/monitor-script.js',
+    'extension/persistence-script.js','extension/popup.js'
   ]) {
     const path = fileURLToPath(new URL(relative, root));
     const result = spawnSync(process.execPath, ['--check', path], { encoding: 'utf8' });
