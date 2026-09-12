@@ -13,5 +13,7 @@ importScripts(
   'monitor-background.js',
   'recovery-control-background.js',
   'bounded-recovery-background.js',
-  'service-worker.js'
+  'bounded-recovery-attachment-background.js',
+  'service-worker.js',
+  'normal-continuation-budget-hook.js'
 );
