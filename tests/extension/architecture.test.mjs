@@ -346,6 +346,23 @@ test('local JavaScript is syntactically valid', () => {
   }
 });
 
+test('Glass release acceptance cannot stop or bind over the live notifier', () => {
+  const setup = text('installer/Program.cs');
+  const release = text('.github/workflows/release.yml');
+  const bridge = text('src/ChatGPTResponseNotifier.Core/LocalBridgeConstants.cs');
+  assert.match(setup, /InstallRootOverrideEnvironmentVariable/);
+  assert.match(setup, /process\.MainModule\?\.FileName/);
+  assert.match(setup, /processPath\.StartsWith\(isolatedRoot, StringComparison\.OrdinalIgnoreCase\)/);
+  assert.match(setup, /if \(!isolatedInstall\)[\s\S]{0,160}StartupRegistration\.Unregister\(\)/);
+  assert.match(release, /CHATGPT_RESPONSE_NOTIFIER_TEST_BRIDGE_PORT/);
+  assert.match(release, /System\.Net\.Sockets\.TcpListener/);
+  assert.match(release, /Remove-Item Env:CHATGPT_RESPONSE_NOTIFIER_TEST_BRIDGE_PORT/);
+  assert.match(release, /\$testRootFull/);
+  assert.doesNotMatch(release, /Get-Process -Name 'ChatGPTResponseNotifier\.Host'[^\r\n]*\|\s*Stop-Process/);
+  assert.match(bridge, /CHATGPT_RESPONSE_NOTIFIER_INSTALL_ROOT/);
+  assert.match(bridge, /CHATGPT_RESPONSE_NOTIFIER_TEST_BRIDGE_PORT/);
+});
+
 test('obsolete polling/action-button recovery files stay deleted and helper toast UX stays non-activating', () => {
   assert.equal(existsSync(new URL('extension/recovery-watchdog.js', root)), false);
   assert.equal(existsSync(new URL('extension/lib/server-capture.js', root)), false);
