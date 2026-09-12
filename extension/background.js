@@ -8,6 +8,7 @@ importScripts(
   'status-policy.js',
   'recovery-model.js',
   'coordinator-background.js',
+  'delivery-dedupe-hook.js',
   'recovery-background.js',
   'history-background.js',
   'monitor-background.js',
