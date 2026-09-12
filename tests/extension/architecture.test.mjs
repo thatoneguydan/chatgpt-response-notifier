@@ -338,6 +338,17 @@ test('existing INCOMPLETE_LIMIT continuation is admitted through the same whole-
   assert.match(hook, /registerAutomaticPrompt|newPromptKey/);
 });
 
+test('DOM-observed terminal monitor state drives the durable coded-delivery path', () => {
+  const hook = text('extension/normal-continuation-budget-hook.js');
+  assert.match(hook, /CHATGPT_MONITOR_STATE/);
+  assert.match(hook, /scheduleObservedStatusDelivery/);
+  assert.match(hook, /snapshot\.statusCode/);
+  assert.match(hook, /codedSnapshotObservations/);
+  assert.match(hook, /observeCodedCompletion\(tabId, `monitor-status:/);
+  assert.match(hook, /state\.claimTurn\(status, owner\)/);
+  assert.match(hook, /queueDurableNotification\(record, 'coded-completion-status-observer'\)/);
+});
+
 test('continuation acceptance requires matching user turn plus passive accepted request evidence', () => {
   const status = text('extension/status-script.js');
   const worker = text('extension/service-worker.js');
@@ -445,7 +456,7 @@ test('versioned updates self-activate helper and extension runtime without foreg
 
 test('manifest adds only reviewed alarms permission for scheduled recovery wake', () => {
   const manifest = JSON.parse(text('extension/manifest.json'));
-  assert.equal(manifest.version, '0.9.5');
+  assert.equal(manifest.version, '0.9.6');
   assert.deepEqual(manifest.permissions.sort(), ['alarms','scripting','tabs','webRequest'].sort());
   assert.deepEqual(manifest.host_permissions.sort(), ['https://chatgpt.com/*','ws://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].js, [
