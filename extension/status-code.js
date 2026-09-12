@@ -1,6 +1,21 @@
 'use strict';
 
 (() => {
+  // Existing ChatGPT tabs can keep this isolated-world global across an
+  // extension runtime reload even though the old runtime listener is gone.
+  // v0.7.x's status layer set this guard but did not expose maybeAutoContinue,
+  // which caused the newly installed v0.8.x status-script.js to return early
+  // instead of attaching its auto-continue listener. Clear only that stale
+  // pre-auto-continue guard; the service worker injects status-code.js before
+  // status-script.js, so the current status layer can attach without reloading
+  // or activating the tab.
+  if (
+    globalThis.__chatgptNotifierStatusDomInstalled &&
+    typeof globalThis.__chatgptNotifierStatusDom?.maybeAutoContinue !== 'function'
+  ) {
+    globalThis.__chatgptNotifierStatusDomInstalled = false;
+  }
+
   if (globalThis.ChatGPTNotifierStatusCode) return;
 
   // This list mirrors the canonical GitHub work-session status taxonomy in
