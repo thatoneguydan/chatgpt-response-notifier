@@ -18,6 +18,7 @@
   "formatRepairPrompt": "Classify the existing work result and supply the missing final GitHub status. Do not rerun tools, builds, deployments, writes, or completed actions. Use the actual current end state and end with exactly one valid `[GITHUB_STATUS: CODE]` line.",
   "capsuleRequiredFields": [
     "contract",
+    "grammar_sha256",
     "footer_required_for_segment",
     "terminal_only",
     "final_syntax",
@@ -25,5 +26,5 @@
     "current_work",
     "next_action"
   ],
-  "canonicalSemanticSha256": "a3174936b76fb05bd9c6bfb78754fb7fa0dfc14d1320ca5e8e952eb44ee36fe2"
+  "canonicalSemanticSha256": "776d5e0ac9f3a9d5df3b0ddd3045454d8f664adacecbc604130a31a5bcefc1f5"
 }
