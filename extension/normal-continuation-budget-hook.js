@@ -12,6 +12,7 @@
     ]
   };
   const watchers = new Map();
+  const codedCompletionRequests = new Set();
 
   function normalizePathname(url) {
     try { return new URL(url).pathname.replace(/\/+$/, ''); } catch { return ''; }
@@ -78,6 +79,62 @@
     watcher.finish({ accepted: false, reason: 'request-error', error: String(details.error || '') });
   }, REQUEST_FILTER);
 
+  async function observeCodedCompletion(tabId, requestId) {
+    if (!Number.isInteger(tabId)) return null;
+    if (typeof queryTerminalStatus !== 'function' || typeof coordinator !== 'function') return null;
+
+    const status = await queryTerminalStatus(tabId, '', 30_000);
+    const statusCode = String(status?.statusCode || '');
+    if (!globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode)) return null;
+    if (!status?.conversationId || !status?.documentId || !status?.promptKey || !status?.assistantKey || !status?.revision) return null;
+
+    let tab = null;
+    try { tab = await chrome.tabs.get(tabId); } catch { return null; }
+    if (tab?.discarded === true || tab?.frozen === true) return null;
+    if (conversationId(tab?.url) !== String(status.conversationId)) return null;
+
+    const state = coordinator();
+    if (!state) return null;
+    const owner = {
+      tabId,
+      documentId: String(status.documentId),
+      fingerprint: `status|${String(status.conversationId)}|${String(status.promptKey)}|${String(status.assistantKey)}|${String(status.revision)}`,
+      notificationId: crypto.randomUUID(),
+      notificationTitle: String(tab?.title || 'ChatGPT').trim() || 'ChatGPT',
+      notificationPreview: typeof truncateResponse === 'function'
+        ? truncateResponse(status?.responseBody || status?.responseText)
+        : 'Response finished.'
+    };
+    const claim = await state.claimTurn(status, owner);
+    if (!claim?.claimed) {
+      if (typeof flushNotificationOutbox === 'function') flushNotificationOutbox().catch(() => {});
+      return null;
+    }
+
+    const record = claim.record;
+    if (!record?.turnKey) return null;
+    try { activeTurnKeys.add(record.turnKey); } catch {}
+    try {
+      if (statusCode !== 'INCOMPLETE_LIMIT') {
+        return await queueDurableNotification(record, 'coded-completion-status-observer');
+      }
+      return await handleContinuationClaim(record, status, tabId, String(status.documentId));
+    } finally {
+      try { activeTurnKeys.delete(record.turnKey); } catch {}
+    }
+  }
+
+  chrome.webRequest.onCompleted.addListener((details) => {
+    if (!isAnswerStreamRequest(details)) return;
+    if (details.statusCode < 200 || details.statusCode >= 300) return;
+    const requestKey = `${details.tabId}|${String(details.requestId || '')}`;
+    if (codedCompletionRequests.has(requestKey)) return;
+    codedCompletionRequests.add(requestKey);
+    observeCodedCompletion(details.tabId, details.requestId)
+      .catch((error) => console.warn('Coded completion observation failed', error))
+      .finally(() => codedCompletionRequests.delete(requestKey));
+  }, REQUEST_FILTER);
+
   globalThis.requestContinuation = async function boundedRequestContinuation(tabId, senderDocumentId, expected) {
     const recovery = globalThis.__chatgptNotifierBoundedRecovery;
     if (!recovery) return await originalRequestContinuation(tabId, senderDocumentId, expected);
@@ -136,5 +193,8 @@
     if (watcher) watcher.finish({ accepted: false, reason: 'owner-tab-closed' });
   });
 
-  globalThis.__chatgptNotifierNormalContinuationBudgetHook = Object.freeze({ version: 2 });
+  globalThis.__chatgptNotifierNormalContinuationBudgetHook = Object.freeze({
+    version: 3,
+    observeCodedCompletion
+  });
 })();
