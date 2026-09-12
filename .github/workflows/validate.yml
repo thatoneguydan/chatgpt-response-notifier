@@ -19,12 +19,25 @@ jobs:
     # Repository scope isolates this job to the chatgpt-response-notifier runner;
     # the runner name itself is not a GitHub Actions label.
     runs-on: [self-hosted, Windows, X64, glass-builder]
-    timeout-minutes: 15
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
-      - name: Checkout
+      - name: Checkout exact source head
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact source identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) {
+            throw "Exact-source checkout mismatch: expected $env:SOURCE_SHA, got $actual."
+          }
+          Write-Host "Exact source head: $actual"
 
       - name: Validate extension architecture and source
         shell: pwsh
@@ -73,7 +86,7 @@ jobs:
           if ($manifest.host_permissions -contains 'https://github.com/*') { throw 'Extension must not depend on GitHub browser permissions.' }
           if ($manifest.host_permissions -notcontains 'ws://127.0.0.1/*') { throw 'Loopback WebSocket permission is missing.' }
 
-      - name: Build Windows helper and Setup project
+      - name: Build helper, installer, and exact candidate bundle
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -81,3 +94,86 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows helper build failed.' }
           dotnet build .\installer\ChatGPTResponseNotifier.Setup.csproj --configuration Release
           if ($LASTEXITCODE -ne 0) { throw 'Setup.exe project build failed.' }
+
+          $version = (Get-Content -LiteralPath .\VERSION.txt -Raw).Trim()
+          if ([string]::IsNullOrWhiteSpace($version)) { throw 'VERSION.txt is empty.' }
+          $shortSha = $env:SOURCE_SHA.Substring(0, 12)
+          $candidateRoot = Join-Path $env:RUNNER_TEMP 'chatgpt-response-notifier-candidate'
+          $artifactRoot = Join-Path $candidateRoot 'artifacts'
+          Remove-Item -LiteralPath $candidateRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
+
+          $bundleOutput = Join-Path $candidateRoot 'bundle-build'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-TestBundle.ps1 `
+            -OutputDirectory $bundleOutput `
+            -SourceCommit $env:SOURCE_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Exact-source managed bundle build failed.' }
+          $bundleRoot = Join-Path $bundleOutput "ChatGPT-Response-Notifier-$version"
+          $candidateZip = Join-Path $artifactRoot "ChatGPT-Response-Notifier-$version-candidate-$shortSha.zip"
+          Compress-Archive -Path (Join-Path $bundleRoot '*') -DestinationPath $candidateZip -CompressionLevel Optimal -Force
+
+          $setupOutput = Join-Path $candidateRoot 'setup-build'
+          powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-Installer.ps1 `
+            -OutputDirectory $setupOutput `
+            -SourceCommit $env:SOURCE_SHA
+          if ($LASTEXITCODE -ne 0) { throw 'Exact-source Setup.exe build failed.' }
+          $setupSource = Join-Path $setupOutput "ChatGPT-Response-Notifier-Setup-$version.exe"
+          if (-not (Test-Path -LiteralPath $setupSource -PathType Leaf)) { throw 'Setup.exe output is missing.' }
+          $candidateSetup = Join-Path $artifactRoot "ChatGPT-Response-Notifier-Setup-$version-candidate-$shortSha.exe"
+          Copy-Item -LiteralPath $setupSource -Destination $candidateSetup -Force
+
+          $candidateManifest = [ordered]@{
+            version = $version
+            sourceCommit = $env:SOURCE_SHA
+            bundle = [IO.Path]::GetFileName($candidateZip)
+            bundleSha256 = (Get-FileHash -LiteralPath $candidateZip -Algorithm SHA256).Hash.ToLowerInvariant()
+            setup = [IO.Path]::GetFileName($candidateSetup)
+            setupSha256 = (Get-FileHash -LiteralPath $candidateSetup -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          $candidateManifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $artifactRoot 'candidate-manifest.json') -Encoding UTF8
+
+      - name: Prove isolated Setup and localhost helper handshake
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content -LiteralPath .\VERSION.txt -Raw).Trim()
+          $shortSha = $env:SOURCE_SHA.Substring(0, 12)
+          $candidateRoot = Join-Path $env:RUNNER_TEMP 'chatgpt-response-notifier-candidate'
+          $candidateSetup = Join-Path (Join-Path $candidateRoot 'artifacts') "ChatGPT-Response-Notifier-Setup-$version-candidate-$shortSha.exe"
+          $testInstallRoot = Join-Path $env:RUNNER_TEMP ('chatgpt-response-notifier-install-' + [Guid]::NewGuid().ToString('N'))
+
+          $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+          $listener.Start()
+          $testPort = ([Net.IPEndPoint]$listener.LocalEndpoint).Port
+          $listener.Stop()
+
+          $env:CHATGPT_RESPONSE_NOTIFIER_INSTALL_ROOT = $testInstallRoot
+          $env:CHATGPT_RESPONSE_NOTIFIER_TEST_BRIDGE_PORT = [string]$testPort
+          try {
+            $setupProcess = Start-Process -FilePath $candidateSetup -ArgumentList '--silent','--skip-startup' -PassThru
+            Wait-Process -Id $setupProcess.Id -Timeout 45
+            $setupProcess.Refresh()
+            if ($setupProcess.ExitCode -ne 0) { throw "Setup.exe isolated acceptance failed with exit code $($setupProcess.ExitCode)." }
+          }
+          finally {
+            $testRootFull = [IO.Path]::GetFullPath($testInstallRoot).TrimEnd('\') + '\'
+            Get-Process -Name 'ChatGPTResponseNotifier.Host' -ErrorAction SilentlyContinue | ForEach-Object {
+              try {
+                $processPath = [IO.Path]::GetFullPath([string]$_.Path)
+                if ($processPath.StartsWith($testRootFull, [StringComparison]::OrdinalIgnoreCase)) {
+                  Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                }
+              } catch {}
+            }
+            Remove-Item Env:CHATGPT_RESPONSE_NOTIFIER_INSTALL_ROOT -ErrorAction SilentlyContinue
+            Remove-Item Env:CHATGPT_RESPONSE_NOTIFIER_TEST_BRIDGE_PORT -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $testInstallRoot -Recurse -Force -ErrorAction SilentlyContinue
+          }
+
+      - name: Upload exact candidate for live acceptance
+        uses: actions/upload-artifact@v4
+        with:
+          name: chatgpt-response-notifier-candidate-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}\chatgpt-response-notifier-candidate\artifacts\*
+          if-no-files-found: error
+          retention-days: 7
