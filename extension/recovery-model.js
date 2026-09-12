@@ -74,12 +74,14 @@
     if (classification.state === 'coded-terminal') return { kind: '', reason: 'coded-terminal' };
 
     const reason = String(classification.reason || incident.reason || '');
+    const reloadCap = Math.max(1, Number(globalThis.ChatGPTNotifierContinuationPolicy?.thresholds?.incidentReloadCap || 3));
     if (reason === 'status-missing') {
       return incident.budget.formatRepairs >= 1
         ? { kind: '', reason: 'format-repair-spent' }
         : { kind: 'format-repair', reason };
     }
     if (reason === 'post-reload-silent-stop') {
+      if (incident.budget.reloads < reloadCap) return { kind: 'reload', reason };
       return incident.budget.continuations >= 1
         ? { kind: '', reason: 'continuation-spent' }
         : { kind: 'continue', reason };
@@ -90,7 +92,7 @@
       'timed-out', 'timeout', 'connection-lost'
     ]);
     if (reloadEligible.has(reason)) {
-      if (incident.budget.reloads < 1) return { kind: 'reload', reason };
+      if (incident.budget.reloads < reloadCap) return { kind: 'reload', reason };
       if (!observation.assistantKey && Number(observation.silentIdleConfirmations || 0) >= 2) {
         return incident.budget.continuations >= 1
           ? { kind: '', reason: 'continuation-spent' }
