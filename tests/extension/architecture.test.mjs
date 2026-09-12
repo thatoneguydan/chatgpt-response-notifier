@@ -143,10 +143,10 @@ test('notification delivery is durable until exact helper persistence acknowledg
   assert.match(worker, /acknowledgeNotification\(notification\.id\)/);
   assert.match(app, /type = "toast\.accepted"/);
   assert.match(app, /notificationId = message\.Notification\.Id/);
+  assert.match(app, /accepted-notifications\.json/);
   assert.match(manager, /_acceptedStore\.Contains\(record\.Id\)/);
   assert.match(manager, /Persist\(\);[\s\S]*_acceptedStore\.Remember\(record\.Id\)/);
   assert.match(accepted, /MaxAcceptedIds = 512/);
-  assert.match(accepted, /accepted-notifications/);
 });
 
 test('recovery is cleared only after a durable outcome and frozen/discarded pages are not activated to recover', () => {
