@@ -6,9 +6,11 @@
 importScripts(
   'status-code.js',
   'status-policy.js',
+  'recovery-model.js',
   'coordinator-background.js',
   'recovery-background.js',
   'history-background.js',
   'monitor-background.js',
+  'bounded-recovery-background.js',
   'service-worker.js'
 );
