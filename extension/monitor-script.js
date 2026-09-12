@@ -8,7 +8,6 @@
   const documentId = (() => { try { return crypto.randomUUID(); } catch { return `${Date.now()}-${Math.random()}`; } })();
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const STOP_SELECTOR = 'button[data-testid="stop-button"], button[data-testid="fruitjuice-stop-button"], button[aria-label="Stop generating"]';
-  const WORK_START_LINE = '[GITHUB_WORK: START]';
   const thresholds = globalThis.ChatGPTNotifierContinuationPolicy?.thresholds || {};
   const MISSING_FOOTER_GRACE_MS = Number(thresholds.missingFooterGraceMs || 30_000);
   const SILENT_IDLE_FIRST_MS = Number(thresholds.silentIdleFirstMs || 90_000);
@@ -91,6 +90,8 @@
 
   function assistantHasWorkStart(turn) {
     try {
+      const parser = globalThis.ChatGPTNotifierStatusCode?.isWorkStartSignal;
+      if (typeof parser !== 'function') return false;
       const roleNode = roleRoot(turn, 'assistant');
       const source = roleNode?.querySelector?.('.markdown, [class*="prose"]') || roleNode;
       if (!source) return false;
@@ -100,7 +101,7 @@
       return candidates.some((candidate) => String(candidate.textContent || '')
         .replace(/\r\n?/g, '\n')
         .split('\n')
-        .some((line) => line.trim() === WORK_START_LINE));
+        .some((line) => parser(line) === true));
     } catch { return false; }
   }
 
@@ -362,7 +363,7 @@
   globalThis.__chatgptNotifierMonitorRuntime = Object.freeze({
     version: RUNTIME_VERSION,
     documentId,
-    workStartLine: WORK_START_LINE,
+    workStartLine: String(globalThis.ChatGPTNotifierStatusCode?.workStartSignal || ''),
     snapshot,
     dispose() {
       disposed = true;
