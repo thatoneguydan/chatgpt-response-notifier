@@ -32,6 +32,7 @@
         "persistence-script.js",
         "status-code.js",
         "status-policy.js",
+        "monitor-script.js",
         "status-script.js",
         "recovery-script.js"
       ],
