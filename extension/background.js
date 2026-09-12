@@ -11,6 +11,7 @@ importScripts(
   'recovery-background.js',
   'history-background.js',
   'monitor-background.js',
+  'monitor-query-compat-background.js',
   'recovery-control-background.js',
   'bounded-recovery-background.js',
   'bounded-recovery-attachment-background.js',
