@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 3;
+  const RUNTIME_VERSION = 4;
   try { globalThis.__chatgptNotifierMonitorRuntime?.dispose?.(); } catch {}
 
   const abortController = new AbortController();
@@ -83,9 +83,8 @@
   function renderedBlocks(roleNode) {
     try {
       const markdown = Array.from(roleNode?.querySelectorAll?.('.markdown') || []);
-      const candidates = markdown.length > 0
-        ? markdown
-        : Array.from(roleNode?.querySelectorAll?.('[class*="prose"]') || []);
+      const prose = Array.from(roleNode?.querySelectorAll?.('[class*="prose"]') || []);
+      const candidates = Array.from(new Set([...markdown, ...prose]));
       return candidates.filter((node) => !candidates.some((other) => other !== node && other?.contains?.(node)));
     } catch { return []; }
   }
@@ -122,6 +121,27 @@
       if (match && api.isStatusCode(match[1])) return true;
     }
     return false;
+  }
+
+  function assistantStatusCodeFromDom(turn) {
+    try {
+      const api = globalThis.ChatGPTNotifierStatusCode;
+      if (typeof api?.isStatusCode !== 'function') return '';
+      const source = roleRoot(turn, 'assistant');
+      if (!source) return '';
+      const copy = source.cloneNode(true);
+      for (const excluded of copy.querySelectorAll?.('pre, code, blockquote, ul, ol, li, [data-message-author-role="tool"], [data-tool]') || []) excluded.remove();
+      const candidates = [copy, ...(copy.querySelectorAll?.('p, div, span') || [])];
+      for (let index = candidates.length - 1; index >= 0; index -= 1) {
+        const value = String(candidates[index]?.textContent || '')
+          .replace(/[\u200B-\u200D\uFEFF]/g, '')
+          .replace(/\r\n?/g, '\n')
+          .trim();
+        const match = value.match(/^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/);
+        if (match && api.isStatusCode(match[1])) return match[1];
+      }
+    } catch {}
+    return '';
   }
 
   function assistantHasWorkStart(turn) {
@@ -215,14 +235,15 @@
       assistantText = text;
     }
     const parsed = assistantText ? globalThis.ChatGPTNotifierStatusCode?.parseTerminalStatus?.(assistantText) : null;
+    const domStatusCode = assistantIndex >= 0 ? assistantStatusCodeFromDom(nodes[assistantIndex]) : '';
     return {
       identity,
       promptKey: `${identity.id}|${userId}`,
       promptRevision: revisionOf(userText),
       assistantKey: assistantIndex >= 0 ? turnId(nodes[assistantIndex], 'assistant', assistantIndex) : '',
       assistantRevision: assistantText ? revisionOf(assistantText) : '',
-      statusCode: String(parsed?.statusCode || ''),
-      hasStatusEvidence: assistantText ? assistantHasStatusEvidence(assistantText) : false,
+      statusCode: String(parsed?.statusCode || domStatusCode || ''),
+      hasStatusEvidence: Boolean(domStatusCode || (assistantText && assistantHasStatusEvidence(assistantText))),
       workStartSignal: assistantIndex >= 0 && assistantHasWorkStart(nodes[assistantIndex])
     };
   }
