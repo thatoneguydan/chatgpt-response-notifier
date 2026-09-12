@@ -393,13 +393,16 @@ test('split rendered assistant blocks preserve terminal footer evidence and supp
   for (const source of [status, monitor]) {
     assert.match(source, /function renderedBlocks/);
     assert.match(source, /querySelectorAll\?\.\('\.markdown'\)/);
+    assert.match(source, /querySelectorAll\?\.\('\[class\*="prose"\]'\)/);
+    assert.match(source, /new Set\(\[\.\.\.markdown, \.\.\.prose\]\)/);
     assert.match(source, /blocks\.map\(nodeText\)\.filter\(Boolean\)\.join\('\\n'\)/);
+    assert.match(source, /function assistantStatusCodeFromDom/);
+    assert.match(source, /pre, code, blockquote, ul, ol, li/);
+    assert.match(source, /api\.isStatusCode\(match\[1\]\)/);
   }
-  assert.match(monitor, /function assistantHasStatusEvidence/);
-  assert.match(monitor, /hasStatusEvidence:\s*turnState\.hasStatusEvidence === true/);
+  assert.match(monitor, /hasStatusEvidence:\s*Boolean\(domStatusCode/);
   assert.match(monitor, /current\.statusCode \|\| current\.hasStatusEvidence/);
   assert.match(monitor, /next\.statusCode \|\| next\.hasStatusEvidence/);
-  assert.match(monitor, /api\.isStatusCode\(match\[1\]\)/);
 });
 
 test('versioned updates self-activate helper and extension runtime without foregrounding Chrome', () => {
@@ -417,7 +420,7 @@ test('versioned updates self-activate helper and extension runtime without foreg
 
 test('manifest adds only reviewed alarms permission for scheduled recovery wake', () => {
   const manifest = JSON.parse(text('extension/manifest.json'));
-  assert.equal(manifest.version, '0.9.1');
+  assert.equal(manifest.version, '0.9.2');
   assert.deepEqual(manifest.permissions.sort(), ['alarms','scripting','tabs','webRequest'].sort());
   assert.deepEqual(manifest.host_permissions.sort(), ['https://chatgpt.com/*','ws://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].js, [
