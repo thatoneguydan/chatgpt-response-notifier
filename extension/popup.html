@@ -6,8 +6,8 @@
   <style>
     * { box-sizing: border-box; }
     body {
-      width: 380px;
-      max-height: 600px;
+      width: 410px;
+      max-height: 620px;
       margin: 0;
       background: #171717;
       color: #f2f2f2;
@@ -22,11 +22,12 @@
       border-bottom: 1px solid #303030;
       background: #1b1b1b;
     }
-    #monitorState { min-width: 0; color: #a9a9a9; line-height: 1.25; }
+    #monitorState { min-width: 0; flex: 1; color: #a9a9a9; line-height: 1.25; }
     #monitorState strong { display: block; color: #e7e7e7; font-size: 11.5px; }
     #monitorDetail { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10.5px; }
+    #monitorControls { display: flex; gap: 5px; align-items: center; }
     #attentionSection { border-bottom: 1px solid #303030; }
-    #attentionSection[hidden] { display: none; }
+    #attentionSection[hidden], #resumeRecovery[hidden] { display: none; }
     .section-title { padding: 7px 9px 3px; color: #d8a85c; font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .04em; }
     .attention-item {
       display: grid;
@@ -57,41 +58,11 @@
       cursor: pointer;
     }
     .history-item:hover, .attention-copy:hover { background: #242424; }
-    .history-title {
-      display: block;
-      color: #f5f5f5;
-      font-weight: 650;
-      line-height: 1.25;
-      overflow-wrap: anywhere;
-      white-space: normal;
-    }
-    .history-status {
-      display: block;
-      margin-top: 4px;
-      color: #9b9b9b;
-      font: 600 10.5px Consolas, monospace;
-      overflow-wrap: anywhere;
-    }
-    .history-preview {
-      display: -webkit-box;
-      margin-top: 4px;
-      overflow: hidden;
-      color: #bdbdbd;
-      line-height: 1.35;
-      -webkit-box-orient: vertical;
-      -webkit-line-clamp: 2;
-    }
-    .history-time {
-      display: block;
-      margin-top: 4px;
-      color: #777;
-      font-size: 10.5px;
-    }
-    #empty {
-      padding: 24px 12px;
-      color: #777;
-      text-align: center;
-    }
+    .history-title { display: block; color: #f5f5f5; font-weight: 650; line-height: 1.25; overflow-wrap: anywhere; white-space: normal; }
+    .history-status { display: block; margin-top: 4px; color: #9b9b9b; font: 600 10.5px Consolas, monospace; overflow-wrap: anywhere; }
+    .history-preview { display: -webkit-box; margin-top: 4px; overflow: hidden; color: #bdbdbd; line-height: 1.35; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+    .history-time { display: block; margin-top: 4px; color: #777; font-size: 10.5px; }
+    #empty { padding: 24px 12px; color: #777; text-align: center; }
     footer {
       position: sticky;
       bottom: 0;
@@ -119,6 +90,8 @@
     }
     .mini:hover { background: #303030; }
     .mini:disabled { cursor: default; opacity: .55; }
+    .mini.enabled { border-color: #5b765b; color: #cfe4cf; }
+    .mini.warning { border-color: #7d643d; color: #e2c28e; }
     .dismiss { min-width: 28px; width: 28px; padding: 0; }
   </style>
 </head>
@@ -128,7 +101,11 @@
       <strong>Build monitoring</strong>
       <span id="monitorDetail">Open a ChatGPT conversation</span>
     </div>
-    <button class="mini" id="monitorToggle" disabled>Monitor</button>
+    <div id="monitorControls">
+      <button class="mini" id="monitorToggle" disabled>Monitor</button>
+      <button class="mini" id="recoveryToggle" disabled title="Allow bounded background recovery for this conversation">Recover</button>
+      <button class="mini warning" id="resumeRecovery" hidden title="Reset the run fuse and resume bounded recovery after an explicit stop">Resume</button>
+    </div>
   </section>
   <section id="attentionSection" aria-label="Recovery attention" hidden>
     <div class="section-title">Needs attention</div>
