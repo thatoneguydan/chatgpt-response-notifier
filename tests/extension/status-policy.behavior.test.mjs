@@ -12,6 +12,7 @@ const evaluationFixture = JSON.parse(readFileSync(new URL('tests/fixtures/github
 
 function loadPolicy() {
   const context = vm.createContext({ Date, Number, String });
+  vm.runInContext(statusCodeSource, context);
   vm.runInContext(policySource, context);
   return context.ChatGPTNotifierContinuationPolicy;
 }
@@ -153,4 +154,60 @@ test('long-chat evaluation keeps omission, wrong classification, and format fail
   assert.equal(observedKinds.get('wrong-valid-classification'), 'wrong-classification');
   assert.equal(observedKinds.get('duplicate-footer-rejected'), 'format');
   assert.equal(observedKinds.get('ordinary-progress-no-footer'), 'none');
+});
+
+test('observation classifier distinguishes active work, missing status, silent stop, blockers and coded results', () => {
+  const policy = loadPolicy();
+  assert.equal(policy.classifyObservation({ statusCode: 'COMPLETE_APPLIED' }).state, 'coded-terminal');
+  assert.equal(policy.classifyObservation({ statusCode: 'COMPLETE_APPLIED' }).automaticActionAllowed, false);
+  assert.equal(policy.classifyObservation({ statusCode: 'INCOMPLETE_LIMIT' }).automaticActionAllowed, true);
+  assert.equal(policy.classifyObservation({ stopGenerating: true }).state, 'working');
+  assert.equal(policy.classifyObservation({ toolActivity: true }).reason, 'tool-activity');
+  assert.equal(policy.classifyObservation({ assistantKey: 'a1', stableTerminal: true }).reason, 'status-missing');
+  assert.equal(policy.classifyObservation({ silentIdleConfirmations: 2 }).reason, 'silent-stop-confirmed');
+  assert.equal(policy.classifyObservation({ explicitInterruption: true, interruptionKind: 'connection-interrupted' }).reason, 'connection-interrupted');
+  assert.equal(policy.classifyObservation({ rateLimited: true }).openProfileBreaker, true);
+  assert.equal(policy.classifyObservation({ authRequired: true }).reason, 'auth-required');
+  assert.equal(policy.classifyObservation({ approvalRequired: true }).reason, 'approval-required');
+  assert.equal(policy.classifyObservation({ manualStopped: true }).state, 'paused');
+  assert.equal(policy.classifyObservation({ hasDraft: true }).reason, 'draft-present');
+  assert.equal(policy.classifyObservation({ hasUpload: true }).reason, 'upload-present');
+  assert.equal(policy.classifyObservation({ online: false }).reason, 'offline');
+  assert.equal(policy.classifyObservation({ observable: false }).reason, 'page-unobservable');
+  assert.equal(policy.classifyObservation({ workingDurationMs: 15 * 60_000 }).reason, 'long-thinking-diagnostic');
+});
+
+test('recovery budget permits at most one reload, one continuation, one format repair and two automatic messages per incident', () => {
+  const policy = loadPolicy();
+  const start = policy.beginRecoveryAction('reload', {}, { now: 1_000 });
+  assert.equal(start.allowed, true);
+  assert.equal(start.budget.reloads, 1);
+  assert.equal(start.budget.automaticMessages, 0);
+  assert.equal(policy.recoveryActionDecision('reload', start.budget, { now: 31_000 }).reason, 'incident-reload-cap-reached');
+
+  const continued = policy.beginRecoveryAction('continue', start.budget, { now: 31_000 });
+  assert.equal(continued.allowed, true);
+  assert.equal(continued.budget.continuations, 1);
+  assert.equal(continued.budget.automaticMessages, 1);
+  assert.equal(continued.budget.runGenerationActions, 1);
+
+  const repaired = policy.beginRecoveryAction('format-repair', continued.budget, { now: 61_000 });
+  assert.equal(repaired.allowed, true);
+  assert.equal(repaired.budget.formatRepairs, 1);
+  assert.equal(repaired.budget.automaticMessages, 2);
+  assert.equal(repaired.budget.runGenerationActions, 2);
+
+  assert.equal(policy.recoveryActionDecision('continue', repaired.budget, { now: 91_000 }).allowed, false);
+  assert.equal(policy.recoveryActionDecision('format-repair', repaired.budget, { now: 91_000 }).allowed, false);
+});
+
+test('uncertain action, profile breaker, spacing and whole-run cap fail closed', () => {
+  const policy = loadPolicy();
+  assert.equal(policy.recoveryActionDecision('continue', { uncertainAction: true }, { now: 100_000 }).reason, 'prior-action-uncertain');
+  assert.equal(policy.recoveryActionDecision('continue', { breakerOpen: true }, { now: 100_000 }).reason, 'profile-breaker-open');
+  assert.equal(policy.recoveryActionDecision('continue', { nextProfileActionAt: 120_000 }, { now: 100_000 }).reason, 'profile-action-spacing');
+  assert.equal(policy.recoveryActionDecision('continue', { runGenerationActions: 12 }, { now: 100_000 }).reason, 'run-action-cap-reached');
+  assert.equal(policy.recoveryActionDecision('unknown', {}, { now: 100_000 }).reason, 'unknown-recovery-action');
+  assert.equal(policy.thresholds.runGenerationActionCap, 12);
+  assert.equal(policy.thresholds.profileActionSpacingMs, 30_000);
 });
