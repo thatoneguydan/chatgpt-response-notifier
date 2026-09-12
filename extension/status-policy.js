@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
   if (globalThis.ChatGPTNotifierContinuationPolicy?.runtimeVersion === RUNTIME_VERSION) return;
 
   const MONITOR_POLICY_VERSION = 2;
@@ -11,6 +11,7 @@
   const LONG_THINKING_DIAGNOSTIC_MS = 15 * 60_000;
   const RUN_GENERATION_ACTION_CAP = 12;
   const PROFILE_ACTION_SPACING_MS = 30_000;
+  const INCIDENT_RELOAD_CAP = 3;
 
   function identityMatches(current, expected) {
     return Boolean(
@@ -93,7 +94,7 @@
     if (budget.breakerOpen) return { allowed: false, reason: 'profile-breaker-open', budget };
     if (budget.runGenerationActions >= RUN_GENERATION_ACTION_CAP) return { allowed: false, reason: 'run-action-cap-reached', budget };
     if (now < budget.nextProfileActionAt) return { allowed: false, reason: 'profile-action-spacing', budget };
-    if (kind === 'reload' && budget.reloads >= 1) return { allowed: false, reason: 'incident-reload-cap-reached', budget };
+    if (kind === 'reload' && budget.reloads >= INCIDENT_RELOAD_CAP) return { allowed: false, reason: 'incident-reload-cap-reached', budget };
     if (kind === 'continue' && budget.continuations >= 1) return { allowed: false, reason: 'incident-continuation-cap-reached', budget };
     if (kind === 'format-repair' && budget.formatRepairs >= 1) return { allowed: false, reason: 'incident-format-repair-cap-reached', budget };
     if ((kind === 'continue' || kind === 'format-repair') && budget.automaticMessages >= 2) {
@@ -131,7 +132,8 @@
       silentIdleConfirmMs: SILENT_IDLE_CONFIRM_MS,
       longThinkingDiagnosticMs: LONG_THINKING_DIAGNOSTIC_MS,
       runGenerationActionCap: RUN_GENERATION_ACTION_CAP,
-      profileActionSpacingMs: PROFILE_ACTION_SPACING_MS
+      profileActionSpacingMs: PROFILE_ACTION_SPACING_MS,
+      incidentReloadCap: INCIDENT_RELOAD_CAP
     }),
     identityMatches,
     userInteractionBlockReason,
