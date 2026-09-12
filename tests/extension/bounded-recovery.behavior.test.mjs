@@ -228,6 +228,18 @@ test('incident timing enforces 30 second first backoff and 120 second later back
   assert.equal(model.firstEligibleAt('silent-stop-confirmed', 10_000, 3), 10_000);
 });
 
+test('coded notification delivery is driven by exact terminal status observation after request completion', () => {
+  const hook = readText('extension/normal-continuation-budget-hook.js');
+  assert.match(hook, /async function observeCodedCompletion/);
+  assert.match(hook, /queryTerminalStatus\(tabId, '', 30_000\)/);
+  assert.match(hook, /ChatGPTNotifierStatusCode\?\.isStatusCode/);
+  assert.match(hook, /state\.claimTurn\(status, owner\)/);
+  assert.match(hook, /queueDurableNotification\(record, 'coded-completion-status-observer'\)/);
+  assert.match(hook, /handleContinuationClaim\(record, status, tabId/);
+  assert.match(hook, /chrome\.webRequest\.onCompleted\.addListener/);
+  assert.doesNotMatch(hook, /statusBoundToCompletion/);
+});
+
 test('format-repair and continuation commands are exact contract strings and no original-prompt/regenerate path exists', () => {
   const contract = JSON.parse(readText('extension/github-work-status-contract.v1.json'));
   const page = readText('extension/bounded-recovery-script.js');
