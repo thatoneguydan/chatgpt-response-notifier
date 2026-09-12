@@ -5,7 +5,9 @@
 // none creates ChatGPT HTTP traffic.
 importScripts(
   'status-code.js',
-  'service-worker.js',
+  'status-policy.js',
+  'coordinator-background.js',
   'recovery-background.js',
-  'history-background.js'
+  'history-background.js',
+  'service-worker.js'
 );

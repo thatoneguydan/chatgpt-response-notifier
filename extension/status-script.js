@@ -1,116 +1,106 @@
 'use strict';
 
 (() => {
-  if (globalThis.__chatgptNotifierStatusDomInstalled) return;
-  globalThis.__chatgptNotifierStatusDomInstalled = true;
-
+  const RUNTIME_VERSION = 2;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
-  const DEFAULT_WAIT_MS = 30000;
-  const CHECK_THROTTLE_MS = 100;
   const AUTO_CONTINUE_TEXT = 'continue until you finish or need something from me';
-  const AUTO_CONTINUE_READY_WAIT_MS = 5000;
-  const AUTO_CONTINUE_SENT_WAIT_MS = 3000;
-  const autoContinueInFlight = new Map();
-  const autoContinueSucceeded = new Set();
-  let lastAutoContinueAt = 0;
+  const DEFAULT_WAIT_MS = 30000;
+  const READY_WAIT_MS = 5000;
+  const USER_TURN_WAIT_MS = 3500;
+  const ACTIVE_GUARD_MS = 3000;
 
-  const normalizeInline = (value) => String(value || '').replace(/\s+/g, ' ').trim();
-  const normalizeComposerText = (value) => normalizeInline(String(value || '').replace(/[\u200B-\u200D\uFEFF]/g, ''));
+  try { globalThis.__chatgptNotifierStatusRuntime?.dispose?.(); } catch {}
+  const abortController = new AbortController();
+  const documentId = (() => { try { return crypto.randomUUID(); } catch { return `${Date.now()}-${Math.random()}`; } })();
+  let lastTrustedInteractionAt = 0;
 
-  function statusApi() {
-    return globalThis.ChatGPTNotifierStatusCode || null;
-  }
+  const inline = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+  const cleanComposer = (value) => inline(String(value || '').replace(/[\u200B-\u200D\uFEFF]/g, ''));
 
-  function turnNodes() {
+  function conversationIdentity() {
     try {
-      return Array.from(document.querySelectorAll(TURN_SELECTOR));
-    } catch {
-      return [];
-    }
+      const url = new URL(location.href);
+      if (!['chatgpt.com', 'www.chatgpt.com'].includes(url.hostname)) return null;
+      const parts = url.pathname.split('/').filter(Boolean);
+      for (let index = parts.length - 2; index >= 0; index -= 1) {
+        if (parts[index] !== 'c') continue;
+        const id = decodeURIComponent(parts[index + 1] || '').trim();
+        if (id) return { id, url: `https://chatgpt.com${url.pathname.replace(/\/+$/, '')}` };
+      }
+    } catch {}
+    return null;
   }
 
+  function turns() { try { return Array.from(document.querySelectorAll(TURN_SELECTOR)); } catch { return []; } }
   function roleOf(turn) {
-    if (!turn) return '';
     try {
-      const direct = normalizeInline(
-        turn.getAttribute('data-turn') || turn.getAttribute('data-message-author-role') || ''
-      ).toLowerCase();
+      const direct = inline(turn?.getAttribute?.('data-turn') || turn?.getAttribute?.('data-message-author-role') || '').toLowerCase();
       if (direct === 'user' || direct === 'assistant') return direct;
-      if (turn.querySelector('[data-message-author-role="user"]')) return 'user';
-      if (turn.querySelector('[data-message-author-role="assistant"]')) return 'assistant';
+      if (turn?.querySelector?.('[data-message-author-role="user"]')) return 'user';
+      if (turn?.querySelector?.('[data-message-author-role="assistant"]')) return 'assistant';
     } catch {}
     return '';
   }
-
-  function turnTextPreservingLines(turn, role) {
-    if (!turn) return '';
+  function turnId(turn, role, index) {
+    return String(turn?.getAttribute?.('data-testid') || turn?.id || `${role}-${index}`).trim();
+  }
+  function turnText(turn, role) {
     try {
       const selector = `[data-message-author-role="${role}"]`;
-      const roleNode = turn.matches?.(selector) ? turn : turn.querySelector(selector);
-      if (!roleNode) return '';
-      const rendered = roleNode.querySelector('.markdown, [class*="prose"]');
-      const node = rendered || roleNode;
-      return String(node.innerText || node.textContent || '').replace(/\r\n?/g, '\n').trimEnd();
-    } catch {
-      return '';
+      const roleNode = turn?.matches?.(selector) ? turn : turn?.querySelector?.(selector);
+      const node = roleNode?.querySelector?.('.markdown, [class*="prose"]') || roleNode;
+      return String(node?.innerText || node?.textContent || '').replace(/\r\n?/g, '\n').trimEnd();
+    } catch { return ''; }
+  }
+  function revisionOf(text) {
+    const value = String(text || '');
+    let hash = 2166136261;
+    for (let index = 0; index < value.length; index += 1) {
+      hash ^= value.charCodeAt(index);
+      hash = Math.imul(hash, 16777619) >>> 0;
     }
-  }
-
-  function assistantTextPreservingLines(turn) {
-    return turnTextPreservingLines(turn, 'assistant');
-  }
-
-  function userTextPreservingLines(turn) {
-    return turnTextPreservingLines(turn, 'user');
+    return `${value.length}:${hash.toString(16).padStart(8, '0')}`;
   }
 
   function latestUserSnapshot() {
-    const turns = turnNodes();
-    for (let index = turns.length - 1; index >= 0; index -= 1) {
-      if (roleOf(turns[index]) !== 'user') continue;
-      return {
-        index,
-        key: [
-          location.pathname,
-          turns[index]?.getAttribute('data-testid') || `user-${index}`
-        ].join('|'),
-        text: userTextPreservingLines(turns[index])
-      };
+    const identity = conversationIdentity();
+    const nodes = turns();
+    for (let index = nodes.length - 1; index >= 0; index -= 1) {
+      if (roleOf(nodes[index]) !== 'user') continue;
+      const id = turnId(nodes[index], 'user', index);
+      return { conversationId: identity?.id || '', documentId, key: `${identity?.id || location.pathname}|${id}`, turnId: id, text: turnText(nodes[index], 'user') };
     }
     return null;
   }
 
   function latestAssistantSnapshot() {
-    const api = statusApi();
-    if (!api) return null;
-
-    const turns = turnNodes();
-    let latestUserIndex = -1;
-    for (let index = 0; index < turns.length; index += 1) {
-      if (roleOf(turns[index]) === 'user') latestUserIndex = index;
-    }
-    if (latestUserIndex < 0) return null;
-
+    const api = globalThis.ChatGPTNotifierStatusCode;
+    const identity = conversationIdentity();
+    if (!api || !identity) return null;
+    const nodes = turns();
+    let userIndex = -1;
+    for (let index = 0; index < nodes.length; index += 1) if (roleOf(nodes[index]) === 'user') userIndex = index;
+    if (userIndex < 0) return null;
     let assistantIndex = -1;
     let responseText = '';
-    for (let index = latestUserIndex + 1; index < turns.length; index += 1) {
-      if (roleOf(turns[index]) !== 'assistant') continue;
-      const text = assistantTextPreservingLines(turns[index]);
+    for (let index = userIndex + 1; index < nodes.length; index += 1) {
+      if (roleOf(nodes[index]) !== 'assistant') continue;
+      const text = turnText(nodes[index], 'assistant');
       if (!text) continue;
       assistantIndex = index;
       responseText = text;
     }
     if (assistantIndex < 0 || !responseText) return null;
-
     const parsed = api.parseTerminalStatus(responseText);
-    const userTurn = turns[latestUserIndex];
-    const assistantTurn = turns[assistantIndex];
+    const userId = turnId(nodes[userIndex], 'user', userIndex);
     return {
-      promptKey: [
-        location.pathname,
-        userTurn?.getAttribute('data-testid') || `user-${latestUserIndex}`
-      ].join('|'),
-      assistantKey: assistantTurn?.getAttribute('data-testid') || `assistant-${assistantIndex}`,
+      conversationId: identity.id,
+      conversationUrl: identity.url,
+      documentId,
+      promptKey: `${identity.id}|${userId}`,
+      promptTurnId: userId,
+      assistantKey: turnId(nodes[assistantIndex], 'assistant', assistantIndex),
+      revision: revisionOf(responseText),
       responseText,
       responseBody: parsed.body,
       statusCode: parsed.statusCode,
@@ -119,377 +109,188 @@
   }
 
   function observerRoot() {
-    const turns = turnNodes();
-    const latestTurn = turns[turns.length - 1];
-    if (latestTurn) {
-      const main = latestTurn.closest?.('main');
-      if (main) return main;
-      if (latestTurn.parentElement) return latestTurn.parentElement;
-    }
-    return document.querySelector('main') || document.body || document.documentElement;
+    const nodes = turns();
+    const last = nodes[nodes.length - 1];
+    return last?.closest?.('main') || last?.parentElement || document.querySelector('main') || document.body || document.documentElement;
   }
 
   function composerElement() {
-    const selectors = [
-      '#prompt-textarea',
-      'textarea[data-testid="prompt-textarea"]',
-      '[contenteditable="true"][data-testid="prompt-textarea"]'
-    ];
-    for (const selector of selectors) {
-      let candidate = null;
-      try { candidate = document.querySelector(selector); } catch {}
-      if (!candidate) continue;
-      if (candidate.disabled || candidate.getAttribute?.('aria-disabled') === 'true') continue;
-      if (candidate instanceof HTMLTextAreaElement || candidate instanceof HTMLInputElement || candidate.isContentEditable) {
-        return candidate;
-      }
+    for (const selector of ['#prompt-textarea', 'textarea[data-testid="prompt-textarea"]', '[contenteditable="true"][data-testid="prompt-textarea"]']) {
+      let node = null;
+      try { node = document.querySelector(selector); } catch {}
+      if (!node || node.disabled || node.getAttribute?.('aria-disabled') === 'true') continue;
+      if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement || node.isContentEditable) return node;
     }
     return null;
   }
-
-  function composerText(composer) {
-    if (!composer) return '';
+  function composerText(node) {
     try {
-      if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
-        return normalizeComposerText(composer.value);
-      }
-      return normalizeComposerText(composer.innerText || composer.textContent || '');
-    } catch {
-      return '';
-    }
+      if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) return cleanComposer(node.value);
+      return cleanComposer(node?.innerText || node?.textContent || '');
+    } catch { return ''; }
   }
-
-  function dispatchComposerInput(composer, text) {
+  function markTrusted(event) { if (event?.isTrusted === true) lastTrustedInteractionAt = Date.now(); }
+  for (const type of ['pointerdown', 'keydown', 'beforeinput', 'input', 'compositionstart']) {
+    try { document.addEventListener(type, markTrusted, { capture: true, passive: true, signal: abortController.signal }); } catch {}
+  }
+  function activeUserBlockReason(node) {
+    let focused = false;
+    let visible = false;
+    try { focused = document.hasFocus(); visible = document.visibilityState === 'visible'; } catch {}
     try {
-      composer.dispatchEvent(new InputEvent('input', {
-        bubbles: true,
-        inputType: text ? 'insertText' : 'deleteContentBackward',
-        data: text || null
-      }));
-    } catch {
-      try { composer.dispatchEvent(new Event('input', { bubbles: true })); } catch {}
-    }
+      return globalThis.ChatGPTNotifierContinuationPolicy?.userInteractionBlockReason?.({
+        composerText: composerText(node), documentFocused: focused, documentVisible: visible,
+        lastTrustedInteractionAt, now: Date.now(), guardMs: ACTIVE_GUARD_MS
+      }) || '';
+    } catch { return composerText(node) ? 'composer-not-empty' : ''; }
   }
 
-  function writeComposerText(composer, text) {
-    if (!composer) return false;
-    try { composer.focus({ preventScroll: true }); } catch {
-      try { composer.focus(); } catch {}
-    }
-
+  function inputEvent(node, text) {
+    try { node.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: text ? 'insertText' : 'deleteContentBackward', data: text || null })); }
+    catch { try { node.dispatchEvent(new Event('input', { bubbles: true })); } catch {} }
+  }
+  function writeComposer(node, text) {
+    if (!node) return false;
+    try { node.focus({ preventScroll: true }); } catch { try { node.focus(); } catch {} }
     try {
-      if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
-        const prototype = composer instanceof HTMLTextAreaElement
-          ? HTMLTextAreaElement.prototype
-          : HTMLInputElement.prototype;
-        const setter = Object.getOwnPropertyDescriptor(prototype, 'value')?.set;
-        if (setter) setter.call(composer, text);
-        else composer.value = text;
-        dispatchComposerInput(composer, text);
-        return composerText(composer) === normalizeComposerText(text);
-      }
-
-      if (composer.isContentEditable) {
-        const selection = window.getSelection?.();
-        if (selection) {
-          const range = document.createRange();
-          range.selectNodeContents(composer);
-          selection.removeAllRanges();
-          selection.addRange(range);
-        }
-
-        let changed = false;
-        try {
-          changed = text
-            ? document.execCommand('insertText', false, text)
-            : document.execCommand('delete', false, null);
-        } catch {}
-
-        if (!changed || composerText(composer) !== normalizeComposerText(text)) {
-          composer.textContent = text;
-          dispatchComposerInput(composer, text);
-        }
-        return composerText(composer) === normalizeComposerText(text);
-      }
-    } catch {}
-    return false;
+      if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) {
+        const proto = node instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
+        if (setter) setter.call(node, text); else node.value = text;
+        inputEvent(node, text);
+      } else if (node.isContentEditable) {
+        node.textContent = text;
+        inputEvent(node, text);
+      } else return false;
+      return composerText(node) === cleanComposer(text);
+    } catch { return false; }
   }
-
-  function stopButtonPresent() {
-    const selectors = [
-      'button[data-testid="stop-button"]',
-      'button[aria-label="Stop generating"]'
-    ];
-    return selectors.some((selector) => {
-      try { return Boolean(document.querySelector(selector)); } catch { return false; }
-    });
+  function stopPresent() {
+    try { return Boolean(document.querySelector('button[data-testid="stop-button"], button[data-testid="fruitjuice-stop-button"], button[aria-label="Stop generating"]')); }
+    catch { return false; }
   }
-
-  function enabledSendButton(composer) {
-    const root = composer?.closest?.('form') || document;
-    const selectors = [
-      'button[data-testid="send-button"]',
-      'button[aria-label="Send prompt"]',
-      'button[aria-label="Send message"]',
-      'button[aria-label="Send"]'
-    ];
-    for (const selector of selectors) {
+  function enabledSend(node) {
+    const root = node?.closest?.('form') || document;
+    for (const selector of ['button[data-testid="send-button"]', 'button[aria-label="Send prompt"]', 'button[aria-label="Send message"]', 'button[aria-label="Send"]']) {
       let button = null;
-      try { button = root.querySelector(selector); } catch {}
-      if (!button && root !== document) {
-        try { button = document.querySelector(selector); } catch {}
-      }
-      if (!button) continue;
-      if (button.disabled || button.getAttribute?.('aria-disabled') === 'true') continue;
-      return button;
+      try { button = root.querySelector(selector) || (root !== document ? document.querySelector(selector) : null); } catch {}
+      if (button && !button.disabled && button.getAttribute?.('aria-disabled') !== 'true') return button;
     }
     return null;
   }
 
-  function waitForSendButton(composer, timeoutMs = AUTO_CONTINUE_READY_WAIT_MS) {
-    const immediate = enabledSendButton(composer);
-    if (immediate && !stopButtonPresent()) return Promise.resolve(immediate);
-
+  function waitUntil(check, root, timeoutMs, observeOptions) {
+    const immediate = check();
+    if (immediate) return Promise.resolve(immediate);
     return new Promise((resolve) => {
-      let settled = false;
+      let done = false;
       let observer = null;
-      let timeoutTimer = null;
-      const finish = (button) => {
-        if (settled) return;
-        settled = true;
-        if (observer) observer.disconnect();
-        if (timeoutTimer !== null) clearTimeout(timeoutTimer);
-        resolve(button || null);
-      };
-      const check = () => {
-        const button = enabledSendButton(composer);
-        if (button && !stopButtonPresent()) finish(button);
-      };
-      const root = composer?.closest?.('form') || document.body || document.documentElement;
+      const finish = (value) => { if (done) return; done = true; observer?.disconnect(); clearTimeout(timer); resolve(value || null); };
+      const inspect = () => { const value = check(); if (value) finish(value); };
       if (root && typeof MutationObserver === 'function') {
-        observer = new MutationObserver(check);
-        observer.observe(root, {
-          childList: true,
-          subtree: true,
-          attributes: true,
-          attributeFilter: ['disabled', 'aria-disabled', 'data-testid', 'aria-label']
-        });
+        observer = new MutationObserver(inspect);
+        observer.observe(root, observeOptions || { childList: true, subtree: true, characterData: true });
       }
-      timeoutTimer = setTimeout(() => finish(null), Math.max(0, Number(timeoutMs) || 0));
-      check();
+      const timer = setTimeout(() => finish(check()), Math.max(0, Number(timeoutMs) || 0));
+      inspect();
     });
   }
-
-  function autoContinueKey(snapshot) {
-    return `${snapshot?.promptKey || ''}|${snapshot?.assistantKey || ''}`;
+  function waitForSendButton(node) {
+    return waitUntil(() => !stopPresent() && enabledSend(node), node?.closest?.('form') || document.body || document.documentElement, READY_WAIT_MS,
+      { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'aria-disabled', 'data-testid', 'aria-label'] });
   }
-
-  function snapshotStillMatches(snapshot) {
-    const current = latestAssistantSnapshot();
-    return Boolean(
-      current &&
-      current.statusCode === 'INCOMPLETE_LIMIT' &&
-      current.promptKey === snapshot?.promptKey &&
-      current.assistantKey === snapshot?.assistantKey
-    );
+  function matchesExpected(current, expected) {
+    try { return Boolean(globalThis.ChatGPTNotifierContinuationPolicy?.identityMatches?.(current, expected)); } catch { return false; }
   }
-
-  function waitForSendAccepted(composer, previousUserKey, timeoutMs = AUTO_CONTINUE_SENT_WAIT_MS) {
-    const accepted = () => {
-      if (composerText(composer) === '') return true;
-      const latestUser = latestUserSnapshot();
-      return Boolean(
-        latestUser &&
-        latestUser.key !== previousUserKey &&
-        normalizeComposerText(latestUser.text) === AUTO_CONTINUE_TEXT
-      );
-    };
-    if (accepted()) return Promise.resolve(true);
-
-    return new Promise((resolve) => {
-      let settled = false;
-      let observer = null;
-      let timeoutTimer = null;
-      const finish = (value) => {
-        if (settled) return;
-        settled = true;
-        if (observer) observer.disconnect();
-        if (timeoutTimer !== null) clearTimeout(timeoutTimer);
-        resolve(Boolean(value));
-      };
-      const check = () => {
-        if (accepted()) finish(true);
-      };
-      const root = observerRoot();
-      if (root && typeof MutationObserver === 'function') {
-        observer = new MutationObserver(check);
-        observer.observe(root, { childList: true, subtree: true, characterData: true });
+  function visibleSendError() {
+    for (const selector of ['[role="alert"]', '[data-testid*="error"]', '[class*="error"]']) {
+      let nodes = [];
+      try { nodes = Array.from(document.querySelectorAll(selector)).slice(-8); } catch {}
+      for (const node of nodes) {
+        const text = inline(node?.innerText || node?.textContent || '').toLowerCase();
+        if (/something went wrong|try again|unable to|failed|error/.test(text)) return text.slice(0, 160);
       }
-      timeoutTimer = setTimeout(() => finish(accepted()), Math.max(0, Number(timeoutMs) || 0));
-      check();
-    });
+    }
+    return '';
+  }
+  function matchingContinuationUserTurn(previousKey) {
+    const user = latestUserSnapshot();
+    return user && user.key !== previousKey && user.conversationId === conversationIdentity()?.id && cleanComposer(user.text) === AUTO_CONTINUE_TEXT ? user : null;
+  }
+  async function waitForContinuationUserTurn(previousKey) {
+    const result = await waitUntil(() => visibleSendError() || matchingContinuationUserTurn(previousKey), observerRoot(), USER_TURN_WAIT_MS);
+    if (typeof result === 'string') return { userTurn: null, errorText: result };
+    return { userTurn: result || null, errorText: visibleSendError() };
   }
 
-  async function performAutoContinue(snapshot) {
-    if (snapshot?.statusCode !== 'INCOMPLETE_LIMIT') {
-      return { ok: false, reason: 'not-incomplete-limit' };
-    }
-    if (!snapshotStillMatches(snapshot)) {
-      return { ok: false, reason: 'response-changed' };
-    }
-
+  async function performContinuation(expected) {
+    if (!matchesExpected(latestAssistantSnapshot(), expected)) return { ok: false, clicked: false, reason: 'response-identity-changed', documentId };
     const composer = composerElement();
-    if (!composer) return { ok: false, reason: 'composer-not-found' };
-    if (composerText(composer) !== '') return { ok: false, reason: 'composer-not-empty' };
-    if (stopButtonPresent()) return { ok: false, reason: 'response-still-generating' };
-
+    if (!composer) return { ok: false, clicked: false, reason: 'composer-not-found', documentId };
+    const initialBlock = activeUserBlockReason(composer);
+    if (initialBlock) return { ok: false, clicked: false, reason: initialBlock, documentId };
+    if (stopPresent()) return { ok: false, clicked: false, reason: 'response-still-generating', documentId };
     const previousUserKey = latestUserSnapshot()?.key || '';
-    if (!writeComposerText(composer, AUTO_CONTINUE_TEXT)) {
-      return { ok: false, reason: 'composer-write-failed' };
-    }
-
+    if (!writeComposer(composer, AUTO_CONTINUE_TEXT)) return { ok: false, clicked: false, reason: 'composer-write-failed', documentId };
     const sendButton = await waitForSendButton(composer);
-    if (!sendButton) {
-      if (composerText(composer) === AUTO_CONTINUE_TEXT) writeComposerText(composer, '');
-      return { ok: false, reason: 'send-button-not-ready' };
-    }
-
-    if (!snapshotStillMatches(snapshot) || stopButtonPresent()) {
-      if (composerText(composer) === AUTO_CONTINUE_TEXT) writeComposerText(composer, '');
-      return { ok: false, reason: 'response-changed-before-send' };
-    }
-    if (composerText(composer) !== AUTO_CONTINUE_TEXT) {
-      return { ok: false, reason: 'composer-changed-before-send' };
-    }
-
-    try {
-      sendButton.click();
-    } catch {
-      if (composerText(composer) === AUTO_CONTINUE_TEXT) writeComposerText(composer, '');
-      return { ok: false, reason: 'send-click-failed' };
-    }
-
-    const sent = await waitForSendAccepted(composer, previousUserKey);
-    if (!sent) {
-      if (composerText(composer) === AUTO_CONTINUE_TEXT) writeComposerText(composer, '');
-      return { ok: false, reason: 'send-not-confirmed' };
-    }
-
-    lastAutoContinueAt = Date.now();
-    return { ok: true, reason: 'sent' };
+    if (!sendButton) { if (composerText(composer) === AUTO_CONTINUE_TEXT) writeComposer(composer, ''); return { ok: false, clicked: false, reason: 'send-button-not-ready', documentId }; }
+    if (!matchesExpected(latestAssistantSnapshot(), expected) || stopPresent()) { if (composerText(composer) === AUTO_CONTINUE_TEXT) writeComposer(composer, ''); return { ok: false, clicked: false, reason: 'response-changed-before-send', documentId }; }
+    if (composerText(composer) !== AUTO_CONTINUE_TEXT) return { ok: false, clicked: false, reason: 'composer-changed-before-send', documentId };
+    const beforeSendBlock = activeUserBlockReason(composer);
+    if (beforeSendBlock && beforeSendBlock !== 'composer-not-empty') { writeComposer(composer, ''); return { ok: false, clicked: false, reason: `${beforeSendBlock}-before-send`, documentId }; }
+    try { sendButton.click(); } catch { if (composerText(composer) === AUTO_CONTINUE_TEXT) writeComposer(composer, ''); return { ok: false, clicked: false, reason: 'send-click-failed', documentId }; }
+    const observed = await waitForContinuationUserTurn(previousUserKey);
+    if (observed.errorText) return { ok: false, clicked: true, reason: 'page-send-error', pageError: observed.errorText, documentId };
+    if (!observed.userTurn) return { ok: false, clicked: true, reason: 'continuation-user-turn-not-confirmed', documentId };
+    return { ok: true, clicked: true, reason: 'continuation-user-turn-confirmed', documentId, continuationUserKey: observed.userTurn.key };
   }
 
-  async function maybeAutoContinue(snapshot) {
-    if (snapshot?.statusCode !== 'INCOMPLETE_LIMIT') {
-      return { ok: false, reason: 'not-incomplete-limit' };
-    }
-    const key = autoContinueKey(snapshot);
-    if (!key || key === '|') return { ok: false, reason: 'missing-response-key' };
-    if (autoContinueSucceeded.has(key)) return { ok: true, reason: 'already-sent' };
-    if (autoContinueInFlight.has(key)) return await autoContinueInFlight.get(key);
-
-    const attempt = performAutoContinue(snapshot);
-    autoContinueInFlight.set(key, attempt);
-    try {
-      const result = await attempt;
-      if (result?.ok) autoContinueSucceeded.add(key);
-      return result;
-    } finally {
-      autoContinueInFlight.delete(key);
-    }
-  }
-
-  function pendingAutoContinueTurn() {
-    if (!lastAutoContinueAt || Date.now() - lastAutoContinueAt > 30000) return false;
-    const turns = turnNodes();
-    const latestTurn = turns[turns.length - 1];
-    if (!latestTurn || roleOf(latestTurn) !== 'user') return false;
-    return normalizeComposerText(userTextPreservingLines(latestTurn)) === AUTO_CONTINUE_TEXT;
-  }
-
-  function waitForTerminalStatus(timeoutMs = DEFAULT_WAIT_MS) {
+  async function waitForTerminalStatus(timeoutMs = DEFAULT_WAIT_MS) {
     const immediate = latestAssistantSnapshot();
-    if (immediate?.statusCode) return Promise.resolve(immediate);
-
-    const boundedTimeout = Math.max(0, Math.min(DEFAULT_WAIT_MS, Number(timeoutMs) || DEFAULT_WAIT_MS));
-    return new Promise((resolve) => {
-      let settled = false;
-      let observer = null;
-      let checkTimer = null;
-      let timeoutTimer = null;
-
-      const finish = (snapshot) => {
-        if (settled) return;
-        settled = true;
-        if (observer) observer.disconnect();
-        if (checkTimer !== null) clearTimeout(checkTimer);
-        if (timeoutTimer !== null) clearTimeout(timeoutTimer);
-        resolve(snapshot || latestAssistantSnapshot());
-      };
-
-      const check = () => {
-        checkTimer = null;
-        const snapshot = latestAssistantSnapshot();
-        if (snapshot?.statusCode) finish(snapshot);
-      };
-
-      const scheduleCheck = () => {
-        if (settled || checkTimer !== null) return;
-        checkTimer = setTimeout(check, CHECK_THROTTLE_MS);
-      };
-
-      const root = observerRoot();
-      if (root && typeof MutationObserver === 'function') {
-        observer = new MutationObserver(scheduleCheck);
-        observer.observe(root, { childList: true, subtree: true, characterData: true });
-      }
-
-      timeoutTimer = setTimeout(() => finish(latestAssistantSnapshot()), boundedTimeout);
-      scheduleCheck();
-    });
+    if (immediate?.statusCode) return immediate;
+    const bounded = Math.max(0, Math.min(DEFAULT_WAIT_MS, Number(timeoutMs) || DEFAULT_WAIT_MS));
+    return await waitUntil(() => latestAssistantSnapshot()?.statusCode ? latestAssistantSnapshot() : null, observerRoot(), bounded) || latestAssistantSnapshot();
   }
 
-  globalThis.__chatgptNotifierStatusDom = Object.freeze({
-    latestAssistantSnapshot,
-    waitForTerminalStatus,
-    maybeAutoContinue
-  });
-
-  chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
-    if (message?.type !== 'CHATGPT_STATUS_CODE_QUERY') return false;
-
-    if (pendingAutoContinueTurn()) {
-      sendResponse?.({
-        ok: true,
-        statusCode: '',
-        statusLine: '',
-        responseText: '',
-        responseBody: '',
-        promptKey: '',
-        assistantKey: '',
-        autoContinued: true,
-        autoContinueReason: 'continuation-pending'
-      });
+  const messageListener = (message, _sender, sendResponse) => {
+    if (message?.type === 'CHATGPT_STATUS_CODE_QUERY') {
+      waitForTerminalStatus(message?.timeoutMs).then((snapshot) => sendResponse?.({
+        ok: true, statusCode: snapshot?.statusCode || '', statusLine: snapshot?.statusLine || '',
+        responseText: snapshot?.responseText || '', responseBody: snapshot?.responseBody || '',
+        conversationId: snapshot?.conversationId || '', conversationUrl: snapshot?.conversationUrl || '',
+        documentId: snapshot?.documentId || documentId, promptKey: snapshot?.promptKey || '',
+        assistantKey: snapshot?.assistantKey || '', revision: snapshot?.revision || '',
+        autoContinued: false, autoContinueReason: 'read-only-observation'
+      })).catch((error) => sendResponse?.({ ok: false, statusCode: '', error: String(error?.message || error), documentId }));
       return true;
     }
+    if (message?.type === 'CHATGPT_CONTINUE_COMMAND') {
+      performContinuation(message?.expected || null).then((result) => sendResponse?.(result))
+        .catch((error) => sendResponse?.({ ok: false, clicked: false, reason: 'continuation-command-error', error: String(error?.message || error), documentId }));
+      return true;
+    }
+    if (message?.type === 'CHATGPT_CONTINUE_VERIFY') {
+      const current = latestAssistantSnapshot();
+      sendResponse?.({ ok: true, matchesExpected: matchesExpected(current, message?.expected || null), documentId, current });
+      return true;
+    }
+    if (message?.type === 'CHATGPT_STATUS_RUNTIME_PING') {
+      sendResponse?.({ ok: true, runtimeVersion: RUNTIME_VERSION, documentId, conversationId: conversationIdentity()?.id || '' });
+      return true;
+    }
+    return false;
+  };
 
-    waitForTerminalStatus(message?.timeoutMs).then(async (snapshot) => {
-      const autoContinue = await maybeAutoContinue(snapshot);
-      const autoContinued = snapshot?.statusCode === 'INCOMPLETE_LIMIT' && autoContinue?.ok === true;
-      sendResponse?.({
-        ok: true,
-        statusCode: autoContinued ? '' : (snapshot?.statusCode || ''),
-        statusLine: autoContinued ? '' : (snapshot?.statusLine || ''),
-        responseText: snapshot?.responseText || '',
-        responseBody: snapshot?.responseBody || '',
-        promptKey: snapshot?.promptKey || '',
-        assistantKey: snapshot?.assistantKey || '',
-        autoContinued,
-        autoContinueReason: autoContinue?.reason || ''
-      });
-    }).catch((error) => {
-      sendResponse?.({ ok: false, statusCode: '', error: String(error?.message || error) });
-    });
-    return true;
-  });
+  chrome.runtime.onMessage.addListener(messageListener);
+  const runtime = {
+    version: RUNTIME_VERSION, documentId, latestAssistantSnapshot, waitForTerminalStatus, performContinuation,
+    dispose() {
+      try { abortController.abort(); } catch {}
+      try { chrome.runtime.onMessage.removeListener(messageListener); } catch {}
+      if (globalThis.__chatgptNotifierStatusRuntime === runtime) delete globalThis.__chatgptNotifierStatusRuntime;
+    }
+  };
+  globalThis.__chatgptNotifierStatusRuntime = runtime;
+  globalThis.__chatgptNotifierStatusDom = Object.freeze({ latestAssistantSnapshot, waitForTerminalStatus, performContinuation });
+  globalThis.__chatgptNotifierStatusDomInstalled = true;
 })();

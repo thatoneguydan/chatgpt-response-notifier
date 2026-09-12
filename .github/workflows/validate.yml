@@ -26,10 +26,13 @@ jobs:
           $ErrorActionPreference = 'Stop'
           foreach ($script in @(
             '.\extension\background.js',
+            '.\extension\attachment-script.js',
+            '.\extension\coordinator-background.js',
             '.\extension\service-worker.js',
             '.\extension\content-script.js',
             '.\extension\persistence-script.js',
             '.\extension\status-code.js',
+            '.\extension\status-policy.js',
             '.\extension\status-script.js',
             '.\extension\recovery-background.js',
             '.\extension\recovery-script.js',
@@ -40,8 +43,8 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax validation failed: $script" }
           }
 
-          node --test .\tests\extension\architecture.test.mjs
-          if ($LASTEXITCODE -ne 0) { throw 'Extension architecture tests failed.' }
+          node --test .\tests\extension\architecture.test.mjs .\tests\extension\coordinator.behavior.test.mjs .\tests\extension\status-policy.behavior.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Extension architecture/behavior tests failed.' }
 
           $manifest = Get-Content -LiteralPath .\extension\manifest.json -Raw | ConvertFrom-Json
           foreach ($forbidden in @('downloads', 'alarms', 'storage', 'nativeMessaging', 'notifications', 'offscreen')) {

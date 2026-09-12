@@ -37,7 +37,8 @@ internal sealed class NativeHostApplication : Application
             });
 
             var store = new NotificationStateStore(Path.Combine(NativeHostInstaller.DataRoot, "pending.json"));
-            _toastManager = new ToastManager(store, SendEventAsync);
+            var acceptedStore = new AcceptedNotificationStore(Path.Combine(NativeHostInstaller.DataRoot, "accepted-notifications.json"));
+            _toastManager = new ToastManager(store, acceptedStore, SendEventAsync);
 
             try
             {
@@ -109,6 +110,7 @@ internal sealed class NativeHostApplication : Application
         switch (message.Type)
         {
             case "toast.show" when message.Notification is not null:
+            {
                 _diagnosticsStore?.AppendHost(new
                 {
                     source = "host",
@@ -117,16 +119,27 @@ internal sealed class NativeHostApplication : Application
                     conversationSuffix = Suffix(message.Notification.ConversationId),
                     notificationSuffix = Suffix(message.Notification.Id)
                 });
-                _toastManager!.Show(message.Notification);
+
+                var accepted = _toastManager!.Show(message.Notification);
+
                 _diagnosticsStore?.AppendHost(new
                 {
                     source = "host",
-                    status = "toast-shown",
+                    status = "toast-persisted",
                     observedAt = DateTimeOffset.UtcNow,
                     conversationSuffix = Suffix(message.Notification.ConversationId),
                     notificationSuffix = Suffix(message.Notification.Id)
                 });
+
+                _ = SendEventAsync(new
+                {
+                    type = "toast.accepted",
+                    requestId = message.RequestId,
+                    notificationId = message.Notification.Id,
+                    accepted
+                });
                 break;
+            }
             case "toast.dismissConversation" when !string.IsNullOrWhiteSpace(message.ConversationId):
                 _toastManager!.DismissConversation(message.ConversationId);
                 break;
