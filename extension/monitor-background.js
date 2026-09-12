@@ -607,9 +607,9 @@
   }
 
   async function noteTabClosedQuiet(tabId) {
+    const conversationId = tabConversations.get(tabId) || '';
     const provisional = await getProvisional(tabId);
     if (provisional) await deleteRecord(PROFILE_STORE, provisionalKey(tabId));
-    const conversationId = tabConversations.get(tabId) || '';
     if (!conversationId) return;
     const enrollment = await getEnrollment(conversationId);
     if (enrollment?.enabled !== true) return;
