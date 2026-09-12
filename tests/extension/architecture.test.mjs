@@ -31,7 +31,7 @@ test('only the canonical seven exact terminal footer codes qualify', () => {
   assert.equal(parser.parseTerminalStatus('Body\n[GITHUB_STATUS: FUTURE_CODE]').statusCode, '');
 });
 
-test('background composition loads policy, passive observation, recovery ownership and normal continuation fuse in dependency order', () => {
+test('background composition loads policy, unified automation owner, recovery and normal continuation fuse in dependency order', () => {
   const wrapper = text('extension/background.js');
   assert.match(wrapper, /status-code\.js[\s\S]*status-policy\.js[\s\S]*recovery-model\.js[\s\S]*coordinator-background\.js[\s\S]*recovery-background\.js[\s\S]*history-background\.js[\s\S]*monitor-background\.js[\s\S]*monitor-query-compat-background\.js[\s\S]*recovery-control-background\.js[\s\S]*bounded-recovery-background\.js[\s\S]*bounded-recovery-attachment-background\.js[\s\S]*service-worker\.js[\s\S]*normal-continuation-budget-hook\.js/);
 });
@@ -90,11 +90,12 @@ test('status observation is read-only and continuation is separately authorized'
   assert.match(policy, /current\.revision === expected\.revision/);
 });
 
-test('passive monitored-build observer persists identity without raw prompt or assistant content', () => {
+test('passive monitored-build observer persists identity and scope signal without raw prompt or assistant content', () => {
   const page = text('extension/monitor-script.js');
   const monitor = text('extension/monitor-background.js');
   assert.match(page, /promptRevision/);
   assert.match(page, /assistantRevision/);
+  assert.match(page, /workStartSignal/);
   assert.match(page, /CHATGPT_MONITOR_STATE/);
   assert.match(page, /silentIdleConfirmations/);
   assert.match(page, /stableTerminal/);
@@ -103,33 +104,89 @@ test('passive monitored-build observer persists identity without raw prompt or a
   assert.match(monitor, /runKey\(snapshot\)/);
   assert.match(monitor, /promptRevision:/);
   assert.match(monitor, /assistantRevision:/);
+  assert.match(monitor, /workStartSignal:/);
   assert.doesNotMatch(monitor, /promptText\s*:/);
   assert.doesNotMatch(monitor, /assistantText\s*:/);
   assert.doesNotMatch(monitor, /responseText\s*:/);
 });
 
-test('monitor query compatibility preserves the passive wrapper while exposing direct identity fields to recovery', () => {
+test('monitor query compatibility preserves passive wrapper while exposing direct identity fields to recovery', () => {
   const compat = text('extension/monitor-query-compat-background.js');
   assert.match(compat, /message\?\.type !== 'CHATGPT_MONITOR_QUERY'/);
   assert.match(compat, /result\?\.snapshot/);
   assert.match(compat, /\{ \.\.\.result\.snapshot, \.\.\.result, snapshot: result\.snapshot \}/);
 });
 
-test('monitoring enrollment is explicit and recovery is a second per-conversation opt-in', () => {
+test('one authoritative automation state enables monitoring and recovery together with sticky operator Pause', () => {
   const monitor = text('extension/monitor-background.js');
   const recoveryControl = text('extension/recovery-control-background.js');
   const popup = text('extension/popup.js');
-  assert.match(monitor, /SET_ACTIVE_CHAT_MONITORING/);
-  assert.match(monitor, /source:\s*String\(source \|\| 'operator'\)/);
-  assert.match(monitor, /statusIsValid[\s\S]*setEnrollment\([^)]*true, 'coded-turn'\)/);
-  assert.match(recoveryControl, /SET_ACTIVE_CHAT_RECOVERY/);
-  assert.match(recoveryControl, /recoveryEnabled:\s*recoveryEnabled === true/);
-  assert.match(recoveryControl, /operator-recovery/);
-  assert.match(recoveryControl, /RESUME_ACTIVE_CHAT_RECOVERY/);
-  assert.match(popup, /SET_ACTIVE_CHAT_MONITORING/);
-  assert.match(popup, /SET_ACTIVE_CHAT_RECOVERY/);
-  assert.match(popup, /RESUME_ACTIVE_CHAT_RECOVERY/);
+  const popupHtml = text('extension/popup.html');
+  assert.match(monitor, /AUTOMATION_SCHEMA_VERSION = 2/);
+  assert.match(monitor, /SET_BUILD_AUTOMATION_STATE/);
+  assert.match(monitor, /recoveryEnabled:\s*isEnabled/);
+  assert.match(monitor, /userPaused:\s*paused/);
+  assert.match(monitor, /operator-pause/);
+  assert.match(monitor, /expectedRevision/);
+  assert.match(monitor, /state-revision-mismatch/);
+  assert.match(monitor, /automationEnabled:\s*state\?\.enabled === true/);
+  assert.match(recoveryControl, /legacyReadOnly:\s*true/);
+  assert.match(recoveryControl, /sole writable owner/);
+  assert.doesNotMatch(recoveryControl, /async function setConfig/);
+  assert.match(popup, /GET_BUILD_AUTOMATION_OVERVIEW/);
+  assert.match(popup, /SET_BUILD_AUTOMATION_STATE/);
+  assert.match(popup, /expectedRevision:/);
+  assert.match(popup, /requestId/);
+  assert.match(popup, /state unconfirmed/);
+  assert.match(popupHtml, />Build automation</);
+  assert.match(popupHtml, /id="automationToggle"/);
+  assert.doesNotMatch(popupHtml, /id="recoveryToggle"/);
+  assert.doesNotMatch(popupHtml, /id="resumeRecovery"/);
   assert.doesNotMatch(monitor, /https:\/\/(?:api\.)?github\.com/i);
+});
+
+test('build START scope is exact, assistant-only, fresh-request-bound and terminal code remains fallback', () => {
+  const page = text('extension/monitor-script.js');
+  const monitor = text('extension/monitor-background.js');
+  assert.match(page, /WORK_START_LINE = '\[GITHUB_WORK: START\]'/);
+  assert.match(page, /assistantHasWorkStart/);
+  assert.match(page, /querySelectorAll\?\.\('pre, code, blockquote'\)/);
+  assert.match(page, /line\.trim\(\) === WORK_START_LINE/);
+  assert.match(monitor, /freshRequestEvidence/);
+  assert.match(monitor, /clean\.workStartSignal === true \|\| statusIsValid/);
+  assert.match(monitor, /enrollment\?\.userPaused !== true/);
+  assert.match(monitor, /'work-start-signal'\s*:\s*'coded-turn'/);
+});
+
+test('manual pre-conversation Monitor is provisional and binds only after the next observed request', () => {
+  const monitor = text('extension/monitor-background.js');
+  assert.match(monitor, /automation-provisional:/);
+  assert.match(monitor, /armProvisionalForRequest/);
+  assert.match(monitor, /armedRequestId/);
+  assert.match(monitor, /armedAt/);
+  assert.match(monitor, /migrateProvisionalIfReady/);
+  assert.match(monitor, /Number\(provisional\.armedAt \|\| 0\) <= 0/);
+});
+
+test('closing a tab is quiet and duplicate conversation ownership is reconciled without foregrounding', () => {
+  const monitor = text('extension/monitor-background.js');
+  assert.match(monitor, /noteTabClosedQuiet/);
+  assert.match(monitor, /owner-transferred-after-close/);
+  assert.match(monitor, /owner-tab-closed-quiet/);
+  assert.match(monitor, /state:\s*'detached'/);
+  assert.match(monitor, /reason\) === 'owner-tab-closed'/);
+  assert.doesNotMatch(monitor, /noteTabUnobservable\(tabId, 'owner-tab-closed'\)/);
+  assert.doesNotMatch(monitor, /tabs\.update\([^)]*active:\s*true/);
+  assert.doesNotMatch(monitor, /windows\.update\([^)]*focused:\s*true/);
+});
+
+test('Pause vetoes normal INCOMPLETE_LIMIT automatic continuation at final action admission', () => {
+  const hook = text('extension/normal-continuation-budget-hook.js');
+  assert.match(hook, /getEnrollment/);
+  assert.match(hook, /enrollment\?\.enabled !== true/);
+  assert.match(hook, /enrollment\?\.recoveryEnabled !== true/);
+  assert.match(hook, /enrollment\?\.userPaused === true/);
+  assert.match(hook, /build-automation-paused/);
 });
 
 test('attention.required is durable and separate from rolling coded history', () => {
@@ -142,6 +199,7 @@ test('attention.required is durable and separate from rolling coded history', ()
   assert.match(monitor, /kind:\s*'attention\.required'/);
   assert.match(monitor, /\['toast\.accepted'\]/);
   assert.match(monitor, /delivered:\s*true/);
+  assert.match(monitor, /item\.reason !== 'owner-tab-closed'/);
   assert.match(popup, /ACK_RECOVERY_ATTENTION/);
   assert.match(record, /Kind \{ get; init; \} = "coded-result"/);
   assert.match(record, /"coded-result" or "attention\.required"/);
@@ -270,7 +328,7 @@ test('continuation acceptance requires matching user turn plus passive accepted 
   assert.match(worker, /sameConversation:/);
 });
 
-test('completion is bound to the originating conversation, document and rendered response before claim', () => {
+test('completion is bound to originating conversation, document and rendered response before claim', () => {
   const worker = text('extension/service-worker.js');
   assert.match(worker, /senderDocumentId = String\(sender\.documentId/);
   assert.match(worker, /queryTerminalStatus\(tabId, senderDocumentId\)/);
