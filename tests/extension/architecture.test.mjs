@@ -154,7 +154,7 @@ test('build START scope is exact, assistant-only, fresh-request-bound and termin
   assert.match(page, /assistantHasWorkStart/);
   assert.match(page, /ChatGPTNotifierStatusCode\?\.isWorkStartSignal/);
   assert.match(page, /pre, code, blockquote, ul, ol, li/);
-  assert.match(page, /data-message-author-role=\\"tool\\"/);
+  assert.match(page, /data-message-author-role="tool"/);
   assert.match(page, /parser\(line\) === true/);
   assert.doesNotMatch(page, /WORK_START_LINE\s*=/);
   assert.match(monitor, /freshRequestEvidence/);
