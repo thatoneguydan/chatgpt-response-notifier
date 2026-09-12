@@ -96,8 +96,8 @@
       const source = roleNode?.querySelector?.('.markdown, [class*="prose"]') || roleNode;
       if (!source) return false;
       const copy = source.cloneNode(true);
-      for (const excluded of copy.querySelectorAll?.('pre, code, blockquote') || []) excluded.remove();
-      const candidates = [copy, ...(copy.querySelectorAll?.('p, li, div, span') || [])];
+      for (const excluded of copy.querySelectorAll?.('pre, code, blockquote, ul, ol, li, [data-message-author-role="tool"], [data-tool]') || []) excluded.remove();
+      const candidates = [copy, ...(copy.querySelectorAll?.('p, div, span') || [])];
       return candidates.some((candidate) => String(candidate.textContent || '')
         .replace(/\r\n?/g, '\n')
         .split('\n')
