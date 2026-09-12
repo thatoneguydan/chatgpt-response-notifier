@@ -82,6 +82,21 @@
     const recovery = globalThis.__chatgptNotifierBoundedRecovery;
     if (!recovery) return await originalRequestContinuation(tabId, senderDocumentId, expected);
 
+    // Pause is an automation veto, not just a recovery preference. Check the
+    // authoritative combined setting immediately before spending a continuation
+    // action so a late operator Pause cannot race through the old path.
+    const monitor = globalThis.__chatgptNotifierMonitorBackground;
+    let enrollment = null;
+    try { enrollment = await monitor?.getEnrollment?.(String(expected?.conversationId || '')); } catch {}
+    if (enrollment?.enabled !== true || enrollment?.recoveryEnabled !== true || enrollment?.userPaused === true) {
+      return {
+        ok: false,
+        clicked: false,
+        reason: 'build-automation-paused',
+        documentId: senderDocumentId || ''
+      };
+    }
+
     const admission = await recovery.admitNormalContinuation({
       conversationId: String(expected?.conversationId || ''),
       conversationUrl: String(expected?.conversationUrl || ''),
@@ -121,5 +136,5 @@
     if (watcher) watcher.finish({ accepted: false, reason: 'owner-tab-closed' });
   });
 
-  globalThis.__chatgptNotifierNormalContinuationBudgetHook = Object.freeze({ version: 1 });
+  globalThis.__chatgptNotifierNormalContinuationBudgetHook = Object.freeze({ version: 2 });
 })();
