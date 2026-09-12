@@ -18,10 +18,12 @@
 
   if (globalThis.ChatGPTNotifierStatusCode) return;
 
-  // This list is checked against the generated grammar fixture bundled with
-  // the extension. The canonical meanings remain in DevelopmentInfrastructure.
+  // This list and the START signal are checked against the generated grammar
+  // fixture bundled with the extension. Canonical meanings remain in
+  // DevelopmentInfrastructure.
   const CONTRACT_ID = 'github-work-status/v1';
-  const CONTRACT_SEMANTIC_SHA256 = '776d5e0ac9f3a9d5df3b0ddd3045454d8f664adacecbc604130a31a5bcefc1f5';
+  const CONTRACT_SEMANTIC_SHA256 = '9c60a07bc26b639c15a6456b08707c2e92fa06fe98baa21b6b731b3f9dda4cd1';
+  const WORK_START_SIGNAL = '[GITHUB_WORK: START]';
   const VALID_STATUS_CODES = Object.freeze([
     'PLANNING_ACTIVE',
     'COMPLETE_APPLIED',
@@ -33,6 +35,7 @@
   ]);
   const VALID_STATUS_CODE_SET = new Set(VALID_STATUS_CODES);
   const STATUS_LINE_PATTERN = /^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/;
+  const WORK_START_LINE_PATTERN = /^\[GITHUB_WORK: START\]$/;
   const FENCE_PATTERN = /^\s*(`{3,}|~{3,})/;
 
   function normalizeLineEndings(value) {
@@ -41,6 +44,10 @@
 
   function isStatusCode(value) {
     return VALID_STATUS_CODE_SET.has(String(value || ''));
+  }
+
+  function isWorkStartSignal(value) {
+    return WORK_START_LINE_PATTERN.test(String(value || '').trim());
   }
 
   function outsideFenceFlags(lines) {
@@ -97,8 +104,10 @@
   globalThis.ChatGPTNotifierStatusCode = Object.freeze({
     contractId: CONTRACT_ID,
     contractSemanticSha256: CONTRACT_SEMANTIC_SHA256,
+    workStartSignal: WORK_START_SIGNAL,
     validStatusCodes: VALID_STATUS_CODES,
     isStatusCode,
+    isWorkStartSignal,
     parseTerminalStatus
   });
 })();
