@@ -268,8 +268,8 @@ $evidence = [ordered]@{
     installedManifest = [pscustomobject]$installedManifest
     helper = [ordered]@{
         processObservationState = $helperProcessReadState
-        processErrorType = if ($null -ne $helperProcessError) { $helperProcessError.GetType().Name } else { $null }
-        processErrorCode = if ($null -ne $helperProcessError) { $helperProcessError.HResult } else { $null }
+        processErrorType = $(if ($null -ne $helperProcessError) { $helperProcessError.GetType().Name } else { $null })
+        processErrorCode = $(if ($null -ne $helperProcessError) { $helperProcessError.HResult } else { $null })
         processCount = $helperProcesses.Count
         processes = $helperProcesses
         loopbackListener = [pscustomobject]$listener
@@ -284,5 +284,4 @@ $outputDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($OutputPath))
 if (-not [string]::IsNullOrWhiteSpace($outputDirectory)) { New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null }
 $evidence | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $OutputPath -Encoding UTF8
 
-Write-Host ('Notifier runtime evidence written. InstallState={0}; Manifest={1}; Helpers={2}; Listener={3}; Diagnostics={4}; ChromeRuntimeCapture={5}' -f \
-    $installState.state, $installedManifest.state, $helperProcesses.Count, $listener.listening, $diagnostics.state, $chrome.loadedExtensionRuntimeIdentitySupported)
+Write-Host ('Notifier runtime evidence written. InstallState={0}; Manifest={1}; Helpers={2}; Listener={3}; Diagnostics={4}; ChromeRuntimeCapture={5}' -f $installState.state, $installedManifest.state, $helperProcesses.Count, $listener.listening, $diagnostics.state, $chrome.loadedExtensionRuntimeIdentitySupported)
