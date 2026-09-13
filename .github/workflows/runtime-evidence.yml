@@ -6,6 +6,7 @@ on:
     paths:
       - 'tools/Collect-NotifierRuntimeEvidence.ps1'
       - 'tools/Add-NotifierStartupRegistryEvidence.ps1'
+      - 'tools/Add-NotifierSafeEvidence.ps1'
       - '.github/workflows/runtime-evidence.yml'
       - 'extension/**'
       - 'src/**'
@@ -48,7 +49,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           foreach ($script in @(
             '.\tools\Collect-NotifierRuntimeEvidence.ps1',
-            '.\tools\Add-NotifierStartupRegistryEvidence.ps1'
+            '.\tools\Add-NotifierStartupRegistryEvidence.ps1',
+            '.\tools\Add-NotifierSafeEvidence.ps1'
           )) {
             $tokens = $null
             $errors = $null
@@ -71,6 +73,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Runtime evidence collector failed with exit code $LASTEXITCODE." }
           powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Add-NotifierStartupRegistryEvidence.ps1 -EvidencePath $output
           if ($LASTEXITCODE -ne 0) { throw "Startup registry evidence fallback failed with exit code $LASTEXITCODE." }
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Add-NotifierSafeEvidence.ps1 -EvidencePath $output
+          if ($LASTEXITCODE -ne 0) { throw "Bounded notifier evidence read failed with exit code $LASTEXITCODE." }
 
           $evidence = Get-Content -LiteralPath $output -Raw -Encoding UTF8 | ConvertFrom-Json
           # Pull-request GITHUB_SHA is the synthetic merge ref. Evidence must name
@@ -102,13 +106,16 @@ jobs:
             throw 'Runtime evidence leaked the interactive profile path.'
           }
 
-          Write-Host ("Evidence summary: install={0}; manifest={1}; helperProcesses={2}; listener={3}; startupRegistration={4}; startupVersion={5}; diagnostics={6}; liveChromeCapture={7}" -f `
+          Write-Host ("Evidence summary: install={0}; manifest={1}; helperProcesses={2}; listener={3}; startupRegistration={4}; startupVersion={5}; safeEvidence={6}; safeInstalled={7}; safeLoaded={8}; diagnostics={9}; liveRuntimeIdentity={10}" -f `
             $evidence.installState.state,
             $evidence.installedManifest.state,
             $evidence.helper.processCount,
             $evidence.helper.loopbackListener.listening,
             $evidence.helper.startupRegistration.state,
             $evidence.helper.startupRegistration.versionFromCommand,
+            $evidence.safeRuntimeEvidence.state,
+            $evidence.safeRuntimeEvidence.installedVersion,
+            $evidence.safeRuntimeEvidence.loadedExtensionVersion,
             $evidence.diagnostics.state,
             $evidence.chrome.loadedExtensionRuntimeIdentitySupported)
 
