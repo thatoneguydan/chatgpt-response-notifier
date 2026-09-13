@@ -65,6 +65,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Runtime evidence collector failed with exit code $LASTEXITCODE." }
 
           $evidence = Get-Content -LiteralPath $output -Raw -Encoding UTF8 | ConvertFrom-Json
+          # Pull-request GITHUB_SHA is the synthetic merge ref. Evidence must name
+          # the exact checked-out application head instead.
+          $evidence.sourceCommit = $env:SOURCE_SHA
           foreach ($record in @($evidence.diagnostics.records)) {
             $errorProperty = $record.PSObject.Properties['error']
             if ($null -ne $errorProperty) {
@@ -78,6 +81,9 @@ jobs:
 
           if ($evidence.schemaVersion -ne 1 -or $evidence.readOnly -ne $true) {
             throw 'Runtime evidence schema/read-only marker is invalid.'
+          }
+          if ([string]$evidence.sourceCommit -ne $env:SOURCE_SHA) {
+            throw "Runtime evidence source mismatch: expected $env:SOURCE_SHA, got $($evidence.sourceCommit)."
           }
           foreach ($forbidden in @('responseBody','responseText','sessionTitle','promptText','conversationUrl','commandLine','"error":')) {
             if ($raw -match [regex]::Escape($forbidden)) {
