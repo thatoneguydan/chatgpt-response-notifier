@@ -201,7 +201,7 @@ function compareVersions(left, right) {
 function maybeReloadForInstalledVersion(installedVersion) {
   const currentVersion = chrome.runtime.getManifest().version;
   const comparison = compareVersions(installedVersion, currentVersion);
-  if (comparison !== null && comparison > 0) {
+  if (comparison !== null && comparison !== 0) {
     setTimeout(() => chrome.runtime.reload(), 250);
     return true;
   }
