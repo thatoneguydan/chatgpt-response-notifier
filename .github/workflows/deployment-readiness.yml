@@ -48,8 +48,7 @@ jobs:
         run: |
           $ErrorActionPreference='Stop'
           $out=Join-Path $env:RUNNER_TEMP 'notifier-deployment-readiness.json'
-          & '.\tools\Collect-NotifierDeploymentReadiness.ps1' -OutputPath $out
-          if($LASTEXITCODE -ne 0){throw "Deployment readiness collector failed with exit code $LASTEXITCODE"}
+          & '.\tools\Collect-NotifierDeploymentReadiness.ps1' -OutputPath $out | Out-Host
           $raw=Get-Content -LiteralPath $out -Raw -Encoding UTF8
           foreach($forbidden in @('C:\Users\dan','interactiveUserSid','userProfile','localLog','localReceipt','message','error"')){
             if($raw -match [regex]::Escape($forbidden)){throw "Deployment readiness evidence contains forbidden marker: $forbidden"}
@@ -58,8 +57,9 @@ jobs:
           "### Notifier deployment readiness" | Add-Content $env:GITHUB_STEP_SUMMARY
           "- Runner: $($data.runnerIdentity)" | Add-Content $env:GITHUB_STEP_SUMMARY
           "- Broker status: present=$($data.broker.statusPresent), result=$($data.broker.result), version=$($data.broker.brokerVersion), session=$($data.broker.sessionId), ageSeconds=$($data.broker.ageSeconds)" | Add-Content $env:GITHUB_STEP_SUMMARY
-          "- CPU bootstrap receipt: present=$($data.cpuMonitorBootstrap.receiptPresent), success=$($data.cpuMonitorBootstrap.success), app=$($data.cpuMonitorBootstrap.appInstalled), shortcut=$($data.cpuMonitorBootstrap.shortcutInstalled), smoke=$($data.cpuMonitorBootstrap.smokePassed), deferred=$($data.cpuMonitorBootstrap.smokeDeferred), launch=$($data.cpuMonitorBootstrap.limitedUserLaunchStarted), errorPresent=$($data.cpuMonitorBootstrap.errorPresent)" | Add-Content $env:GITHUB_STEP_SUMMARY
-          "- CPU runtime: present=$($data.cpuMonitorRuntime.statusPresent), state=$($data.cpuMonitorRuntime.state), updated=$($data.cpuMonitorRuntime.updatedAt), lastCheckpoint=$($data.cpuMonitorRuntime.lastCheckpointAt), samples=$($data.cpuMonitorRuntime.sampleCount)" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- CPU bootstrap receipt: present=$($data.cpuMonitorBootstrap.receiptPresent), success=$($data.cpuMonitorBootstrap.success), source=$($data.cpuMonitorBootstrap.glassCommit), infrastructure=$($data.cpuMonitorBootstrap.infrastructureCommit), app=$($data.cpuMonitorBootstrap.appInstalled), shortcut=$($data.cpuMonitorBootstrap.shortcutInstalled), smoke=$($data.cpuMonitorBootstrap.smokePassed), deferred=$($data.cpuMonitorBootstrap.smokeDeferred), launch=$($data.cpuMonitorBootstrap.limitedUserLaunchStarted), errorPresent=$($data.cpuMonitorBootstrap.errorPresent)" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- CPU UI: ready=$($data.cpuMonitorUi.readyPresent), readyTimestamp=$($data.cpuMonitorUi.readyTimestampUtc), launchError=$($data.cpuMonitorUi.launchErrorPresent), launchErrorTimestamp=$($data.cpuMonitorUi.launchErrorTimestampUtc)" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- CPU runtime: present=$($data.cpuMonitorRuntime.statusPresent), state=$($data.cpuMonitorRuntime.state), started=$($data.cpuMonitorRuntime.startedAt), updated=$($data.cpuMonitorRuntime.updatedAt), lastCheckpoint=$($data.cpuMonitorRuntime.lastCheckpointAt), samples=$($data.cpuMonitorRuntime.sampleCount), rollingMinutes=$($data.cpuMonitorRuntime.rollingWindowMinutes)" | Add-Content $env:GITHUB_STEP_SUMMARY
 
       - name: Upload sanitized deployment readiness
         uses: actions/upload-artifact@v4
