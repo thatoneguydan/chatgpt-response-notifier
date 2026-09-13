@@ -13,6 +13,7 @@ internal sealed class NativeHostApplication : Application
     private ToastManager? _toastManager;
     private PublicUpdateService? _updateService;
     private DiagnosticsStore? _diagnosticsStore;
+    private RuntimeEvidencePublisher? _runtimeEvidencePublisher;
     private Task? _updateLoop;
 
     public new int Run()
@@ -27,13 +28,16 @@ internal sealed class NativeHostApplication : Application
     {
         try
         {
-            _diagnosticsStore = new DiagnosticsStore(Path.Combine(NativeHostInstaller.DataRoot, "diagnostics.jsonl"));
+            _runtimeEvidencePublisher = new RuntimeEvidencePublisher();
+            _diagnosticsStore = new DiagnosticsStore(
+                Path.Combine(NativeHostInstaller.DataRoot, "diagnostics.jsonl"),
+                _runtimeEvidencePublisher.Append);
             _diagnosticsStore.AppendHost(new
             {
                 source = "host",
                 status = "host-started",
                 observedAt = DateTimeOffset.UtcNow,
-                installedExtensionVersion = BundleInstaller.ReadInstalledExtensionVersion()
+                extensionVersion = BundleInstaller.ReadInstalledExtensionVersion()
             });
 
             var store = new NotificationStateStore(Path.Combine(NativeHostInstaller.DataRoot, "pending.json"));
@@ -66,6 +70,7 @@ internal sealed class NativeHostApplication : Application
                 try { StartupRegistration.Register(processPath); } catch (Exception error) { FileLog.Write("Could not refresh per-user startup registration", error); }
             }
 
+            _runtimeEvidencePublisher.Publish();
             _updateLoop = RunUpdateLoopAsync();
         }
         catch (Exception error)
@@ -87,6 +92,7 @@ internal sealed class NativeHostApplication : Application
         _updateService?.Dispose();
         _updateService = null;
         _diagnosticsStore = null;
+        _runtimeEvidencePublisher = null;
         _shutdown.Dispose();
     }
 
