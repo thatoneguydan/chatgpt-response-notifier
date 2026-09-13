@@ -19,15 +19,29 @@ function IsoOrNull {
     try { return ([DateTimeOffset]::Parse([string]$Value)).ToString('o') } catch { return $null }
 }
 
+function FileTimestampOrNull {
+    param([string]$Path)
+    try {
+        if (Test-Path -LiteralPath $Path -PathType Leaf) {
+            return (Get-Item -LiteralPath $Path).LastWriteTimeUtc.ToString('o')
+        }
+    } catch {}
+    return $null
+}
+
 $identity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
 $brokerStatusPath = 'C:\ProgramData\GlassUserSessionDeployBroker\Outbox\broker-runtime-status.json'
 $cpuRoot = 'C:\Users\dan\AppData\Local\Glass\Diagnostics\CPU-Activity'
 $cpuReceiptPath = Join-Path $cpuRoot 'install-latest.json'
 $cpuStatusPath = Join-Path $cpuRoot 'live-status.json'
+$uiReadyPath = Join-Path $cpuRoot 'ui-ready.json'
+$uiErrorPath = Join-Path $cpuRoot 'ui-launch-error.json'
 
 $broker = Read-JsonIfPresent -Path $brokerStatusPath
 $receipt = Read-JsonIfPresent -Path $cpuReceiptPath
 $cpuStatus = Read-JsonIfPresent -Path $cpuStatusPath
+$uiReady = Read-JsonIfPresent -Path $uiReadyPath
+$uiError = Read-JsonIfPresent -Path $uiErrorPath
 
 $brokerTimestamp = if ($broker) { IsoOrNull $broker.timestampUtc } else { $null }
 $brokerAgeSeconds = $null
@@ -36,7 +50,7 @@ if ($brokerTimestamp) {
 }
 
 $result = [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     collectedAt = [DateTimeOffset]::UtcNow.ToString('o')
     runnerIdentity = $identity
     broker = [ordered]@{
@@ -63,12 +77,20 @@ $result = [ordered]@{
         limitedUserTask = if ($receipt -and $receipt.PSObject.Properties['smoke'] -and $receipt.smoke -and $receipt.smoke.PSObject.Properties['limitedUserTask']) { [bool]$receipt.smoke.limitedUserTask } else { $null }
         errorPresent = if ($receipt -and $receipt.PSObject.Properties['error']) { -not [string]::IsNullOrWhiteSpace([string]$receipt.error) } else { $null }
     }
+    cpuMonitorUi = [ordered]@{
+        readyPresent = ($null -ne $uiReady)
+        readyTimestampUtc = FileTimestampOrNull $uiReadyPath
+        launchErrorPresent = ($null -ne $uiError)
+        launchErrorTimestampUtc = FileTimestampOrNull $uiErrorPath
+    }
     cpuMonitorRuntime = [ordered]@{
         statusPresent = ($null -ne $cpuStatus)
         state = if ($cpuStatus -and $cpuStatus.PSObject.Properties['state']) { [string]$cpuStatus.state } else { $null }
         updatedAt = if ($cpuStatus -and $cpuStatus.PSObject.Properties['updatedAt']) { IsoOrNull $cpuStatus.updatedAt } else { $null }
+        startedAt = if ($cpuStatus -and $cpuStatus.PSObject.Properties['startedAt']) { IsoOrNull $cpuStatus.startedAt } else { $null }
         lastCheckpointAt = if ($cpuStatus -and $cpuStatus.PSObject.Properties['lastCheckpointAt']) { IsoOrNull $cpuStatus.lastCheckpointAt } else { $null }
         sampleCount = if ($cpuStatus -and $cpuStatus.PSObject.Properties['sampleCount']) { $cpuStatus.sampleCount } else { $null }
+        rollingWindowMinutes = if ($cpuStatus -and $cpuStatus.PSObject.Properties['rollingWindowMinutes']) { $cpuStatus.rollingWindowMinutes } else { $null }
         runnerJobActive = if ($cpuStatus -and $cpuStatus.PSObject.Properties['runnerJobActive']) { [bool]$cpuStatus.runnerJobActive } else { $null }
     }
 }
