@@ -228,15 +228,20 @@ test('incident timing enforces 30 second first backoff and 120 second later back
   assert.equal(model.firstEligibleAt('silent-stop-confirmed', 10_000, 3), 10_000);
 });
 
-test('coded notification delivery is driven by exact terminal status observation after request completion', () => {
+test('coded notification delivery is driven by persistent targeted terminal observation after request completion', () => {
   const hook = readText('extension/normal-continuation-budget-hook.js');
   assert.match(hook, /async function observeCodedCompletion/);
-  assert.match(hook, /queryTerminalStatus\(tabId, '', 30_000\)/);
+  assert.match(hook, /resumePendingObservations\(tabId\)/);
+  assert.match(hook, /sender\?\.documentId/);
+  assert.match(hook, /enqueueObservation/);
+  assert.match(hook, /queryTerminalStatus\(observation\.tabId, observation\.chromeDocumentId, 10_000\)/);
+  assert.match(hook, /queryTerminalStatus\(observation\.tabId, observation\.chromeDocumentId, 5_000\)/);
   assert.match(hook, /ChatGPTNotifierStatusCode\?\.isStatusCode/);
   assert.match(hook, /state\.claimTurn\(status, owner\)/);
-  assert.match(hook, /queueDurableNotification\(record, 'coded-completion-status-observer'\)/);
-  assert.match(hook, /handleContinuationClaim\(record, status, tabId/);
+  assert.match(hook, /queueDurableNotification\(claimedRecord, 'coded-completion-status-observer'\)/);
+  assert.match(hook, /handleContinuationClaim[\s\S]*observation\.chromeDocumentId/);
   assert.match(hook, /chrome\.webRequest\.onCompleted\.addListener/);
+  assert.doesNotMatch(hook, /queryTerminalStatus\(tabId, '', 30_000\)/);
   assert.doesNotMatch(hook, /statusBoundToCompletion/);
 });
 
