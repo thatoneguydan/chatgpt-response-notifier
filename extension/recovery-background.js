@@ -18,11 +18,7 @@
   let databasePromise = null;
 
   function normalizePathname(url) {
-    try {
-      return new URL(url).pathname.replace(/\/+$/, '');
-    } catch {
-      return '';
-    }
+    try { return new URL(url).pathname.replace(/\/+$/, ''); } catch { return ''; }
   }
 
   function isAnswerStreamRequest(details) {
@@ -40,10 +36,7 @@
         if (segments[index] !== 'c') continue;
         const id = decodeURIComponent(segments[index + 1] || '').trim();
         if (!id) continue;
-        return {
-          id,
-          url: `https://chatgpt.com${url.pathname.replace(/\/+$/, '')}`
-        };
+        return { id, url: `https://chatgpt.com${url.pathname.replace(/\/+$/, '')}` };
       }
     } catch {}
     return null;
@@ -56,7 +49,6 @@
   async function resolveConversationIdentity(initialUrl, tabId, attempts = 24) {
     let identity = conversationFromUrl(initialUrl);
     if (identity) return identity;
-
     for (let attempt = 0; attempt < attempts; attempt += 1) {
       try {
         const tab = await chrome.tabs.get(tabId);
@@ -76,9 +68,7 @@
       const request = indexedDB.open(DB_NAME, DB_VERSION);
       request.onupgradeneeded = () => {
         const database = request.result;
-        if (!database.objectStoreNames.contains(STORE_NAME)) {
-          database.createObjectStore(STORE_NAME, { keyPath: 'conversationId' });
-        }
+        if (!database.objectStoreNames.contains(STORE_NAME)) database.createObjectStore(STORE_NAME, { keyPath: 'conversationId' });
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error || new Error('Could not open recovery state database.'));
@@ -94,12 +84,7 @@
       const transaction = database.transaction(STORE_NAME, mode);
       const store = transaction.objectStore(STORE_NAME);
       let callbackResult;
-      try {
-        callbackResult = callback(store);
-      } catch (error) {
-        reject(error);
-        return;
-      }
+      try { callbackResult = callback(store); } catch (error) { reject(error); return; }
       transaction.oncomplete = () => resolve(callbackResult);
       transaction.onerror = () => reject(transaction.error || new Error('Recovery state transaction failed.'));
       transaction.onabort = () => reject(transaction.error || new Error('Recovery state transaction was aborted.'));
@@ -109,11 +94,7 @@
   async function rememberPending(identity) {
     if (!identity?.id) return false;
     await runStore('readwrite', (store) => {
-      store.put({
-        conversationId: identity.id,
-        conversationUrl: identity.url,
-        startedAt: Date.now()
-      });
+      store.put({ conversationId: identity.id, conversationUrl: identity.url, startedAt: Date.now() });
     });
     return true;
   }
@@ -127,10 +108,7 @@
       const request = store.get(conversationId);
       request.onsuccess = () => {
         const record = request.result || null;
-        if (!record) {
-          resolve(null);
-          return;
-        }
+        if (!record) { resolve(null); return; }
         const startedAt = Number(record.startedAt || 0);
         if (!Number.isFinite(startedAt) || Date.now() - startedAt > MAX_PENDING_AGE_MS) {
           store.delete(conversationId);
@@ -170,16 +148,9 @@
 
   async function rearmUpstreamMonitor(tabId) {
     const message = { type: 'CHATGPT_CONVERSATION_REQUEST_COMPLETED' };
+    try { await chrome.tabs.sendMessage(tabId, message); return true; } catch {}
     try {
-      await chrome.tabs.sendMessage(tabId, message);
-      return true;
-    } catch {}
-
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        files: ['content-script.js']
-      });
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['attachment-script.js', 'content-script.js'] });
       await chrome.tabs.sendMessage(tabId, message);
       return true;
     } catch (error) {
@@ -190,21 +161,20 @@
 
   async function injectRecoveryIntoExistingTabs() {
     let tabs = [];
-    try {
-      tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] });
-    } catch {
-      return;
-    }
+    try { tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] }); } catch { return; }
     for (const tab of tabs) {
       if (typeof tab.id !== 'number') continue;
+      if (tab.discarded === true || tab.frozen === true) continue;
       try {
-        await chrome.scripting.executeScript({
-          target: { tabId: tab.id },
-          files: ['status-code.js', 'status-script.js', 'recovery-script.js']
-        });
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['attachment-script.js', 'status-code.js', 'status-policy.js', 'status-script.js', 'recovery-script.js'] });
       } catch {}
     }
   }
+
+  globalThis.__chatgptNotifierRecovery = Object.freeze({
+    finalizeConversation: clearPending,
+    readPending
+  });
 
   chrome.webRequest.onBeforeRequest.addListener((details) => {
     if (!isAnswerStreamRequest(details)) return;
@@ -224,16 +194,9 @@
     if (message?.type === 'CHATGPT_RECOVERY_QUERY') {
       (async () => {
         const identity = await identityForSender(message, sender);
-        if (!identity) {
-          sendResponse?.({ ok: true, pending: false });
-          return;
-        }
+        if (!identity) { sendResponse?.({ ok: true, pending: false }); return; }
         const pending = await readPending(identity.id);
-        sendResponse?.({
-          ok: true,
-          pending: Boolean(pending),
-          conversationId: identity.id
-        });
+        sendResponse?.({ ok: true, pending: Boolean(pending), conversationId: identity.id });
       })().catch((error) => sendResponse?.({ ok: false, pending: false, error: String(error?.message || error) }));
       return true;
     }
@@ -248,10 +211,7 @@
           return;
         }
         const pending = await readPending(identity.id);
-        if (!pending) {
-          sendResponse?.({ ok: true, armed: false });
-          return;
-        }
+        if (!pending) { sendResponse?.({ ok: true, armed: false }); return; }
         const armed = await rearmUpstreamMonitor(tabId);
         sendResponse?.({ ok: armed, armed });
       })().catch((error) => sendResponse?.({ ok: false, armed: false, error: String(error?.message || error) }));
@@ -267,19 +227,12 @@
       return true;
     }
 
-    if (message?.type === 'CHATGPT_RESPONSE_COMPLETE') {
-      identityForSender(message, sender)
-        .then((identity) => identity ? clearPending(identity.id) : false)
-        .catch(() => {});
-      return false;
-    }
-
+    // Deliberately do not clear pending recovery state on the raw upstream
+    // completion signal. The coordinator finalizes only after either a proven
+    // continuation or a durable notification intent exists.
     return false;
   });
 
-  chrome.tabs.onRemoved.addListener((tabId) => {
-    pendingRequestTabs.delete(tabId);
-  });
-
+  chrome.tabs.onRemoved.addListener((tabId) => pendingRequestTabs.delete(tabId));
   injectRecoveryIntoExistingTabs().catch(() => {});
 })();

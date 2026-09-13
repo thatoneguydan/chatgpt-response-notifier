@@ -1,0 +1,128 @@
+name: Collect notifier runtime evidence
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/Collect-NotifierRuntimeEvidence.ps1'
+      - 'tools/Add-NotifierStartupRegistryEvidence.ps1'
+      - 'tools/Add-NotifierSafeEvidence.ps1'
+      - '.github/workflows/runtime-evidence.yml'
+      - 'extension/**'
+      - 'src/**'
+      - 'VERSION.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.head.repo.owner.login == github.repository_owner) }}
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 5
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact source identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) {
+            throw "Exact-source checkout mismatch: expected $env:SOURCE_SHA, got $actual."
+          }
+          Write-Host "Exact source head: $actual"
+
+      - name: Validate collector syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($script in @(
+            '.\tools\Collect-NotifierRuntimeEvidence.ps1',
+            '.\tools\Add-NotifierStartupRegistryEvidence.ps1',
+            '.\tools\Add-NotifierSafeEvidence.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $script),
+              [ref]$tokens,
+              [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              throw "Runtime evidence script has PowerShell parse errors: $script"
+            }
+          }
+
+      - name: Collect bounded read-only runtime evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = Join-Path $env:RUNNER_TEMP 'notifier-runtime-evidence.json'
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Collect-NotifierRuntimeEvidence.ps1 -OutputPath $output -DiagnosticTail 200
+          if ($LASTEXITCODE -ne 0) { throw "Runtime evidence collector failed with exit code $LASTEXITCODE." }
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Add-NotifierStartupRegistryEvidence.ps1 -EvidencePath $output
+          if ($LASTEXITCODE -ne 0) { throw "Startup registry evidence fallback failed with exit code $LASTEXITCODE." }
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Add-NotifierSafeEvidence.ps1 -EvidencePath $output
+          if ($LASTEXITCODE -ne 0) { throw "Bounded notifier evidence read failed with exit code $LASTEXITCODE." }
+
+          $evidence = Get-Content -LiteralPath $output -Raw -Encoding UTF8 | ConvertFrom-Json
+          # Pull-request GITHUB_SHA is the synthetic merge ref. Evidence must name
+          # the exact checked-out application head instead.
+          $evidence.sourceCommit = $env:SOURCE_SHA
+          foreach ($record in @($evidence.diagnostics.records)) {
+            $errorProperty = $record.PSObject.Properties['error']
+            if ($null -ne $errorProperty) {
+              $hasError = -not [string]::IsNullOrWhiteSpace([string]$errorProperty.Value)
+              $record.PSObject.Properties.Remove('error')
+              $record | Add-Member -NotePropertyName hasError -NotePropertyValue $hasError -Force
+            }
+          }
+          $evidence | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $output -Encoding UTF8
+          $raw = Get-Content -LiteralPath $output -Raw -Encoding UTF8
+
+          if ($evidence.schemaVersion -ne 1 -or $evidence.readOnly -ne $true) {
+            throw 'Runtime evidence schema/read-only marker is invalid.'
+          }
+          if ([string]$evidence.sourceCommit -ne $env:SOURCE_SHA) {
+            throw "Runtime evidence source mismatch: expected $env:SOURCE_SHA, got $($evidence.sourceCommit)."
+          }
+          foreach ($forbidden in @('responseBody','responseText','sessionTitle','promptText','conversationUrl','commandLine','"error":')) {
+            if ($raw -match [regex]::Escape($forbidden)) {
+              throw "Runtime evidence contains forbidden field/content marker: $forbidden"
+            }
+          }
+          if ($raw -match [regex]::Escape('C:\Users\dan')) {
+            throw 'Runtime evidence leaked the interactive profile path.'
+          }
+
+          Write-Host ("Evidence summary: install={0}; manifest={1}; helperProcesses={2}; listener={3}; startupRegistration={4}; startupVersion={5}; safeEvidence={6}; safeInstalled={7}; safeLoaded={8}; diagnostics={9}; liveRuntimeIdentity={10}" -f `
+            $evidence.installState.state,
+            $evidence.installedManifest.state,
+            $evidence.helper.processCount,
+            $evidence.helper.loopbackListener.listening,
+            $evidence.helper.startupRegistration.state,
+            $evidence.helper.startupRegistration.versionFromCommand,
+            $evidence.safeRuntimeEvidence.state,
+            $evidence.safeRuntimeEvidence.installedVersion,
+            $evidence.safeRuntimeEvidence.loadedExtensionVersion,
+            $evidence.diagnostics.state,
+            $evidence.chrome.loadedExtensionRuntimeIdentitySupported)
+
+      - name: Upload sanitized runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: notifier-runtime-evidence-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}\notifier-runtime-evidence.json
+          if-no-files-found: error
+          retention-days: 7

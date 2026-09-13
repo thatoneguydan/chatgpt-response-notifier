@@ -75,8 +75,10 @@ internal static class DiagnosticsSanitizer
             status = StringValue(input, "status", 96),
             observedAt = StringValue(input, "observedAt", 64),
             extensionVersion = StringValue(input, "extensionVersion", 32),
+            correlationId = StringValue(input, "correlationId", 80),
             tabId = IntegerValue(input, "tabId"),
             statusCode = IntegerValue(input, "statusCode"),
+            attempt = IntegerValue(input, "attempt"),
             elapsedMs = IntegerValue(input, "elapsedMs"),
             queuedMessages = IntegerValue(input, "queuedMessages"),
             watchCount = IntegerValue(input, "watchCount"),
@@ -84,12 +86,17 @@ internal static class DiagnosticsSanitizer
             frozen = BooleanValue(input, "frozen"),
             discarded = BooleanValue(input, "discarded"),
             deliveredNow = BooleanValue(input, "deliveredNow"),
+            presented = BooleanValue(input, "presented"),
             triggerPath = StringValue(input, "triggerPath", 160),
             reason = StringValue(input, "reason", 160),
             captureSource = StringValue(input, "captureSource", 160),
+            presentationState = StringValue(input, "presentationState", 48),
             error = StringValue(input, "error", 240),
             conversationSuffix = StringValue(input, "conversationSuffix", 8),
             notificationSuffix = StringValue(input, "notificationSuffix", 8),
+            chromeDocumentSuffix = StringValue(input, "chromeDocumentSuffix", 8),
+            statusRuntimeSuffix = StringValue(input, "statusRuntimeSuffix", 8),
+            monitorRuntimeSuffix = StringValue(input, "monitorRuntimeSuffix", 8),
             terminalState = TerminalState(input)
         };
         return JsonSerializer.SerializeToElement(safe, JsonOptions.Default);

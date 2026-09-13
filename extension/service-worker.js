@@ -3,6 +3,7 @@
 const BRIDGE_URL = 'ws://127.0.0.1:38473/bridge';
 const RESPONSE_PREVIEW_MAX_CHARS = 300;
 const STATUS_QUERY_TIMEOUT_MS = 30000;
+const CONTINUATION_REQUEST_TIMEOUT_MS = 12000;
 const CHATGPT_REQUEST_FILTER = {
   urls: [
     'https://chatgpt.com/backend-api/f/conversation*',
@@ -16,7 +17,14 @@ let reconnectDelayMs = 750;
 let keepAliveTimer = null;
 const outboundQueue = [];
 const nativeRequestWaiters = new Map();
-const lastNotificationFingerprintByTab = new Map();
+const continuationRequestWatchers = new Map();
+const activeTurnKeys = new Set();
+let outboxFlushPromise = null;
+let reconcilePromise = null;
+
+function coordinator() {
+  return globalThis.__chatgptNotifierCoordinator || null;
+}
 
 function queueNativeMessage(message) {
   outboundQueue.push(message);
@@ -95,6 +103,7 @@ function connectNativeHost() {
       reconnectDelayMs = 750;
       startKeepAlive();
       flushNativeQueue();
+      flushNotificationOutbox().catch((error) => console.warn('Durable notification replay failed', error));
     };
 
     socket.onmessage = (event) => {
@@ -121,24 +130,30 @@ function connectNativeHost() {
   }
 }
 
-function sendNative(message) {
+function sendNative(message, queueIfDisconnected = true) {
   const socket = connectNativeHost();
   if (!socket || socket.readyState !== WebSocket.OPEN) {
-    queueNativeMessage(message);
+    if (queueIfDisconnected) queueNativeMessage(message);
     return false;
   }
   try {
     socket.send(JSON.stringify(message));
     return true;
   } catch {
-    queueNativeMessage(message);
+    if (queueIfDisconnected) queueNativeMessage(message);
     try { socket.close(); } catch {}
     return false;
   }
 }
 
-function sendNativeRequest(message, expectedTypes, timeoutMs) {
+function sendNativeRequest(message, expectedTypes, timeoutMs, options = {}) {
   const requestId = crypto.randomUUID();
+  const queueIfDisconnected = options.queueIfDisconnected !== false;
+  if (!bridgeSocket || bridgeSocket.readyState !== WebSocket.OPEN) connectNativeHost();
+  if ((!bridgeSocket || bridgeSocket.readyState !== WebSocket.OPEN) && !queueIfDisconnected) {
+    return Promise.resolve(null);
+  }
+
   return new Promise((resolve) => {
     const timeoutId = setTimeout(() => {
       nativeRequestWaiters.delete(requestId);
@@ -149,7 +164,12 @@ function sendNativeRequest(message, expectedTypes, timeoutMs) {
       timeoutId,
       expectedTypes: new Set(expectedTypes)
     });
-    sendNative({ ...message, requestId });
+    const sent = sendNative({ ...message, requestId }, queueIfDisconnected);
+    if (!sent && !queueIfDisconnected) {
+      nativeRequestWaiters.delete(requestId);
+      clearTimeout(timeoutId);
+      resolve(null);
+    }
   });
 }
 
@@ -197,10 +217,7 @@ function conversationFromUrl(rawUrl) {
       if (segments[index] !== 'c') continue;
       const id = decodeURIComponent(segments[index + 1] || '').trim();
       if (!id) continue;
-      return {
-        id,
-        url: `https://chatgpt.com${url.pathname.replace(/\/+$/, '')}`
-      };
+      return { id, url: `https://chatgpt.com${url.pathname.replace(/\/+$/, '')}` };
     }
   } catch {}
   return null;
@@ -221,23 +238,30 @@ function truncateResponse(text, maxChars = RESPONSE_PREVIEW_MAX_CHARS) {
   return `${safeCut.trimEnd()}...`;
 }
 
+function normalizeResponseText(value) {
+  return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
 function sleep(delayMs) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, delayMs)));
+}
+
+async function currentConversationForTab(tabId) {
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    return conversationFromUrl(tab?.url || '');
+  } catch {
+    return null;
+  }
 }
 
 async function resolveConversationIdentity(initialUrl, tabId) {
   let identity = conversationFromUrl(initialUrl);
   if (identity) return identity;
-
   for (let attempt = 0; attempt < 10; attempt += 1) {
     await sleep(250);
-    try {
-      const tab = await chrome.tabs.get(tabId);
-      identity = conversationFromUrl(tab.url);
-      if (identity) return identity;
-    } catch {
-      return null;
-    }
+    identity = await currentConversationForTab(tabId);
+    if (identity) return identity;
   }
   return null;
 }
@@ -250,9 +274,7 @@ async function foregroundChromeWindow(windowId) {
   if (typeof windowId !== 'number') return false;
   try {
     const windowInfo = await chrome.windows.get(windowId);
-    if (windowInfo.state === 'minimized') {
-      await chrome.windows.update(windowId, { state: 'normal' });
-    }
+    if (windowInfo.state === 'minimized') await chrome.windows.update(windowId, { state: 'normal' });
     await chrome.windows.update(windowId, { focused: true });
     return true;
   } catch {
@@ -264,10 +286,7 @@ async function requestNativeChromeForeground(tabId, windowId) {
   if (typeof tabId !== 'number' || typeof windowId !== 'number') return false;
   try {
     await sleep(50);
-    const [tabInfo, windowInfo] = await Promise.all([
-      chrome.tabs.get(tabId),
-      chrome.windows.get(windowId)
-    ]);
+    const [tabInfo, windowInfo] = await Promise.all([chrome.tabs.get(tabId), chrome.windows.get(windowId)]);
     const response = await sendNativeRequest({
       type: 'window.foreground',
       windowTitle: String(tabInfo?.title || ''),
@@ -308,25 +327,18 @@ async function injectScriptsIntoExistingChatgptTabs() {
   try { tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] }); } catch { return; }
   for (const tab of tabs) {
     if (typeof tab.id !== 'number') continue;
+    if (tab.discarded === true || tab.frozen === true) continue;
     try {
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        files: ['content-script.js', 'persistence-script.js', 'status-code.js', 'status-script.js']
+        files: ['attachment-script.js', 'content-script.js', 'persistence-script.js', 'status-code.js', 'status-policy.js', 'status-script.js']
       });
     } catch {}
   }
 }
 
-// Monitoring core below intentionally preserves Ram Haidar's request-completion
-// trigger: observe the ChatGPT conversation POST the page already makes, then
-// signal the unchanged upstream content script to inspect the rendered answer.
-// No ChatGPT API polling or additional HTTP request is created here.
 function normalizePathname(url) {
-  try {
-    return new URL(url).pathname.replace(/\/+$/, '');
-  } catch {
-    return '';
-  }
+  try { return new URL(url).pathname.replace(/\/+$/, ''); } catch { return ''; }
 }
 
 function isAnswerStreamRequest(details) {
@@ -341,36 +353,105 @@ async function signalConversationRequestCompleted(tabId) {
     await chrome.tabs.sendMessage(tabId, message);
     return;
   } catch {}
-
   try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ['content-script.js']
-    });
+    await chrome.scripting.executeScript({ target: { tabId }, files: ['attachment-script.js', 'content-script.js'] });
     await chrome.tabs.sendMessage(tabId, message);
   } catch (error) {
     console.warn('Prompt-Bound Alert: could not arm tab completion watcher', error);
   }
 }
 
+function startContinuationRequestWatch(tabId, conversationId, timeoutMs = CONTINUATION_REQUEST_TIMEOUT_MS) {
+  const existing = continuationRequestWatchers.get(tabId);
+  if (existing) existing.finish({ accepted: false, reason: 'superseded-request-watch' });
+
+  let settled = false;
+  let requestId = '';
+  let timeoutId = null;
+  let resolvePromise;
+  const promise = new Promise((resolve) => { resolvePromise = resolve; });
+  const watcher = {
+    tabId,
+    conversationId,
+    get requestId() { return requestId; },
+    setRequestId(value) { if (!requestId) requestId = String(value || ''); },
+    finish(result) {
+      if (settled) return;
+      settled = true;
+      if (timeoutId !== null) clearTimeout(timeoutId);
+      if (continuationRequestWatchers.get(tabId) === watcher) continuationRequestWatchers.delete(tabId);
+      resolvePromise({ requestId, ...(result || {}) });
+    },
+    promise
+  };
+  timeoutId = setTimeout(() => watcher.finish({ accepted: false, reason: 'request-evidence-timeout' }), timeoutMs);
+  continuationRequestWatchers.set(tabId, watcher);
+  return watcher;
+}
+
+function cancelContinuationRequestWatch(watcher, reason) {
+  if (!watcher) return;
+  watcher.finish({ accepted: false, reason: reason || 'request-watch-cancelled' });
+}
+
+chrome.webRequest.onBeforeRequest.addListener((details) => {
+  if (!isAnswerStreamRequest(details)) return;
+  const watcher = continuationRequestWatchers.get(details.tabId);
+  if (!watcher || watcher.requestId) return;
+  watcher.setRequestId(details.requestId);
+}, CHATGPT_REQUEST_FILTER);
+
+chrome.webRequest.onHeadersReceived.addListener((details) => {
+  if (!isAnswerStreamRequest(details)) return;
+  const watcher = continuationRequestWatchers.get(details.tabId);
+  if (!watcher || !watcher.requestId || watcher.requestId !== String(details.requestId || '')) return;
+  const accepted = details.statusCode >= 200 && details.statusCode < 300;
+  watcher.finish({ accepted, statusCode: details.statusCode, reason: accepted ? 'request-accepted' : 'request-rejected' });
+}, CHATGPT_REQUEST_FILTER);
+
+chrome.webRequest.onErrorOccurred.addListener((details) => {
+  if (!isAnswerStreamRequest(details)) return;
+  const watcher = continuationRequestWatchers.get(details.tabId);
+  if (!watcher || !watcher.requestId || watcher.requestId !== String(details.requestId || '')) return;
+  watcher.finish({ accepted: false, reason: 'request-error', error: String(details.error || '') });
+}, CHATGPT_REQUEST_FILTER);
+
 chrome.webRequest.onCompleted.addListener((details) => {
   if (!isAnswerStreamRequest(details)) return;
+  const watcher = continuationRequestWatchers.get(details.tabId);
+  if (watcher && watcher.requestId === String(details.requestId || '')) {
+    const accepted = details.statusCode >= 200 && details.statusCode < 300;
+    watcher.finish({ accepted, statusCode: details.statusCode, reason: accepted ? 'request-completed' : 'request-rejected' });
+  }
   if (details.statusCode < 200 || details.statusCode >= 300) return;
   signalConversationRequestCompleted(details.tabId).catch(() => {});
 }, CHATGPT_REQUEST_FILTER);
 
-async function queryTerminalStatus(tabId, timeoutMs = STATUS_QUERY_TIMEOUT_MS) {
+function messageTargetOptions(documentId) {
+  return documentId ? { documentId: String(documentId) } : undefined;
+}
+
+async function sendTabMessage(tabId, message, documentId = '') {
+  const options = messageTargetOptions(documentId);
+  return options ? await chrome.tabs.sendMessage(tabId, message, options) : await chrome.tabs.sendMessage(tabId, message);
+}
+
+async function queryTerminalStatus(tabId, senderDocumentId = '', timeoutMs = STATUS_QUERY_TIMEOUT_MS) {
   const message = { type: 'CHATGPT_STATUS_CODE_QUERY', timeoutMs };
-  try {
-    return await chrome.tabs.sendMessage(tabId, message);
-  } catch {}
+  try { return await sendTabMessage(tabId, message, senderDocumentId); } catch {}
 
   try {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ['status-code.js', 'status-script.js']
-    });
-    return await chrome.tabs.sendMessage(tabId, message);
+    const target = senderDocumentId ? { tabId, documentIds: [senderDocumentId] } : { tabId };
+    await chrome.scripting.executeScript({ target, files: ['status-code.js', 'status-policy.js', 'status-script.js'] });
+    return await sendTabMessage(tabId, message, senderDocumentId);
+  } catch {
+    return null;
+  }
+}
+
+async function requestContinuation(tabId, senderDocumentId, expected) {
+  try {
+    return await sendTabMessage(tabId, { type: 'CHATGPT_CONTINUE_COMMAND', expected }, senderDocumentId);
   } catch {
     return null;
   }
@@ -385,53 +466,211 @@ async function dismissConversationForSender(message, sender) {
   return true;
 }
 
-async function showCompletionFromUpstream(message, sender) {
-  const tabId = sender.tab?.id;
-  if (typeof tabId !== 'number') return null;
-
-  const fingerprint = String(message?.fingerprint || '');
-  if (fingerprint && lastNotificationFingerprintByTab.get(tabId) === fingerprint) return null;
-
-  // Ram's unchanged content script intentionally normalizes response whitespace,
-  // so the terminal-line eligibility check lives in a separate DOM layer that
-  // preserves line boundaries. This adds no ChatGPT network traffic.
-  const status = await queryTerminalStatus(tabId);
-  const statusCode = String(status?.statusCode || '');
-  if (!globalThis.ChatGPTNotifierStatusCode?.isStatusCode(statusCode)) return null;
-
-  // Two duplicate completion messages may wait on the same DOM query at once.
-  // Re-check immediately before claiming the notification so only one wins.
-  if (fingerprint && lastNotificationFingerprintByTab.get(tabId) === fingerprint) return null;
-  if (fingerprint) lastNotificationFingerprintByTab.set(tabId, fingerprint);
-
-  const identity = await resolveConversationIdentity(sender.tab?.url || '', tabId);
-  if (!identity) return null;
-
-  const notificationId = crypto.randomUUID();
-  const completedAt = new Date().toISOString();
-  const notification = {
-    id: notificationId,
-    conversationId: identity.id,
-    conversationUrl: identity.url,
-    title: fullTabTitle(sender, message),
-    preview: truncateResponse(status?.responseBody || message?.response),
-    statusCode,
-    completedAt
+function notificationFromTurnRecord(record) {
+  if (!record?.notificationId || !record?.conversationId || !record?.conversationUrl) return null;
+  return {
+    id: record.notificationId,
+    conversationId: record.conversationId,
+    conversationUrl: record.conversationUrl,
+    title: record.notificationTitle || 'ChatGPT',
+    preview: record.notificationPreview || truncateResponse(record.responseBody || record.responseText),
+    statusCode: record.statusCode || '',
+    completedAt: new Date(Number(record.createdAt || Date.now())).toISOString()
   };
+}
 
-  sendNative({ type: 'toast.show', notification });
-
+async function rememberNotificationHistory(notification, fingerprint) {
   try {
-    globalThis.__chatgptNotifierHistory?.rememberEligibleCompletion?.({
-      historyId: notificationId,
-      fingerprint,
+    await globalThis.__chatgptNotifierHistory?.rememberEligibleCompletion?.({
+      historyId: notification.id,
+      fingerprint: String(fingerprint || ''),
       ...notification
-    }).catch?.((error) => console.warn('Could not save eligible completion history', error));
+    });
   } catch (error) {
     console.warn('Could not save eligible completion history', error);
   }
+}
 
-  return notificationId;
+async function finalizeRecovery(conversationId) {
+  try {
+    await globalThis.__chatgptNotifierRecovery?.finalizeConversation?.(conversationId);
+  } catch (error) {
+    console.warn('Could not finalize recovery state', error);
+  }
+}
+
+async function queueDurableNotification(turnRecord, reason = '') {
+  const state = coordinator();
+  if (!state) throw new Error('Notifier coordinator is unavailable.');
+  const notification = notificationFromTurnRecord(turnRecord);
+  if (!notification) throw new Error('Turn record cannot be converted to a notification.');
+  if (reason) await state.updateTurn(turnRecord.turnKey, { actionReason: reason });
+  await state.queueNotification(turnRecord.turnKey, notification, turnRecord.fingerprint || '');
+  await rememberNotificationHistory(notification, turnRecord.fingerprint || '');
+  await finalizeRecovery(turnRecord.conversationId);
+  flushNotificationOutbox().catch((error) => console.warn('Notification delivery failed', error));
+  return notification.id;
+}
+
+async function flushNotificationOutbox() {
+  if (outboxFlushPromise) return await outboxFlushPromise;
+  outboxFlushPromise = (async () => {
+    const state = coordinator();
+    if (!state) return;
+    const records = await state.listOutbox();
+    for (const record of records) {
+      if (!bridgeSocket || bridgeSocket.readyState !== WebSocket.OPEN) return;
+      const notification = record?.notification;
+      if (!notification?.id) continue;
+      await state.noteOutboxAttempt(notification.id);
+      const response = await sendNativeRequest(
+        { type: 'toast.show', notification },
+        ['toast.accepted'],
+        5000,
+        { queueIfDisconnected: false }
+      );
+      if (!response || response.accepted !== true || String(response.notificationId || '') !== String(notification.id)) return;
+      await state.acknowledgeNotification(notification.id);
+    }
+  })().finally(() => { outboxFlushPromise = null; });
+  return await outboxFlushPromise;
+}
+
+async function reconcileUnresolvedTurns() {
+  if (reconcilePromise) return await reconcilePromise;
+  reconcilePromise = (async () => {
+    const state = coordinator();
+    if (!state) return;
+    const unresolved = await state.listUnresolvedTurns();
+    for (const record of unresolved) {
+      if (activeTurnKeys.has(String(record?.turnKey || ''))) continue;
+      await queueDurableNotification(record, `reconciled-${record.state || 'unknown'}-without-replay`);
+    }
+  })().finally(() => { reconcilePromise = null; });
+  return await reconcilePromise;
+}
+
+function statusBoundToCompletion(status, originIdentity, upstreamResponse) {
+  if (!status || status.ok !== true || !originIdentity) return false;
+  if (String(status.conversationId || '') !== originIdentity.id) return false;
+  if (!status.documentId || !status.promptKey || !status.assistantKey || !status.revision) return false;
+  const upstream = normalizeResponseText(upstreamResponse);
+  const observed = normalizeResponseText(status.responseText);
+  return Boolean(upstream && observed && upstream === observed);
+}
+
+async function handleContinuationClaim(record, status, tabId, senderDocumentId) {
+  const state = coordinator();
+  if (!state) return await queueDurableNotification(record, 'coordinator-unavailable');
+
+  const currentIdentity = await currentConversationForTab(tabId);
+  if (!currentIdentity || currentIdentity.id !== record.conversationId) {
+    return await queueDurableNotification(record, 'conversation-changed-before-action');
+  }
+
+  await state.updateTurn(record.turnKey, { state: 'continuation-authorized' });
+  const requestWatch = startContinuationRequestWatch(tabId, record.conversationId);
+  const expected = {
+    conversationId: status.conversationId,
+    conversationUrl: status.conversationUrl,
+    documentId: status.documentId,
+    promptKey: status.promptKey,
+    assistantKey: status.assistantKey,
+    revision: status.revision,
+    statusCode: status.statusCode
+  };
+
+  const action = await requestContinuation(tabId, senderDocumentId, expected);
+  if (!action) {
+    cancelContinuationRequestWatch(requestWatch, 'continuation-command-unreachable');
+    return await queueDurableNotification(record, 'continuation-command-unreachable');
+  }
+
+  await state.updateTurn(record.turnKey, {
+    state: action.clicked ? 'continuation-clicked' : 'continuation-refused',
+    actionReason: String(action.reason || ''),
+    continuationUserKey: String(action.continuationUserKey || '')
+  });
+
+  if (!action.clicked) {
+    cancelContinuationRequestWatch(requestWatch, action.reason || 'continuation-not-clicked');
+    return await queueDurableNotification(record, action.reason || 'continuation-not-clicked');
+  }
+
+  const requestEvidence = await requestWatch.promise;
+  await state.updateTurn(record.turnKey, {
+    requestEvidence: String(requestEvidence?.reason || ''),
+    actionReason: String(action.reason || '')
+  });
+
+  const currentAfterAction = await currentConversationForTab(tabId);
+  const outcome = globalThis.ChatGPTNotifierContinuationPolicy?.continuationOutcome?.({
+    pageTurnConfirmed: action.ok === true,
+    requestAccepted: requestEvidence?.accepted === true,
+    sameConversation: currentAfterAction?.id === record.conversationId
+  }) || { accepted: false, reason: 'continuation-policy-unavailable' };
+  if (outcome.accepted !== true) {
+    const reason = [
+      action.ok === true ? '' : (action.reason || 'page-action-unconfirmed'),
+      requestEvidence?.accepted === true ? '' : (requestEvidence?.reason || 'request-unconfirmed'),
+      currentAfterAction?.id === record.conversationId ? '' : 'conversation-changed-after-action',
+      outcome.reason === 'continuation-confirmed' ? '' : outcome.reason
+    ].filter(Boolean).join('+');
+    return await queueDurableNotification(record, reason || 'continuation-uncertain');
+  }
+
+  await state.updateTurn(record.turnKey, {
+    state: 'continued',
+    actionReason: action.reason || 'continuation-user-turn-confirmed',
+    requestEvidence: requestEvidence.reason || 'request-accepted'
+  });
+  await finalizeRecovery(record.conversationId);
+  return null;
+}
+
+async function showCompletionFromUpstream(message, sender) {
+  const tabId = sender.tab?.id;
+  if (typeof tabId !== 'number') return null;
+  const senderDocumentId = String(sender.documentId || '');
+  const originIdentity = conversationFromUrl(sender.tab?.url || message?.conversationUrl || '');
+  if (!originIdentity) return null;
+
+  const status = await queryTerminalStatus(tabId, senderDocumentId);
+  const statusCode = String(status?.statusCode || '');
+  if (!globalThis.ChatGPTNotifierStatusCode?.isStatusCode(statusCode)) return null;
+  if (!statusBoundToCompletion(status, originIdentity, message?.response)) return null;
+
+  const currentIdentity = await currentConversationForTab(tabId);
+  if (!currentIdentity || currentIdentity.id !== originIdentity.id) return null;
+
+  const state = coordinator();
+  if (!state) return null;
+  const notificationId = crypto.randomUUID();
+  const owner = {
+    tabId,
+    documentId: senderDocumentId,
+    fingerprint: String(message?.fingerprint || ''),
+    notificationId,
+    notificationTitle: fullTabTitle(sender, message),
+    notificationPreview: truncateResponse(status?.responseBody || message?.response)
+  };
+  const claim = await state.claimTurn(status, owner);
+  if (!claim?.claimed) {
+    flushNotificationOutbox().catch(() => {});
+    return null;
+  }
+
+  const record = claim.record;
+  activeTurnKeys.add(record.turnKey);
+  try {
+    if (statusCode !== 'INCOMPLETE_LIMIT') {
+      return await queueDurableNotification(record, 'coded-completion');
+    }
+
+    return await handleContinuationClaim(record, status, tabId, senderDocumentId);
+  } finally {
+    activeTurnKeys.delete(record.turnKey);
+  }
 }
 
 async function handleNativeMessage(message) {
@@ -444,6 +683,8 @@ async function handleNativeMessage(message) {
 
   if (message.type === 'host.ready') {
     await injectScriptsIntoExistingChatgptTabs();
+    await reconcileUnresolvedTurns();
+    await flushNotificationOutbox();
     return;
   }
 
@@ -458,25 +699,17 @@ async function handleNativeMessage(message) {
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message?.type === 'CHATGPT_RESPONSE_COMPLETE') {
     showCompletionFromUpstream(message, sender).then((notificationId) => {
-      sendResponse?.({
-        ok: true,
-        notified: Boolean(notificationId),
-        notificationId: notificationId || null
-      });
+      sendResponse?.({ ok: true, notified: Boolean(notificationId), notificationId: notificationId || null });
     }).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
     return true;
   }
 
   if (message?.type === 'CHATGPT_CONVERSATION_USER_INTERACTED') {
-    dismissConversationForSender(message, sender).then((dismissed) => {
-      sendResponse?.({ ok: dismissed });
-    }).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
+    dismissConversationForSender(message, sender).then((dismissed) => sendResponse?.({ ok: dismissed }))
+      .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
     return true;
   }
 
-  // CHATGPT_PAGE_RETURNED belongs to the upstream extension's transient Chrome
-  // notification lifecycle. Persistent helper notifications intentionally ignore it;
-  // they dismiss only on deliberate interaction, clicking the toast, or its X button.
   if (message?.type === 'CHATGPT_PAGE_RETURNED') return false;
 
   if (message?.type === 'TEST_NATIVE_TOAST') {
@@ -499,32 +732,26 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           completedAt: new Date().toISOString()
         }
       });
-      sendResponse?.(sent
-        ? { ok: true, notificationId }
-        : { ok: false, error: 'Windows helper disconnected before the test toast was sent.' });
+      sendResponse?.(sent ? { ok: true, notificationId } : { ok: false, error: 'Windows helper disconnected before the test toast was sent.' });
     })().catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
     return true;
   }
 
   if (message?.type === 'PING_NATIVE_HOST') {
     pingNativeHost().then((response) => {
-      sendResponse?.(response
-        ? {
-            ok: true,
-            installedExtensionVersion: response.installedExtensionVersion || null,
-            transport: response.transport || null,
-            updateStatus: response.updateStatus || null
-          }
-        : { ok: false, error: 'Windows helper is not running or is not responding.' });
+      sendResponse?.(response ? {
+        ok: true,
+        installedExtensionVersion: response.installedExtensionVersion || null,
+        transport: response.transport || null,
+        updateStatus: response.updateStatus || null
+      } : { ok: false, error: 'Windows helper is not running or is not responding.' });
     }).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
     return true;
   }
 
   if (message?.type === 'CHECK_MANAGED_UPDATE') {
     sendNativeRequest({ type: 'update.check' }, ['update.result'], 120000).then((response) => {
-      sendResponse?.(response
-        ? { ok: true, updateStatus: response.updateStatus || null }
-        : { ok: false, error: 'Windows helper did not return an update result.' });
+      sendResponse?.(response ? { ok: true, updateStatus: response.updateStatus || null } : { ok: false, error: 'Windows helper did not return an update result.' });
     }).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
     return true;
   }
@@ -533,8 +760,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {
-  lastNotificationFingerprintByTab.delete(tabId);
+  cancelContinuationRequestWatch(continuationRequestWatchers.get(tabId), 'owner-tab-closed');
 });
 
 connectNativeHost();
 injectScriptsIntoExistingChatgptTabs().catch(() => {});
+coordinator()?.pruneOldRecords?.().catch(() => {});
+reconcileUnresolvedTurns().then(() => flushNotificationOutbox()).catch(() => {});

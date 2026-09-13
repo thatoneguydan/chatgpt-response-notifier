@@ -9,8 +9,9 @@ public sealed record NotificationRecord(
     DateTimeOffset CompletedAt)
 {
     // Kept outside the positional constructor so unresolved notifications saved
-    // by v0.6.0 deserialize with an empty code and survive an update handoff.
+    // by older builds deserialize with legacy-safe defaults and survive update.
     public string StatusCode { get; init; } = string.Empty;
+    public string Kind { get; init; } = "coded-result";
 
     public void Validate()
     {
@@ -32,6 +33,11 @@ public sealed record NotificationRecord(
             character != '_'))
         {
             throw new InvalidDataException("Notification status code is invalid.");
+        }
+
+        if (Kind is not ("coded-result" or "attention.required"))
+        {
+            throw new InvalidDataException("Notification kind is invalid.");
         }
     }
 }

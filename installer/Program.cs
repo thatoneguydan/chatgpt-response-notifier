@@ -133,7 +133,7 @@ internal sealed class SetupForm : Form
             else
             {
                 var result = await Task.Run(() => SetupEngine.Install(_skipStartup));
-                _status.Text = $"Installed {result.Version}. Windows helper is running.\n\nChrome extension files: {result.ExtensionPath}\nReload the existing unpacked extension once if Chrome still shows the previous version.";
+                _status.Text = $"Installed {result.Version}. Windows helper is running.\n\nChrome extension files: {result.ExtensionPath}\nChrome reloads the extension runtime automatically when the installed version advances.";
                 _openChrome.Enabled = true;
             }
             _progress.Style = ProgressBarStyle.Continuous;
@@ -166,9 +166,13 @@ internal static class SetupEngine
         try
         {
             ExtractEmbeddedPayload(tempRoot);
+
+            // Stop the currently installed helper before copying the new payload. This
+            // is required when installing a different source candidate with the same
+            // semantic version because Windows keeps the running .exe locked.
+            StopExistingHosts();
             var installed = BundleInstaller.InstallExtractedBundle(tempRoot);
 
-            StopExistingHosts();
             if (!skipStartup) StartupRegistration.Register(installed.HostExecutablePath);
             StartHelper(installed.HostExecutablePath);
             WaitForHelperAsync(TimeSpan.FromSeconds(12)).GetAwaiter().GetResult();
@@ -183,8 +187,12 @@ internal static class SetupEngine
 
     public static void Uninstall()
     {
+        var isolatedInstall = IsolatedInstallRootIsActive();
         StopExistingHosts();
-        try { StartupRegistration.Unregister(); } catch { }
+        if (!isolatedInstall)
+        {
+            try { StartupRegistration.Unregister(); } catch { }
+        }
         try
         {
             if (Directory.Exists(NativeHostInstaller.InstallRoot))
@@ -218,12 +226,42 @@ internal static class SetupEngine
         }
     }
 
+    private static bool IsolatedInstallRootIsActive()
+    {
+        return !string.IsNullOrWhiteSpace(
+            Environment.GetEnvironmentVariable(NativeHostInstaller.InstallRootOverrideEnvironmentVariable));
+    }
+
     private static void StopExistingHosts()
     {
+        var isolatedInstall = IsolatedInstallRootIsActive();
+        var isolatedRoot = isolatedInstall
+            ? Path.GetFullPath(NativeHostInstaller.InstallRoot)
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar) + Path.DirectorySeparatorChar
+            : string.Empty;
+
         foreach (var process in Process.GetProcessesByName("ChatGPTResponseNotifier.Host"))
         {
             using (process)
             {
+                if (isolatedInstall)
+                {
+                    string processPath;
+                    try
+                    {
+                        processPath = process.MainModule?.FileName ?? string.Empty;
+                        if (string.IsNullOrWhiteSpace(processPath)) continue;
+                        processPath = Path.GetFullPath(processPath);
+                    }
+                    catch (Exception error)
+                    {
+                        SetupLog.Write($"Skipped helper process {process.Id} because its executable path could not be verified", error);
+                        continue;
+                    }
+
+                    if (!processPath.StartsWith(isolatedRoot, StringComparison.OrdinalIgnoreCase)) continue;
+                }
+
                 try
                 {
                     process.Kill(entireProcessTree: true);

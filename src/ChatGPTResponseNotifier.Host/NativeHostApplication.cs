@@ -13,6 +13,7 @@ internal sealed class NativeHostApplication : Application
     private ToastManager? _toastManager;
     private PublicUpdateService? _updateService;
     private DiagnosticsStore? _diagnosticsStore;
+    private RuntimeEvidencePublisher? _runtimeEvidencePublisher;
     private Task? _updateLoop;
 
     public new int Run()
@@ -27,17 +28,21 @@ internal sealed class NativeHostApplication : Application
     {
         try
         {
-            _diagnosticsStore = new DiagnosticsStore(Path.Combine(NativeHostInstaller.DataRoot, "diagnostics.jsonl"));
+            _runtimeEvidencePublisher = new RuntimeEvidencePublisher();
+            _diagnosticsStore = new DiagnosticsStore(
+                Path.Combine(NativeHostInstaller.DataRoot, "diagnostics.jsonl"),
+                _runtimeEvidencePublisher.Append);
             _diagnosticsStore.AppendHost(new
             {
                 source = "host",
                 status = "host-started",
                 observedAt = DateTimeOffset.UtcNow,
-                installedExtensionVersion = BundleInstaller.ReadInstalledExtensionVersion()
+                extensionVersion = BundleInstaller.ReadInstalledExtensionVersion()
             });
 
             var store = new NotificationStateStore(Path.Combine(NativeHostInstaller.DataRoot, "pending.json"));
-            _toastManager = new ToastManager(store, SendEventAsync);
+            var acceptedStore = new AcceptedNotificationStore(Path.Combine(NativeHostInstaller.DataRoot, "accepted-notifications.json"));
+            _toastManager = new ToastManager(store, acceptedStore, SendEventAsync);
 
             try
             {
@@ -65,6 +70,7 @@ internal sealed class NativeHostApplication : Application
                 try { StartupRegistration.Register(processPath); } catch (Exception error) { FileLog.Write("Could not refresh per-user startup registration", error); }
             }
 
+            _runtimeEvidencePublisher.Publish();
             _updateLoop = RunUpdateLoopAsync();
         }
         catch (Exception error)
@@ -86,6 +92,7 @@ internal sealed class NativeHostApplication : Application
         _updateService?.Dispose();
         _updateService = null;
         _diagnosticsStore = null;
+        _runtimeEvidencePublisher = null;
         _shutdown.Dispose();
     }
 
@@ -109,6 +116,7 @@ internal sealed class NativeHostApplication : Application
         switch (message.Type)
         {
             case "toast.show" when message.Notification is not null:
+            {
                 _diagnosticsStore?.AppendHost(new
                 {
                     source = "host",
@@ -117,16 +125,31 @@ internal sealed class NativeHostApplication : Application
                     conversationSuffix = Suffix(message.Notification.ConversationId),
                     notificationSuffix = Suffix(message.Notification.Id)
                 });
-                _toastManager!.Show(message.Notification);
+
+                var showResult = _toastManager!.Show(message.Notification);
+
                 _diagnosticsStore?.AppendHost(new
                 {
                     source = "host",
-                    status = "toast-shown",
+                    status = showResult.Presented ? "toast-presented" : "toast-idempotent-accepted",
                     observedAt = DateTimeOffset.UtcNow,
                     conversationSuffix = Suffix(message.Notification.ConversationId),
-                    notificationSuffix = Suffix(message.Notification.Id)
+                    notificationSuffix = Suffix(message.Notification.Id),
+                    presented = showResult.Presented,
+                    presentationState = showResult.PresentationState
+                });
+
+                _ = SendEventAsync(new
+                {
+                    type = "toast.accepted",
+                    requestId = message.RequestId,
+                    notificationId = message.Notification.Id,
+                    accepted = showResult.Accepted,
+                    presented = showResult.Presented,
+                    presentationState = showResult.PresentationState
                 });
                 break;
+            }
             case "toast.dismissConversation" when !string.IsNullOrWhiteSpace(message.ConversationId):
                 _toastManager!.DismissConversation(message.ConversationId);
                 break;
