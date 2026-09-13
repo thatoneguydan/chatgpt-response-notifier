@@ -64,14 +64,24 @@ jobs:
           powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Collect-NotifierRuntimeEvidence.ps1 -OutputPath $output -DiagnosticTail 200
           if ($LASTEXITCODE -ne 0) { throw "Runtime evidence collector failed with exit code $LASTEXITCODE." }
 
+          $evidence = Get-Content -LiteralPath $output -Raw -Encoding UTF8 | ConvertFrom-Json
+          foreach ($record in @($evidence.diagnostics.records)) {
+            $errorProperty = $record.PSObject.Properties['error']
+            if ($null -ne $errorProperty) {
+              $hasError = -not [string]::IsNullOrWhiteSpace([string]$errorProperty.Value)
+              $record.PSObject.Properties.Remove('error')
+              $record | Add-Member -NotePropertyName hasError -NotePropertyValue $hasError -Force
+            }
+          }
+          $evidence | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $output -Encoding UTF8
           $raw = Get-Content -LiteralPath $output -Raw -Encoding UTF8
-          $evidence = $raw | ConvertFrom-Json
+
           if ($evidence.schemaVersion -ne 1 -or $evidence.readOnly -ne $true) {
             throw 'Runtime evidence schema/read-only marker is invalid.'
           }
-          foreach ($forbidden in @('responseBody','responseText','sessionTitle','promptText','conversationUrl','commandLine')) {
+          foreach ($forbidden in @('responseBody','responseText','sessionTitle','promptText','conversationUrl','commandLine','"error":')) {
             if ($raw -match [regex]::Escape($forbidden)) {
-              throw "Runtime evidence contains forbidden field: $forbidden"
+              throw "Runtime evidence contains forbidden field/content marker: $forbidden"
             }
           }
           if ($raw -match [regex]::Escape('C:\Users\dan')) {
