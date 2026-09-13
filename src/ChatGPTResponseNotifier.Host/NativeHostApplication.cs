@@ -120,15 +120,17 @@ internal sealed class NativeHostApplication : Application
                     notificationSuffix = Suffix(message.Notification.Id)
                 });
 
-                var accepted = _toastManager!.Show(message.Notification);
+                var showResult = _toastManager!.Show(message.Notification);
 
                 _diagnosticsStore?.AppendHost(new
                 {
                     source = "host",
-                    status = "toast-persisted",
+                    status = showResult.Presented ? "toast-presented" : "toast-idempotent-accepted",
                     observedAt = DateTimeOffset.UtcNow,
                     conversationSuffix = Suffix(message.Notification.ConversationId),
-                    notificationSuffix = Suffix(message.Notification.Id)
+                    notificationSuffix = Suffix(message.Notification.Id),
+                    presented = showResult.Presented,
+                    presentationState = showResult.PresentationState
                 });
 
                 _ = SendEventAsync(new
@@ -136,7 +138,9 @@ internal sealed class NativeHostApplication : Application
                     type = "toast.accepted",
                     requestId = message.RequestId,
                     notificationId = message.Notification.Id,
-                    accepted
+                    accepted = showResult.Accepted,
+                    presented = showResult.Presented,
+                    presentationState = showResult.PresentationState
                 });
                 break;
             }

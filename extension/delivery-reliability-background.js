@@ -12,6 +12,7 @@
   const OBSERVATION_RETRY_BASE_MS = 750;
   const OUTBOX_RETRY_BASE_MS = 1500;
   const OUTBOX_RETRY_MAX_MS = 30_000;
+  const MAX_OUTBOX_ALARM_FAILURES = 6;
 
   let databasePromise = null;
   let extensionVersion = '';
@@ -46,7 +47,7 @@
       statusRuntimeSuffix: suffix(fields.statusRuntimeId),
       monitorRuntimeSuffix: suffix(fields.monitorRuntimeId),
       presentationState: fields.presentationState ? String(fields.presentationState).slice(0, 48) : undefined,
-      presented: fields.presented === true
+      presented: typeof fields.presented === 'boolean' ? fields.presented : undefined
     };
     try {
       if (typeof sendNative === 'function') sendNative({ type: 'diagnostics.event', diagnostic });
@@ -103,6 +104,7 @@
       const store = transaction.objectStore(OBSERVATION_STORE);
       const request = store.get(key);
       let result = null;
+
       request.onsuccess = () => {
         const existing = request.result || null;
         if (existing) {
@@ -166,6 +168,7 @@
       const store = transaction.objectStore(OBSERVATION_STORE);
       const request = store.get(key);
       let updated = null;
+
       request.onsuccess = () => {
         const current = request.result;
         if (!current) return;
@@ -203,10 +206,12 @@
   }
 
   async function resolveObservation(key, reason, fields = {}) {
+    const existing = await getObservation(key);
+    if (!existing) return null;
     const current = await updateObservation(key, {
       state: 'resolved',
       reason: safeReason(reason),
-      statusRuntimeId: String(fields.statusRuntimeId || '')
+      statusRuntimeId: String(fields.statusRuntimeId || existing.statusRuntimeId || '')
     });
     if (current) {
       record('observation-resolved', {
@@ -216,7 +221,7 @@
         reason,
         conversationId: current.conversationId,
         chromeDocumentId: current.chromeDocumentId,
-        statusRuntimeId: fields.statusRuntimeId || current.statusRuntimeId,
+        statusRuntimeId: current.statusRuntimeId,
         monitorRuntimeId: current.monitorRuntimeId
       });
     }
@@ -259,6 +264,7 @@
       });
       return attention;
     }
+
     const delay = observationRetryDelay(attempts);
     const updated = await updateObservation(key, {
       state: 'pending',
@@ -280,21 +286,33 @@
     return updated;
   }
 
+  function recordEvent(status, notification, fields = {}) {
+    record(status, {
+      ...fields,
+      conversationId: notification?.conversationId,
+      notificationId: notification?.id
+    });
+  }
+
   async function drainOutboxPass() {
     const state = typeof coordinator === 'function' ? coordinator() : null;
     if (!state) return { blocked: true, reason: 'coordinator-unavailable' };
     const records = await state.listOutbox();
     if (!records.length) return { blocked: false, pending: false };
 
-    for (const record of records) {
+    for (const outboxRecord of records) {
       if (!bridgeSocket || bridgeSocket.readyState !== WebSocket.OPEN) {
         return { blocked: true, reason: 'helper-disconnected' };
       }
-      const notification = record?.notification;
+
+      const notification = outboxRecord?.notification;
       if (!notification?.id) continue;
       const attemptRecord = await state.noteOutboxAttempt(notification.id);
-      const attempt = Number(attemptRecord?.attempts || record?.attempts || 0);
-      const correlationId = `notification-${suffix(notification.id)}`;
+      const attempt = Number(attemptRecord?.attempts || outboxRecord?.attempts || 0);
+      let turn = null;
+      try { turn = outboxRecord?.turnKey ? await state.getTurn?.(outboxRecord.turnKey) : null; } catch {}
+      const correlationId = String(turn?.deliveryCorrelationId || `notification-${suffix(notification.id)}`);
+
       recordEvent('outbox-send-attempt', notification, { correlationId, attempt });
       const response = await sendNativeRequest(
         { type: 'toast.show', notification },
@@ -310,6 +328,7 @@
         });
         return { blocked: true, reason: response ? 'helper-ack-rejected' : 'helper-ack-missing' };
       }
+
       await state.acknowledgeNotification(notification.id);
       recordEvent('helper-durable-accepted', notification, {
         correlationId,
@@ -323,21 +342,27 @@
     return { blocked: false, pending: remaining.length > 0 };
   }
 
-  function recordEvent(status, notification, fields = {}) {
-    record(status, {
-      ...fields,
-      conversationId: notification?.conversationId,
-      notificationId: notification?.id
-    });
-  }
-
   async function clearOutboxAlarm() {
     try { await chrome.alarms.clear(OUTBOX_ALARM); } catch {}
   }
 
   function scheduleOutboxRetry(reason) {
     outboxFailureCount += 1;
-    const delay = Math.min(OUTBOX_RETRY_MAX_MS, OUTBOX_RETRY_BASE_MS * (2 ** Math.min(5, outboxFailureCount - 1)));
+    if (outboxFailureCount > MAX_OUTBOX_ALARM_FAILURES) {
+      clearOutboxAlarm().catch(() => {});
+      if (outboxFailureCount === MAX_OUTBOX_ALARM_FAILURES + 1) {
+        record('outbox-attention', {
+          attempt: outboxFailureCount,
+          reason: `${safeReason(reason)}; durable entries retained until an explicit wake/reconnect/restart`
+        });
+      }
+      return;
+    }
+
+    const delay = Math.min(
+      OUTBOX_RETRY_MAX_MS,
+      OUTBOX_RETRY_BASE_MS * (2 ** Math.min(5, outboxFailureCount - 1))
+    );
     try { chrome.alarms.create(OUTBOX_ALARM, { when: Date.now() + delay }); } catch {}
     record('outbox-retry-scheduled', { attempt: outboxFailureCount, reason });
   }
@@ -355,10 +380,12 @@
         } catch (error) {
           outcome = { blocked: true, reason: `drain-error:${safeReason(error?.message || error)}` };
         }
+
         if (outcome?.blocked) {
           scheduleOutboxRetry(outcome.reason || 'delivery-blocked');
           break;
         }
+
         outboxFailureCount = 0;
         await clearOutboxAlarm();
         if (outcome?.pending) outboxWakeRequested = true;
@@ -366,17 +393,64 @@
     })().finally(() => {
       outboxDrainPromise = null;
       if (outboxWakeRequested) {
-        queueMicrotask(() => wakeSafeFlushNotificationOutbox().catch((error) => console.warn('Deferred outbox drain failed', error)));
+        queueMicrotask(() => wakeSafeFlushNotificationOutbox()
+          .catch((error) => console.warn('Deferred outbox drain failed', error)));
       }
     });
+
     return await outboxDrainPromise;
+  }
+
+  const baseCoordinator = globalThis.__chatgptNotifierCoordinator;
+  if (baseCoordinator?.listUnresolvedTurns) {
+    globalThis.__chatgptNotifierCoordinator = Object.freeze({
+      ...baseCoordinator,
+      async listUnresolvedTurns() {
+        const records = await baseCoordinator.listUnresolvedTurns();
+        return (Array.isArray(records) ? records : [])
+          .filter((item) => !['closed-by-user', 'superseded'].includes(String(item?.state || '')));
+      }
+    });
+  }
+
+  async function ownerTabStillExists(turnRecord) {
+    const tabId = turnRecord?.ownerTabId;
+    if (!Number.isInteger(tabId)) return true;
+    try {
+      await chrome.tabs.get(tabId);
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   const originalQueueDurableNotification = globalThis.queueDurableNotification;
   if (typeof originalQueueDurableNotification === 'function') {
     globalThis.queueDurableNotification = async function reliableQueueDurableNotification(turnRecord, reason = '') {
+      const correlationId = String(turnRecord?.deliveryCorrelationId || `turn-${suffix(turnRecord?.turnKey)}`);
+      const ownerExists = await ownerTabStillExists(turnRecord);
+      if (!ownerExists) {
+        try {
+          await coordinator()?.updateTurn?.(turnRecord?.turnKey, {
+            state: 'closed-by-user',
+            actionReason: 'owner-tab-closed-before-notification'
+          });
+        } catch {}
+        record('notification-suppressed-owner-tab-closed', {
+          correlationId,
+          tabId: turnRecord?.ownerTabId,
+          reason,
+          conversationId: turnRecord?.conversationId,
+          notificationId: turnRecord?.notificationId,
+          chromeDocumentId: turnRecord?.ownerChromeDocumentId,
+          statusRuntimeId: turnRecord?.statusRuntimeId || turnRecord?.documentId,
+          monitorRuntimeId: turnRecord?.monitorRuntimeId
+        });
+        return turnRecord?.notificationId || null;
+      }
+
       record('notification-queue-start', {
-        correlationId: `turn-${suffix(turnRecord?.turnKey)}`,
+        correlationId,
         tabId: Number.isInteger(turnRecord?.ownerTabId) ? turnRecord.ownerTabId : undefined,
         reason,
         conversationId: turnRecord?.conversationId,
@@ -385,10 +459,11 @@
         statusRuntimeId: turnRecord?.statusRuntimeId || turnRecord?.documentId,
         monitorRuntimeId: turnRecord?.monitorRuntimeId
       });
+
       try {
         const notificationId = await originalQueueDurableNotification(turnRecord, reason);
         record('notification-durable-queued', {
-          correlationId: `turn-${suffix(turnRecord?.turnKey)}`,
+          correlationId,
           reason,
           conversationId: turnRecord?.conversationId,
           notificationId,
@@ -396,10 +471,11 @@
           statusRuntimeId: turnRecord?.statusRuntimeId || turnRecord?.documentId,
           monitorRuntimeId: turnRecord?.monitorRuntimeId
         });
+        wakeSafeFlushNotificationOutbox().catch((error) => console.warn('Queued notification drain failed', error));
         return notificationId;
       } catch (error) {
         record('notification-queue-error', {
-          correlationId: `turn-${suffix(turnRecord?.turnKey)}`,
+          correlationId,
           reason: error?.message || error,
           conversationId: turnRecord?.conversationId,
           notificationId: turnRecord?.notificationId
@@ -419,6 +495,7 @@
       if (type === 'pong' || type === 'host.ready') {
         wakeSafeFlushNotificationOutbox().catch((error) => console.warn('Native wake outbox drain failed', error));
       }
+
       if (type === 'toast.dismissed') {
         record('helper-toast-dismissed', {
           conversationId: message?.conversationId,

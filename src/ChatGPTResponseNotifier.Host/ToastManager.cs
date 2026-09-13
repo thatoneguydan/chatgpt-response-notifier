@@ -3,6 +3,8 @@ using ChatGPTResponseNotifier.Core;
 
 namespace ChatGPTResponseNotifier.Host;
 
+internal readonly record struct ToastShowResult(bool Accepted, bool Presented, string PresentationState);
+
 internal sealed class ToastManager
 {
     private const double MarginRight = 16;
@@ -35,7 +37,7 @@ internal sealed class ToastManager
         Restack();
     }
 
-    public bool Show(NotificationRecord record)
+    public ToastShowResult Show(NotificationRecord record)
     {
         record.Validate();
 
@@ -43,7 +45,7 @@ internal sealed class ToastManager
         if (existing is not null)
         {
             _acceptedStore.Remember(record.Id);
-            return true;
+            return new ToastShowResult(true, false, "already-open");
         }
 
         if (_acceptedStore.Contains(record.Id))
@@ -51,12 +53,12 @@ internal sealed class ToastManager
             // The browser may replay an outbox item after the user already
             // dismissed it. Accepted IDs are tombstones: acknowledge the same
             // event, but never reopen a dismissed notification.
-            return true;
+            return new ToastShowResult(true, false, "dismissed-tombstone");
         }
 
         AddWindow(record, persist: true);
         CompletionChime.Play();
-        return true;
+        return new ToastShowResult(true, true, "presented");
     }
 
     public void DismissConversation(string conversationId)
