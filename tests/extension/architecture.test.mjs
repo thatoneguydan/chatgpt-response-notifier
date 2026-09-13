@@ -363,6 +363,7 @@ test('DOM-observed terminal monitor state drives the durable coded-delivery path
 
 test('coded delivery and background bootstrap failures persist sanitized helper diagnostics', () => {
   const wrapper = text('extension/background.js');
+  const hook = text('extension/normal-continuation-budget-hook.js');
   const diagnostics = text('extension/delivery-diagnostics-hook.js');
   const reliability = text('extension/delivery-reliability-background.js');
   const app = text('src/ChatGPTResponseNotifier.Host/NativeHostApplication.cs');
@@ -372,8 +373,8 @@ test('coded delivery and background bootstrap failures persist sanitized helper 
   assert.match(wrapper, /completion-binding-failed/);
   assert.match(diagnostics, /stage-events-are-authoritative/);
   assert.doesNotMatch(diagnostics, /queryTerminalStatus/);
-  assert.match(reliability, /monitor-terminal-seen/);
-  assert.match(reliability, /turn-claimed/);
+  assert.match(hook, /monitor-terminal-seen/);
+  assert.match(hook, /turn-claimed/);
   assert.match(reliability, /notification-durable-queued/);
   assert.match(reliability, /outbox-send-attempt/);
   assert.match(reliability, /helper-durable-accepted/);
