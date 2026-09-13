@@ -499,7 +499,6 @@ test('versioned updates self-activate helper and extension runtime without foreg
 test('manifest adds only reviewed alarms permission for scheduled recovery wake', () => {
   const manifest = JSON.parse(text('extension/manifest.json'));
   assert.equal(manifest.version, text('VERSION.txt').trim());
-  assert.equal(manifest.version, '0.9.8');
   assert.deepEqual(manifest.permissions.sort(), ['alarms','scripting','tabs','webRequest'].sort());
   assert.deepEqual(manifest.host_permissions.sort(), ['https://chatgpt.com/*','ws://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].js, [
