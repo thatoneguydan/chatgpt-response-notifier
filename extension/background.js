@@ -54,6 +54,7 @@ try {
     'bounded-recovery-background.js',
     'bounded-recovery-attachment-background.js',
     'service-worker.js',
+    'runtime-identity-background.js',
     'normal-continuation-budget-hook.js',
     'delivery-diagnostics-hook.js'
   );
