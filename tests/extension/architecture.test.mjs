@@ -48,7 +48,8 @@ test('monitoring and bounded recovery observe page/request state but create no C
     text('extension/bounded-recovery-background.js'),
     text('extension/bounded-recovery-script.js'),
     text('extension/normal-continuation-budget-hook.js'),
-    text('extension/delivery-diagnostics-hook.js')
+    text('extension/delivery-diagnostics-hook.js'),
+    text('extension/delivery-reliability-background.js')
   ];
   const worker = sources[0];
   const monitor = sources[5];
@@ -343,29 +344,47 @@ test('existing INCOMPLETE_LIMIT continuation is admitted through the same whole-
 
 test('DOM-observed terminal monitor state drives the durable coded-delivery path', () => {
   const hook = text('extension/normal-continuation-budget-hook.js');
+  const reliability = text('extension/delivery-reliability-background.js');
   assert.match(hook, /CHATGPT_MONITOR_STATE/);
   assert.match(hook, /scheduleObservedStatusDelivery/);
   assert.match(hook, /snapshot\.statusCode/);
-  assert.match(hook, /codedSnapshotObservations/);
-  assert.match(hook, /observeCodedCompletion\(tabId, `monitor-status:/);
+  assert.match(hook, /sender\?\.documentId/);
+  assert.match(hook, /enqueueObservation/);
+  assert.match(hook, /processObservation/);
+  assert.match(hook, /queryTerminalStatus\(observation\.tabId, observation\.chromeDocumentId, 10_000\)/);
   assert.match(hook, /state\.claimTurn\(status, owner\)/);
-  assert.match(hook, /queueDurableNotification\(record, 'coded-completion-status-observer'\)/);
+  assert.match(hook, /queueDurableNotification\(claimedRecord, 'coded-completion-status-observer'\)/);
+  assert.doesNotMatch(hook, /codedSnapshotObservations/);
+  assert.match(reliability, /OBSERVATION_STORE = 'terminal-observations'/);
+  assert.match(reliability, /state: 'pending'/);
+  assert.match(reliability, /state: 'in-flight'/);
+  assert.match(reliability, /state: 'resolved'/);
 });
 
 test('coded delivery and background bootstrap failures persist sanitized helper diagnostics', () => {
   const wrapper = text('extension/background.js');
   const diagnostics = text('extension/delivery-diagnostics-hook.js');
+  const reliability = text('extension/delivery-reliability-background.js');
+  const app = text('src/ChatGPTResponseNotifier.Host/NativeHostApplication.cs');
   assert.match(wrapper, /reportBootstrapFailure/);
   assert.match(wrapper, /diagnostics\.event/);
   assert.match(wrapper, /import-scripts-failed/);
   assert.match(wrapper, /completion-binding-failed/);
-  assert.match(diagnostics, /CHATGPT_MONITOR_STATE/);
-  assert.match(diagnostics, /monitor-terminal-seen/);
-  assert.match(diagnostics, /status-query-valid/);
-  assert.match(diagnostics, /delivery-turn-missing/);
-  assert.match(diagnostics, /delivery-outbox-pending/);
-  assert.match(diagnostics, /conversationSuffix/);
-  assert.doesNotMatch(diagnostics, /promptText|assistantText|responseText|responseBody/);
+  assert.match(diagnostics, /stage-events-are-authoritative/);
+  assert.doesNotMatch(diagnostics, /queryTerminalStatus/);
+  assert.match(reliability, /monitor-terminal-seen/);
+  assert.match(reliability, /turn-claimed/);
+  assert.match(reliability, /notification-durable-queued/);
+  assert.match(reliability, /outbox-send-attempt/);
+  assert.match(reliability, /helper-durable-accepted/);
+  assert.match(reliability, /correlationId/);
+  assert.match(reliability, /presentationState/);
+  assert.match(app, /toast-presented/);
+  assert.match(app, /toast-idempotent-accepted/);
+  assert.match(app, /presentationState = showResult\.PresentationState/);
+  for (const source of [diagnostics, reliability]) {
+    assert.doesNotMatch(source, /promptText|assistantText/);
+  }
 });
 
 test('continuation acceptance requires matching user turn plus passive accepted request evidence', () => {
@@ -478,7 +497,8 @@ test('versioned updates self-activate helper and extension runtime without foreg
 
 test('manifest adds only reviewed alarms permission for scheduled recovery wake', () => {
   const manifest = JSON.parse(text('extension/manifest.json'));
-  assert.equal(manifest.version, '0.9.7');
+  assert.equal(manifest.version, text('VERSION.txt').trim());
+  assert.equal(manifest.version, '0.9.8');
   assert.deepEqual(manifest.permissions.sort(), ['alarms','scripting','tabs','webRequest'].sort());
   assert.deepEqual(manifest.host_permissions.sort(), ['https://chatgpt.com/*','ws://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].js, [
@@ -489,7 +509,7 @@ test('manifest adds only reviewed alarms permission for scheduled recovery wake'
 test('local JavaScript is syntactically valid', () => {
   for (const relative of [
     'extension/background.js','extension/service-worker.js','extension/attachment-script.js','extension/coordinator-background.js',
-    'extension/delivery-dedupe-hook.js','extension/delivery-diagnostics-hook.js','extension/recovery-background.js','extension/recovery-script.js','extension/history-background.js','extension/status-code.js',
+    'extension/delivery-dedupe-hook.js','extension/delivery-reliability-background.js','extension/delivery-diagnostics-hook.js','extension/recovery-background.js','extension/recovery-script.js','extension/history-background.js','extension/status-code.js',
     'extension/status-policy.js','extension/status-script.js','extension/monitor-background.js','extension/monitor-script.js',
     'extension/recovery-model.js','extension/monitor-query-compat-background.js','extension/recovery-control-background.js',
     'extension/bounded-recovery-background.js','extension/bounded-recovery-attachment-background.js','extension/bounded-recovery-script.js',
