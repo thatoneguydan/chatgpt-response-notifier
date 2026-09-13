@@ -1,0 +1,70 @@
+name: Collect notifier deployment readiness
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/deployment-readiness.yml'
+      - 'tools/Collect-NotifierDeploymentReadiness.ps1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.head.repo.owner.login == github.repository_owner) }}
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 5
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      - name: Verify exact source identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          $actual=(git rev-parse HEAD).Trim().ToLowerInvariant()
+          if($actual -cne $env:SOURCE_SHA.ToLowerInvariant()){throw "Exact-source checkout mismatch: expected $env:SOURCE_SHA, got $actual."}
+
+      - name: Validate readiness collector syntax
+        shell: powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference='Stop'
+          $tokens=$null; $errors=$null
+          [void][Management.Automation.Language.Parser]::ParseFile((Resolve-Path '.\tools\Collect-NotifierDeploymentReadiness.ps1'),[ref]$tokens,[ref]$errors)
+          if(@($errors).Count -gt 0){throw "Deployment readiness collector syntax failed: $($errors[0].Message)"}
+
+      - name: Collect read-only deployment readiness
+        shell: powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        run: |
+          $ErrorActionPreference='Stop'
+          $out=Join-Path $env:RUNNER_TEMP 'notifier-deployment-readiness.json'
+          & '.\tools\Collect-NotifierDeploymentReadiness.ps1' -OutputPath $out
+          if($LASTEXITCODE -ne 0){throw "Deployment readiness collector failed with exit code $LASTEXITCODE"}
+          $raw=Get-Content -LiteralPath $out -Raw -Encoding UTF8
+          foreach($forbidden in @('C:\Users\dan','interactiveUserSid','userProfile','localLog','localReceipt','message','error"')){
+            if($raw -match [regex]::Escape($forbidden)){throw "Deployment readiness evidence contains forbidden marker: $forbidden"}
+          }
+          $data=$raw | ConvertFrom-Json
+          "### Notifier deployment readiness" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- Runner: $($data.runnerIdentity)" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- Broker status: present=$($data.broker.statusPresent), result=$($data.broker.result), version=$($data.broker.brokerVersion), session=$($data.broker.sessionId), ageSeconds=$($data.broker.ageSeconds)" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- CPU bootstrap receipt: present=$($data.cpuMonitorBootstrap.receiptPresent), success=$($data.cpuMonitorBootstrap.success), app=$($data.cpuMonitorBootstrap.appInstalled), shortcut=$($data.cpuMonitorBootstrap.shortcutInstalled), smoke=$($data.cpuMonitorBootstrap.smokePassed), deferred=$($data.cpuMonitorBootstrap.smokeDeferred), launch=$($data.cpuMonitorBootstrap.limitedUserLaunchStarted), errorPresent=$($data.cpuMonitorBootstrap.errorPresent)" | Add-Content $env:GITHUB_STEP_SUMMARY
+          "- CPU runtime: present=$($data.cpuMonitorRuntime.statusPresent), state=$($data.cpuMonitorRuntime.state), updated=$($data.cpuMonitorRuntime.updatedAt), lastCheckpoint=$($data.cpuMonitorRuntime.lastCheckpointAt), samples=$($data.cpuMonitorRuntime.sampleCount)" | Add-Content $env:GITHUB_STEP_SUMMARY
+
+      - name: Upload sanitized deployment readiness
+        uses: actions/upload-artifact@v4
+        with:
+          name: notifier-deployment-readiness-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}\notifier-deployment-readiness.json
+          if-no-files-found: error
+          retention-days: 7
