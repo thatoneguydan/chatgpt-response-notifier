@@ -16,11 +16,13 @@ internal sealed class DiagnosticsStore
     private const long MaxFileBytes = 512 * 1024;
     private readonly object _sync = new();
     private readonly string _path;
+    private readonly Action<JsonElement>? _safeEvidenceSink;
     private readonly List<DiagnosticEnvelope> _records = new();
 
-    public DiagnosticsStore(string path)
+    public DiagnosticsStore(string path, Action<JsonElement>? safeEvidenceSink = null)
     {
         _path = path;
+        _safeEvidenceSink = safeEvidenceSink;
         Load();
     }
 
@@ -81,6 +83,15 @@ internal sealed class DiagnosticsStore
         catch
         {
             // Diagnostics must never affect notification delivery.
+        }
+
+        try
+        {
+            _safeEvidenceSink?.Invoke(envelope.Diagnostic);
+        }
+        catch
+        {
+            // The external evidence mirror is optional diagnostic state only.
         }
     }
 
