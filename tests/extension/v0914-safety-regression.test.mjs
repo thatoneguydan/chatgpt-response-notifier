@@ -88,3 +88,11 @@ test('toast click override uses Chrome APIs only and disables native foreground 
   assert.doesNotMatch(source, /window\.foreground/);
   assert.doesNotMatch(source, /SetForegroundWindow|BringWindowToTop/);
 });
+
+test('startup safety layer retires persisted status-missing attention and its stale toast only', () => {
+  assert.match(source, /MONITOR_DB_NAME = 'chatgpt-response-notifier-monitor'/);
+  assert.match(source, /String\(record\?\.reason \|\| ''\) !== 'status-missing'/);
+  assert.match(source, /store\.delete\(id\)/);
+  assert.match(source, /type: 'toast\.dismissEvent'/);
+  assert.doesNotMatch(source, /store\.clear\(/);
+});

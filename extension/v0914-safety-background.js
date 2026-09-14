@@ -3,7 +3,7 @@
 (() => {
   if (globalThis.__chatgptNotifierV0914Safety) return;
 
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   const PASSIVE_STATUS_REASON = 'status-missing-passive';
   const RESOLVED_COMPAT_REASON = 'work-resumed-after-reload';
 
@@ -129,6 +129,70 @@
     return true;
   }
 
+  const MONITOR_DB_NAME = 'chatgpt-response-notifier-monitor';
+  const ATTENTION_STORE_NAME = 'attention';
+  const staleAttentionIds = [];
+
+  function retirePersistedStatusMissingAttention() {
+    return new Promise((resolve) => {
+      let request;
+      try { request = indexedDB.open(MONITOR_DB_NAME, 1); }
+      catch { resolve([]); return; }
+
+      request.onupgradeneeded = () => {
+        // A missing database has nothing stale to clean. Abort rather than
+        // creating monitor state solely for this compatibility cleanup.
+        try { request.transaction?.abort(); } catch {}
+      };
+      request.onerror = () => resolve([]);
+      request.onsuccess = () => {
+        const database = request.result;
+        try {
+          if (!database.objectStoreNames.contains(ATTENTION_STORE_NAME)) {
+            database.close();
+            resolve([]);
+            return;
+          }
+          const transaction = database.transaction(ATTENTION_STORE_NAME, 'readwrite');
+          const store = transaction.objectStore(ATTENTION_STORE_NAME);
+          const all = store.getAll();
+          all.onsuccess = () => {
+            for (const record of Array.isArray(all.result) ? all.result : []) {
+              if (String(record?.reason || '') !== 'status-missing') continue;
+              const id = String(record?.attentionId || '');
+              if (id) staleAttentionIds.push(id);
+              if (id) store.delete(id);
+            }
+          };
+          transaction.oncomplete = () => {
+            try { database.close(); } catch {}
+            resolve([...staleAttentionIds]);
+          };
+          transaction.onerror = () => {
+            try { database.close(); } catch {}
+            resolve([...staleAttentionIds]);
+          };
+          transaction.onabort = transaction.onerror;
+        } catch {
+          try { database.close(); } catch {}
+          resolve([...staleAttentionIds]);
+        }
+      };
+    });
+  }
+
+  function dismissRetiredAttentionToasts(attempt = 0) {
+    if (!staleAttentionIds.length) return true;
+    if (typeof globalThis.sendNative === 'function') {
+      for (const notificationId of staleAttentionIds.splice(0)) {
+        try { globalThis.sendNative({ type: 'toast.dismissEvent', notificationId }); } catch {}
+      }
+      return true;
+    }
+    if (attempt < 120) setTimeout(() => dismissRetiredAttentionToasts(attempt + 1), 25);
+    return false;
+  }
+
   function installChromeOnlyToastClick(attempt = 0) {
     const focusReady = typeof globalThis.focusOrOpenConversation === 'function';
     const nativeForegroundReady = typeof globalThis.requestNativeChromeForeground === 'function';
@@ -143,12 +207,16 @@
     return false;
   }
 
+  retirePersistedStatusMissingAttention().then(() => dismissRetiredAttentionToasts()).catch(() => {});
   setTimeout(() => installChromeOnlyToastClick(), 0);
 
   globalThis.__chatgptNotifierV0914Safety = Object.freeze({
     version: RUNTIME_VERSION,
     passiveStatusReason: PASSIVE_STATUS_REASON,
     formatRepairRetired: true,
+    staleStatusMissingAttentionRetired: true,
+    retirePersistedStatusMissingAttention,
+    dismissRetiredAttentionToasts,
     chromeOnlyConversationFocus,
     installChromeOnlyToastClick
   });
