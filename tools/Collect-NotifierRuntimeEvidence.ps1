@@ -8,12 +8,7 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 function New-ReadResult {
-    param(
-        [string]$State,
-        [object]$Value = $null,
-        [System.Exception]$Error = $null
-    )
-
+    param([string]$State, [object]$Value = $null, [System.Exception]$Error = $null)
     $result = [ordered]@{ state = $State }
     if ($null -ne $Value) { $result.value = $Value }
     if ($null -ne $Error) {
@@ -25,19 +20,14 @@ function New-ReadResult {
 
 function Read-JsonFile {
     param([string]$Path)
-
     try {
         $item = Get-Item -LiteralPath $Path -ErrorAction Stop
         if ($item.PSIsContainer) { return New-ReadResult -State 'not-file' }
         $raw = Get-Content -LiteralPath $Path -Raw -Encoding UTF8 -ErrorAction Stop
         return New-ReadResult -State 'read' -Value ($raw | ConvertFrom-Json -ErrorAction Stop)
     }
-    catch [System.Management.Automation.ItemNotFoundException] {
-        return New-ReadResult -State 'missing'
-    }
-    catch {
-        return New-ReadResult -State 'unavailable' -Error $_.Exception
-    }
+    catch [System.Management.Automation.ItemNotFoundException] { return New-ReadResult -State 'missing' }
+    catch { return New-ReadResult -State 'unavailable' -Error $_.Exception }
 }
 
 function Get-PropertyValue {
@@ -54,7 +44,7 @@ function Test-PathWithinRoot {
     try {
         $candidateFull = [IO.Path]::GetFullPath($Candidate)
         $rootFull = [IO.Path]::GetFullPath($Root).TrimEnd('\') + '\'
-        return $candidateFull.StartsWith($rootFull, [StringComparison]::OrdinalIgnoreCase)
+        return $candidateFull.StartsWith($rootFull, [StringComparison]::OrdinalIgnoreCase) -or $candidateFull.TrimEnd('\') -ieq $rootFull.TrimEnd('\')
     }
     catch { return $false }
 }
@@ -72,10 +62,26 @@ function Get-HostVersionFromPath {
     return $null
 }
 
+function Get-ChromeExtensionIdFromKey {
+    param([string]$Key)
+    if ([string]::IsNullOrWhiteSpace($Key)) { return $null }
+    try {
+        $bytes = [Convert]::FromBase64String($Key)
+        $hash = [Security.Cryptography.SHA256]::HashData($bytes)
+        $alphabet = 'abcdefghijklmnop'
+        $builder = [Text.StringBuilder]::new(32)
+        foreach ($byte in $hash[0..15]) {
+            [void]$builder.Append($alphabet[[int]($byte -shr 4)])
+            [void]$builder.Append($alphabet[[int]($byte -band 0x0f)])
+        }
+        return $builder.ToString()
+    }
+    catch { return $null }
+}
+
 function Copy-SafeTerminalState {
     param([object]$TerminalState)
     if ($null -eq $TerminalState) { return $null }
-
     $safeAncestry = @()
     $ancestry = Get-PropertyValue -InputObject $TerminalState -Name 'ancestry'
     if ($null -ne $ancestry) {
@@ -88,7 +94,6 @@ function Copy-SafeTerminalState {
             $safeAncestry += [pscustomobject]$safeNode
         }
     }
-
     return [pscustomobject][ordered]@{
         messageCount = Get-PropertyValue -InputObject $TerminalState -Name 'messageCount'
         currentNodeSuffix = Get-PropertyValue -InputObject $TerminalState -Name 'currentNodeSuffix'
@@ -101,23 +106,107 @@ function Copy-SafeDiagnostic {
     param([object]$Envelope)
     $diagnostic = Get-PropertyValue -InputObject $Envelope -Name 'diagnostic'
     if ($null -eq $diagnostic) { return $null }
-
-    $safe = [ordered]@{
-        receivedAt = Get-PropertyValue -InputObject $Envelope -Name 'receivedAt'
-    }
+    $safe = [ordered]@{ receivedAt = Get-PropertyValue -InputObject $Envelope -Name 'receivedAt' }
     foreach ($name in @(
         'source','status','observedAt','extensionVersion','correlationId','tabId','statusCode','attempt','elapsedMs',
         'queuedMessages','watchCount','requestContextCount','frozen','discarded','deliveredNow','presented','triggerPath',
-        'reason','captureSource','presentationState','error','conversationSuffix','notificationSuffix','chromeDocumentSuffix',
+        'reason','captureSource','presentationState','conversationSuffix','notificationSuffix','chromeDocumentSuffix',
         'statusRuntimeSuffix','monitorRuntimeSuffix'
     )) {
         $value = Get-PropertyValue -InputObject $diagnostic -Name $name
         if ($null -ne $value) { $safe[$name] = $value }
     }
-
     $terminal = Copy-SafeTerminalState -TerminalState (Get-PropertyValue -InputObject $diagnostic -Name 'terminalState')
     if ($null -ne $terminal) { $safe.terminalState = $terminal }
     return [pscustomobject]$safe
+}
+
+function Get-ChromeRegistrationEvidence {
+    param([string]$UserDataRoot, [string]$ExtensionId, [string]$ExpectedExtensionRoot)
+    $result = [ordered]@{
+        state = 'not-attempted'
+        extensionId = $ExtensionId
+        profileFilesInspected = 0
+        profileFilesUnavailable = 0
+        registrations = @()
+    }
+    if ([string]::IsNullOrWhiteSpace($ExtensionId)) {
+        $result.state = 'extension-id-unavailable'
+        return [pscustomobject]$result
+    }
+    if (-not (Test-Path -LiteralPath $UserDataRoot -PathType Container)) {
+        $result.state = 'chrome-user-data-missing'
+        return [pscustomobject]$result
+    }
+
+    $profiles = @(Get-ChildItem -LiteralPath $UserDataRoot -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'Default' -or $_.Name -like 'Profile *' })
+    $records = @()
+    foreach ($profile in $profiles) {
+        foreach ($fileName in @('Secure Preferences','Preferences')) {
+            $path = Join-Path $profile.FullName $fileName
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
+            try {
+                $json = Get-Content -LiteralPath $path -Raw -Encoding UTF8 -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+                $result.profileFilesInspected++
+                $extensions = Get-PropertyValue -InputObject $json -Name 'extensions'
+                $settings = Get-PropertyValue -InputObject $extensions -Name 'settings'
+                $entry = Get-PropertyValue -InputObject $settings -Name $ExtensionId
+                if ($null -eq $entry) { continue }
+                $rawPath = [string](Get-PropertyValue -InputObject $entry -Name 'path')
+                $disableReasons = @(Get-PropertyValue -InputObject $entry -Name 'disable_reasons')
+                $records += [pscustomobject][ordered]@{
+                    profile = $profile.Name
+                    source = $fileName
+                    present = $true
+                    stateValue = Get-PropertyValue -InputObject $entry -Name 'state'
+                    locationValue = Get-PropertyValue -InputObject $entry -Name 'location'
+                    disableReasonCount = $disableReasons.Count
+                    disableReasonCodes = @($disableReasons | ForEach-Object { [int]$_ })
+                    pathAvailable = -not [string]::IsNullOrWhiteSpace($rawPath)
+                    pathMatchesExpectedExtensionRoot = Test-PathWithinRoot -Candidate $rawPath -Root $ExpectedExtensionRoot
+                }
+            }
+            catch {
+                $result.profileFilesUnavailable++
+            }
+        }
+    }
+    $result.registrations = $records
+    $result.state = if ($records.Count -gt 0) { 'present' } elseif ($result.profileFilesInspected -gt 0) { 'absent' } else { 'unavailable' }
+    return [pscustomobject]$result
+}
+
+function Get-WindowsIncidentMetadata {
+    param([DateTimeOffset]$Since)
+    $result = [ordered]@{ state = 'read'; sinceUtc = $Since.UtcDateTime.ToString('o'); records = @() }
+    try {
+        $events = @(Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = $Since.LocalDateTime } -MaxEvents 400 -ErrorAction Stop)
+        $records = @()
+        foreach ($event in $events) {
+            if ($event.ProviderName -notin @('Application Error','Application Hang','Windows Error Reporting')) { continue }
+            $message = ''
+            try { $message = [string]$event.Message } catch {}
+            $processClass = $null
+            if ($message -match '(?i)crashpad_handler\.exe') { $processClass = 'chrome-crashpad' }
+            elseif ($message -match '(?i)chrome\.exe') { $processClass = 'chrome' }
+            elseif ($message -match '(?i)ChatGPTResponseNotifier\.Host\.exe') { $processClass = 'notifier-helper' }
+            if ($null -eq $processClass) { continue }
+            $records += [pscustomobject][ordered]@{
+                timeCreatedUtc = ([DateTimeOffset]$event.TimeCreated).ToUniversalTime().ToString('o')
+                provider = [string]$event.ProviderName
+                eventId = [int]$event.Id
+                level = [string]$event.LevelDisplayName
+                processClass = $processClass
+            }
+        }
+        $result.records = @($records | Sort-Object timeCreatedUtc | Select-Object -Last 80)
+    }
+    catch {
+        $result.state = 'unavailable'
+        $result.errorType = $_.Exception.GetType().Name
+        $result.errorCode = $_.Exception.HResult
+    }
+    return [pscustomobject]$result
 }
 
 $diagnosticTailBound = [Math]::Max(1, [Math]::Min(400, $DiagnosticTail))
@@ -128,9 +217,14 @@ $extensionRoot = Join-Path $installRoot 'Extension'
 $installStatePath = Join-Path $dataRoot 'install-state.json'
 $manifestPath = Join-Path $extensionRoot 'manifest.json'
 $diagnosticsPath = Join-Path $dataRoot 'diagnostics.jsonl'
+$chromeUserDataRoot = Join-Path $ExpectedProfileRoot 'AppData\Local\Google\Chrome\User Data'
 
 $installStateRead = Read-JsonFile -Path $installStatePath
-$installState = [ordered]@{ state = $installStateRead.state }
+$installState = [ordered]@{
+    state = $installStateRead.state
+    installRootExists = Test-Path -LiteralPath $installRoot -PathType Container
+    extensionRootExists = Test-Path -LiteralPath $extensionRoot -PathType Container
+}
 if ($installStateRead.state -eq 'read') {
     $state = $installStateRead.value
     $hostPath = [string](Get-PropertyValue -InputObject $state -Name 'hostExecutablePath')
@@ -149,11 +243,15 @@ elseif ($null -ne (Get-PropertyValue -InputObject $installStateRead -Name 'error
 }
 
 $manifestRead = Read-JsonFile -Path $manifestPath
-$installedManifest = [ordered]@{ state = $manifestRead.state }
+$installedManifest = [ordered]@{ state = $manifestRead.state; sha256 = $null; extensionId = $null }
+$extensionId = $null
 if ($manifestRead.state -eq 'read') {
     $installedManifest.manifestVersion = Get-PropertyValue -InputObject $manifestRead.value -Name 'manifest_version'
     $installedManifest.version = Get-PropertyValue -InputObject $manifestRead.value -Name 'version'
     $installedManifest.nameMatches = ([string](Get-PropertyValue -InputObject $manifestRead.value -Name 'name') -eq 'ChatGPT Response Notifier')
+    try { $installedManifest.sha256 = (Get-FileHash -LiteralPath $manifestPath -Algorithm SHA256 -ErrorAction Stop).Hash.ToLowerInvariant() } catch {}
+    $extensionId = Get-ChromeExtensionIdFromKey -Key ([string](Get-PropertyValue -InputObject $manifestRead.value -Name 'key'))
+    $installedManifest.extensionId = $extensionId
 }
 elseif ($null -ne (Get-PropertyValue -InputObject $manifestRead -Name 'errorType')) {
     $installedManifest.errorType = $manifestRead.errorType
@@ -173,7 +271,6 @@ try {
             if ($owner.ReturnValue -eq 0) { $ownerMatchesExpectedInteractiveUser = ([string]$owner.User -ieq 'dan') }
         }
         catch {}
-
         $helperProcesses += [pscustomobject][ordered]@{
             processId = [int]$process.ProcessId
             sessionId = [int]$process.SessionId
@@ -212,17 +309,14 @@ try {
         try {
             $envelope = $line | ConvertFrom-Json -ErrorAction Stop
             $safe = Copy-SafeDiagnostic -Envelope $envelope
-            if ($null -ne $safe) { $safeDiagnostics += $safe }
-            else { $diagnostics.malformedOrRejectedRecords++ }
+            if ($null -ne $safe) { $safeDiagnostics += $safe } else { $diagnostics.malformedOrRejectedRecords++ }
         }
         catch { $diagnostics.malformedOrRejectedRecords++ }
     }
     $diagnostics.acceptedRecords = $safeDiagnostics.Count
     $diagnostics.records = $safeDiagnostics
 }
-catch [System.Management.Automation.ItemNotFoundException] {
-    $diagnostics.state = 'missing'
-}
+catch [System.Management.Automation.ItemNotFoundException] { $diagnostics.state = 'missing' }
 catch {
     $diagnostics.state = 'unavailable'
     $diagnostics.errorType = $_.Exception.GetType().Name
@@ -234,16 +328,18 @@ $chrome = [ordered]@{
     processCount = 0
     loadedExtensionRuntimeIdentitySupported = $false
     workerErrorCaptureSupported = $false
-    capabilityReason = 'No reviewed out-of-process observer is installed. Default-profile Chrome remote debugging is intentionally not enabled or modified by this collector.'
+    capabilityReason = 'Live loaded-extension identity is supplied only by the helper sanitized bridge self-report. No Chrome remote debugging is enabled by this collector.'
+    registration = $null
 }
-try {
-    $chrome.processCount = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction Stop).Count
-}
+try { $chrome.processCount = @(Get-CimInstance Win32_Process -Filter "Name='chrome.exe'" -ErrorAction Stop).Count }
 catch {
     $chrome.processObservationState = 'unavailable'
     $chrome.processErrorType = $_.Exception.GetType().Name
     $chrome.processErrorCode = $_.Exception.HResult
 }
+$chrome.registration = Get-ChromeRegistrationEvidence -UserDataRoot $chromeUserDataRoot -ExtensionId $extensionId -ExpectedExtensionRoot $extensionRoot
+
+$incidents = Get-WindowsIncidentMetadata -Since ([DateTimeOffset]::UtcNow.AddHours(-24))
 
 $principalClass = 'other'
 try {
@@ -255,7 +351,7 @@ try {
 catch {}
 
 $evidence = [ordered]@{
-    schemaVersion = 1
+    schemaVersion = 2
     collector = 'chatgpt-response-notifier-readonly-runtime-evidence'
     observedAtUtc = [DateTimeOffset]::UtcNow.ToString('o')
     sourceCommit = [string]$env:GITHUB_SHA
@@ -278,10 +374,12 @@ $evidence = [ordered]@{
     }
     diagnostics = [pscustomobject]$diagnostics
     chrome = [pscustomobject]$chrome
+    windowsIncidents = $incidents
 }
 
 $outputDirectory = Split-Path -Parent ([IO.Path]::GetFullPath($OutputPath))
 if (-not [string]::IsNullOrWhiteSpace($outputDirectory)) { New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null }
-$evidence | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $OutputPath -Encoding UTF8
+$evidence | ConvertTo-Json -Depth 14 | Set-Content -LiteralPath $OutputPath -Encoding UTF8
 
-Write-Host ('Notifier runtime evidence written. InstallState={0}; Manifest={1}; Helpers={2}; Listener={3}; Diagnostics={4}; ChromeRuntimeCapture={5}' -f $installState.state, $installedManifest.state, $helperProcesses.Count, $listener.listening, $diagnostics.state, $chrome.loadedExtensionRuntimeIdentitySupported)
+Write-Host ('Notifier runtime evidence written. InstallState={0}; Manifest={1}; Helpers={2}; Listener={3}; Diagnostics={4}; Registration={5}; Incidents={6}' -f `
+    $installState.state, $installedManifest.state, $helperProcesses.Count, $listener.listening, $diagnostics.state, $chrome.registration.state, @($incidents.records).Count)
