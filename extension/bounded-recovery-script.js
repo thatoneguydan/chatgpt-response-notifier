@@ -1,10 +1,9 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const AUTO_CONTINUE_TEXT = 'continue until you finish or need something from me';
-  const FORMAT_REPAIR_TEXT = 'Classify the existing work result and supply the missing final GitHub status. Do not rerun tools, builds, deployments, writes, or completed actions. Use the actual current end state and end with exactly one valid `[GITHUB_STATUS: CODE]` line.';
   const READY_WAIT_MS = 5_000;
   const USER_TURN_WAIT_MS = 3_500;
   const ACTIVE_GUARD_MS = 3_000;
@@ -166,25 +165,13 @@
     return '';
   }
 
-  function exactIdentityMatches(kind, current, expected) {
+  function exactIdentityMatches(current, expected) {
     if (!current || !expected) return false;
     if (current.conversationId !== expected.conversationId) return false;
     if (current.documentId !== expected.documentId) return false;
     if (current.promptKey !== expected.promptKey) return false;
     if (String(current.promptRevision || '') !== String(expected.promptRevision || '')) return false;
-    if (kind === 'format-repair') {
-      return Boolean(
-        current.assistantKey &&
-        current.assistantKey === expected.assistantKey &&
-        String(current.assistantRevision || '') === String(expected.assistantRevision || '') &&
-        !current.statusCode &&
-        current.stableTerminal === true
-      );
-    }
-    if (kind === 'continue') {
-      return Boolean(!current.assistantKey && Number(current.silentIdleConfirmations || 0) >= 2);
-    }
-    return false;
+    return Boolean(!current.assistantKey && Number(current.silentIdleConfirmations || 0) >= 2);
   }
 
   function matchingNewUserTurn(previousKey, expectedText) {
@@ -193,9 +180,9 @@
   }
 
   async function perform(kind, expected) {
-    if (!['continue', 'format-repair'].includes(kind)) return { ok: false, clicked: false, reason: 'unsupported-recovery-command' };
+    if (kind !== 'continue') return { ok: false, clicked: false, reason: kind === 'format-repair' ? 'format-repair-retired' : 'unsupported-recovery-command' };
     const initial = monitorSnapshot();
-    if (!exactIdentityMatches(kind, initial, expected)) return { ok: false, clicked: false, reason: 'recovery-identity-changed', documentId: initial?.documentId || '' };
+    if (!exactIdentityMatches(initial, expected)) return { ok: false, clicked: false, reason: 'recovery-identity-changed', documentId: initial?.documentId || '' };
     if (stopPresent()) return { ok: false, clicked: false, reason: 'response-still-generating', documentId: initial?.documentId || '' };
 
     const composer = composerElement();
@@ -203,7 +190,7 @@
     const blocked = activeUserBlockReason(composer);
     if (blocked) return { ok: false, clicked: false, reason: blocked, documentId: initial?.documentId || '' };
 
-    const text = kind === 'continue' ? AUTO_CONTINUE_TEXT : FORMAT_REPAIR_TEXT;
+    const text = AUTO_CONTINUE_TEXT;
     const previousUserKey = latestUserTurn()?.key || '';
     if (!writeComposer(composer, text)) return { ok: false, clicked: false, reason: 'composer-write-failed', documentId: initial?.documentId || '' };
 
@@ -214,7 +201,7 @@
     }
 
     const before = monitorSnapshot();
-    if (!exactIdentityMatches(kind, before, expected) || stopPresent()) {
+    if (!exactIdentityMatches(before, expected) || stopPresent()) {
       if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
       return { ok: false, clicked: false, reason: 'recovery-identity-changed-before-send', documentId: before?.documentId || '' };
     }
@@ -236,7 +223,7 @@
     if (typeof observed === 'string') return { ok: false, clicked: true, reason: 'page-send-error', pageError: observed, documentId: before?.documentId || '' };
     const user = observed || matchingNewUserTurn(previousUserKey, text);
     if (!user) return { ok: false, clicked: true, reason: 'recovery-user-turn-not-confirmed', documentId: before?.documentId || '' };
-    return { ok: true, clicked: true, reason: `${kind}-user-turn-confirmed`, newPromptKey: user.key, documentId: before?.documentId || '' };
+    return { ok: true, clicked: true, reason: 'continue-user-turn-confirmed', newPromptKey: user.key, documentId: before?.documentId || '' };
   }
 
   const messageListener = (message, _sender, sendResponse) => {
@@ -256,7 +243,7 @@
   chrome.runtime.onMessage.addListener(messageListener);
   const runtime = {
     version: RUNTIME_VERSION,
-    formatRepairText: FORMAT_REPAIR_TEXT,
+    formatRepairRetired: true,
     autoContinueText: AUTO_CONTINUE_TEXT,
     dispose() {
       try { abortController.abort(); } catch {}
