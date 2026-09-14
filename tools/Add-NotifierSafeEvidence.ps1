@@ -20,9 +20,9 @@ function Copy-SafeDiagnostic {
     if ($null -eq $Record) { return $null }
     $safe = [ordered]@{}
     foreach ($name in @(
-        'source','status','observedAt','extensionVersion','correlationId','tabId','attempt','frozen','discarded',
-        'presented','presentationState','conversationSuffix','notificationSuffix','chromeDocumentSuffix',
-        'statusRuntimeSuffix','monitorRuntimeSuffix'
+        'source','status','observedAt','extensionVersion','correlationId','tabId','statusCode','attempt','elapsedMs','queuedMessages',
+        'frozen','discarded','deliveredNow','presented','triggerPath','reason','captureSource','presentationState',
+        'conversationSuffix','notificationSuffix','chromeDocumentSuffix','statusRuntimeSuffix','monitorRuntimeSuffix'
     )) {
         $value = Get-PropertyValue -InputObject $Record -Name $name
         if ($null -ne $value) { $safe[$name] = $value }
@@ -41,6 +41,18 @@ $result = [ordered]@{
     helperProcessId = $null
     helperSessionId = $null
     transport = $null
+    observationCapability = $null
+    livenessWindowSeconds = $null
+    bridgeClientCount = $null
+    bridgeConnected = $null
+    bridgeLastSeenAtUtc = $null
+    currentExtensionVersion = $null
+    currentExtensionRuntimeSuffix = $null
+    currentExtensionObservedAtUtc = $null
+    extensionConnectionLive = $false
+    historicalExtensionVersion = $null
+    historicalExtensionRuntimeSuffix = $null
+    historicalExtensionObservedAtUtc = $null
     loadedExtensionVersion = $null
     extensionRuntimeSuffix = $null
     diagnostics = @()
@@ -51,8 +63,11 @@ try {
     $runtime = $raw | ConvertFrom-Json -ErrorAction Stop
     $result.state = 'read'
     foreach ($name in @(
-        'schemaVersion','observedAtUtc','installedVersion','sourceCommit','installedManifestVersion','helperProcessId',
-        'helperSessionId','transport','loadedExtensionVersion','extensionRuntimeSuffix'
+        'schemaVersion','observedAtUtc','installedVersion','sourceCommit','installedManifestVersion','helperProcessId','helperSessionId','transport',
+        'observationCapability','livenessWindowSeconds','bridgeClientCount','bridgeConnected','bridgeLastSeenAtUtc',
+        'currentExtensionVersion','currentExtensionRuntimeSuffix','currentExtensionObservedAtUtc','extensionConnectionLive',
+        'historicalExtensionVersion','historicalExtensionRuntimeSuffix','historicalExtensionObservedAtUtc',
+        'loadedExtensionVersion','extensionRuntimeSuffix'
     )) {
         $value = Get-PropertyValue -InputObject $runtime -Name $name
         if ($null -ne $value) { $result[$name] = $value }
@@ -73,17 +88,38 @@ catch {
     $result.errorCode = $_.Exception.HResult
 }
 
+$runtimeFresh = $false
+try {
+    if ($result.state -eq 'read' `
+        -and [int]$result.schemaVersion -ge 2 `
+        -and [string]$result.observationCapability -eq 'extension-bridge-runtime-self-report-v2' `
+        -and $result.bridgeConnected -eq $true `
+        -and $result.extensionConnectionLive -eq $true `
+        -and -not [string]::IsNullOrWhiteSpace([string]$result.currentExtensionVersion) `
+        -and -not [string]::IsNullOrWhiteSpace([string]$result.currentExtensionObservedAtUtc)) {
+        $observed = [DateTimeOffset]::Parse([string]$result.currentExtensionObservedAtUtc)
+        $ageSeconds = ([DateTimeOffset]::UtcNow - $observed).TotalSeconds
+        $runtimeFresh = $ageSeconds -ge -5 -and $ageSeconds -le 90
+    }
+}
+catch {
+    $runtimeFresh = $false
+}
+
 $evidence = Get-Content -LiteralPath $EvidencePath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
 $evidence | Add-Member -NotePropertyName safeRuntimeEvidence -NotePropertyValue ([pscustomobject]$result) -Force
-if ($result.state -eq 'read' -and -not [string]::IsNullOrWhiteSpace([string]$result.loadedExtensionVersion)) {
-    $evidence.chrome.loadedExtensionRuntimeIdentitySupported = $true
-    $evidence.chrome | Add-Member -NotePropertyName loadedRuntimeIdentitySource -NotePropertyValue 'notifier-sanitized-self-report' -Force
-}
+$evidence.chrome.loadedExtensionRuntimeIdentitySupported = $runtimeFresh
+$evidence.chrome | Add-Member -NotePropertyName loadedRuntimeIdentitySource -NotePropertyValue ($runtimeFresh ? 'notifier-live-bridge-self-report-v2' : 'not-live-or-not-fresh') -Force
+$evidence.chrome | Add-Member -NotePropertyName historicalExtensionVersion -NotePropertyValue $result.historicalExtensionVersion -Force
+$evidence.chrome | Add-Member -NotePropertyName currentExtensionVersion -NotePropertyValue $result.currentExtensionVersion -Force
+$evidence.chrome | Add-Member -NotePropertyName extensionConnectionLive -NotePropertyValue $runtimeFresh -Force
 $evidence | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $EvidencePath -Encoding UTF8
 
-Write-Host ('Notifier safe evidence: state={0}; installed={1}; source={2}; loadedExtension={3}; diagnostics={4}' -f `
+Write-Host ('Notifier safe evidence: state={0}; installed={1}; source={2}; currentExtension={3}; historicalExtension={4}; live={5}; diagnostics={6}' -f `
     $result.state,
     $result.installedVersion,
     $result.sourceCommit,
-    $result.loadedExtensionVersion,
+    $result.currentExtensionVersion,
+    $result.historicalExtensionVersion,
+    $runtimeFresh,
     @($result.diagnostics).Count)
