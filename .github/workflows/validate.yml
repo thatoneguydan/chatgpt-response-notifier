@@ -135,7 +135,7 @@ jobs:
           }
           $candidateManifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $artifactRoot 'candidate-manifest.json') -Encoding UTF8
 
-      - name: Prove isolated Setup, same-version replacement, and localhost helper handshake
+      - name: Prove isolated Setup, root-preserving replacement, and localhost helper handshake
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -144,6 +144,9 @@ jobs:
           $candidateRoot = Join-Path $env:RUNNER_TEMP 'chatgpt-response-notifier-candidate'
           $candidateSetup = Join-Path (Join-Path $candidateRoot 'artifacts') "ChatGPT-Response-Notifier-Setup-$version-candidate-$shortSha.exe"
           $testInstallRoot = Join-Path $env:RUNNER_TEMP ('chatgpt-response-notifier-install-' + [Guid]::NewGuid().ToString('N'))
+          $extensionRoot = Join-Path $testInstallRoot 'extension'
+          $rootSentinel = Join-Path $extensionRoot '.root-preservation-sentinel'
+          $sentinelValue = 'registered-unpacked-extension-root-must-survive'
 
           $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
           $listener.Start()
@@ -158,6 +161,18 @@ jobs:
               Wait-Process -Id $setupProcess.Id -Timeout 45
               $setupProcess.Refresh()
               if ($setupProcess.ExitCode -ne 0) { throw "Setup.exe isolated acceptance attempt $attempt failed with exit code $($setupProcess.ExitCode)." }
+
+              if ($attempt -eq 1) {
+                if (-not (Test-Path -LiteralPath $extensionRoot -PathType Container)) { throw 'Extension root is missing after first isolated install.' }
+                Set-Content -LiteralPath $rootSentinel -Value $sentinelValue -Encoding ASCII -NoNewline
+              }
+            }
+
+            if (-not (Test-Path -LiteralPath $rootSentinel -PathType Leaf)) {
+              throw 'Second install replaced the registered unpacked extension root instead of updating it in place.'
+            }
+            if ((Get-Content -LiteralPath $rootSentinel -Raw -Encoding ASCII) -cne $sentinelValue) {
+              throw 'Root-preservation sentinel changed during same-version replacement.'
             }
 
             $statePath = Join-Path $testInstallRoot 'Data\install-state.json'
