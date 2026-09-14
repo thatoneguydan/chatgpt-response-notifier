@@ -35,9 +35,6 @@ function reportBootstrapFailure(status, error) {
   } catch {}
 }
 
-// Keep Ram Haidar's upstream-compatible completion worker isolated from local
-// policy/recovery/history layers. These layers observe browser/page state only;
-// none creates ChatGPT HTTP traffic.
 let importsReady = false;
 try {
   importScripts(
@@ -65,11 +62,49 @@ try {
 }
 
 if (importsReady) {
-  // The reviewed upstream completion detector remains byte-for-byte unchanged.
-  // Its fingerprint already starts with stable page turn identity:
-  //   pathname | user-turn-id | assistant-turn-id | rendered-response-prefix
-  // Capture those IDs and use them as a strict binding fallback when the detector
-  // fires before ChatGPT has finished settling every rendered response block.
+  try {
+    const policy = globalThis.ChatGPTNotifierContinuationPolicy;
+    const model = globalThis.ChatGPTNotifierRecoveryModel;
+    const formatDecision = policy?.recoveryActionDecision?.('format-repair', {}, { now: Date.now() });
+    const nativeForegroundPresent = typeof globalThis.requestNativeChromeForeground === 'function';
+    const formatRepairPresent = Array.isArray(model?.actionKinds)
+      ? model.actionKinds.includes('format-repair')
+      : Array.from(model?.actionKinds || []).includes('format-repair');
+    if (nativeForegroundPresent) throw new Error('Retired native foreground path is present in production runtime.');
+    if (formatDecision?.allowed !== false || formatDecision?.reason !== 'format-repair-retired' || formatRepairPresent) {
+      throw new Error('Retired format-repair action is present in production runtime.');
+    }
+    globalThis.__chatgptNotifierPrimarySafety = Object.freeze({
+      version: 1,
+      nativeForegroundRetired: true,
+      formatRepairRetired: true
+    });
+  } catch (error) {
+    globalThis.__chatgptNotifierPrimarySafetyFailure = String(error?.message || error || 'primary safety assertion failed');
+    reportBootstrapFailure('primary-safety-assertion-failed', error);
+    // Fail closed: click navigation and bounded recovery stop rather than falling
+    // through to any compatibility implementation that violates the assertion.
+    try { if (typeof globalThis.focusOrOpenConversation === 'function') globalThis.focusOrOpenConversation = async () => false; } catch {}
+    try {
+      const model = globalThis.ChatGPTNotifierRecoveryModel;
+      if (model && typeof model === 'object') {
+        globalThis.ChatGPTNotifierRecoveryModel = Object.freeze({
+          ...model,
+          admissionDecision(kind, ...args) {
+            if (String(kind || '') === 'format-repair') return { allowed: false, reason: 'format-repair-retired' };
+            return model.admissionDecision?.(kind, ...args) || { allowed: false, reason: 'primary-safety-assertion-failed' };
+          },
+          claimAction(kind, ...args) {
+            if (String(kind || '') === 'format-repair') return { allowed: false, reason: 'format-repair-retired' };
+            return model.claimAction?.(kind, ...args) || { allowed: false, reason: 'primary-safety-assertion-failed' };
+          }
+        });
+      }
+    } catch {}
+  }
+}
+
+if (importsReady) {
   try {
     (() => {
       const CONTEXT_TTL_MS = 120_000;
