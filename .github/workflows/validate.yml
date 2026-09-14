@@ -192,10 +192,11 @@ jobs:
             $evidencePath = Join-Path $testInstallRoot 'Evidence\runtime-evidence.json'
             if (-not (Test-Path -LiteralPath $evidencePath -PathType Leaf)) { throw 'Bounded runtime evidence was not published by the isolated helper.' }
             $evidence = Get-Content -LiteralPath $evidencePath -Raw -Encoding UTF8 | ConvertFrom-Json
-            if ($evidence.schemaVersion -ne 2) { throw 'Bounded runtime evidence schema mismatch.' }
+            if ($evidence.schemaVersion -ne 1) { throw 'Bounded runtime evidence schema mismatch.' }
             if ($evidence.installedVersion -ne $version) { throw "Bounded runtime evidence version mismatch: $($evidence.installedVersion)" }
             if ($evidence.sourceCommit -ne $env:SOURCE_SHA) { throw "Bounded runtime evidence source mismatch: $($evidence.sourceCommit)" }
             if ($evidence.installedManifestVersion -ne $version) { throw "Bounded runtime evidence manifest mismatch: $($evidence.installedManifestVersion)" }
+            if ($evidence.observationCapability -ne 'extension-bridge-runtime-self-report-v2') { throw 'Bounded runtime evidence freshness capability is missing.' }
             $evidenceRaw = Get-Content -LiteralPath $evidencePath -Raw -Encoding UTF8
             foreach ($forbidden in @('responseBody','responseText','sessionTitle','promptText','conversationUrl','commandLine','"error"','"reason"')) {
               if ($evidenceRaw -match [regex]::Escape($forbidden)) { throw "Bounded runtime evidence contains forbidden marker: $forbidden" }
