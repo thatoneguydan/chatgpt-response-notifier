@@ -74,12 +74,12 @@ $stableClientStart = $bridgeText.IndexOf('using var socket = await context.WebSo
 if ($stableClientStart -lt 0) { throw 'Stable bridge client branch could not be resolved after the legacy migration branch.' }
 $legacyBlock = $bridgeText.Substring($legacyStart, $stableClientStart - $legacyStart)
 foreach ($required in @('migrationSocket', 'SendToSocketAsync(', '_readyMessageFactory()', 'return;')) {
-    if (-not $legacyBlock.Contains($required, [StringComparison]::Ordinal)) {
+    if ($legacyBlock.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
         throw "Legacy identity migration branch is missing required marker: $required"
     }
 }
 foreach ($forbidden in @('_clients[', 'ReceiveLoopAsync(', '_onMessage(')) {
-    if ($legacyBlock.Contains($forbidden, [StringComparison]::Ordinal)) {
+    if ($legacyBlock.IndexOf($forbidden, [StringComparison]::Ordinal) -ge 0) {
         throw "Legacy identity migration branch must not expose normal bridge command handling: $forbidden"
     }
 }
