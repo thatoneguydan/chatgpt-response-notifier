@@ -2,7 +2,19 @@
 
 Program: **ChatGPT Response Notifier**. Source authority: this repository. Work ownership: [DevelopmentInfrastructure #283](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/283). Implementation: draft [PR #33](https://github.com/thatoneguydan/chatgpt-response-notifier/pull/33). Review and rollout: [#32](https://github.com/thatoneguydan/chatgpt-response-notifier/issues/32), [#34](https://github.com/thatoneguydan/chatgpt-response-notifier/issues/34).
 
-## Current checkpoint — 2026-09-13
+## Current checkpoint — 2026-09-14
+
+v0.9.11 reached the workstation through the guarded Glass deployment lane and exact installed/helper/runtime identity was proven, but **Task 4 live acceptance failed**. During the first visual acceptance, Chrome became wedged and would not reopen until its process tree was terminated. The normal Chrome profile then reopened intact, but the ChatGPT Response Notifier unpacked-extension registration was gone. Dan did not remove it manually.
+
+The migration/activation defect is therefore **reopened**. Two unsafe assumptions were identified in the deployed source: the installer replaced the extension by moving away the entire live unpacked-extension root, and v0.9.11 changed the manifest key/Chrome extension ID while relying on `chrome.runtime.reload()` to turn the old-ID registration into the stable-ID registration. Neither mechanism is acceptable for a loaded unpacked extension.
+
+The v0.9.12 repair candidate keeps the reviewed full manifest key and stable extension ID, accepts only the stable helper Origin, removes the legacy-ID migration handshake, and updates extension files **in place without ever moving away the registered root**. New assets are copied first and `manifest.json` is published last; an in-place rollback copy is retained for failed updates. Exact-head validation also places an unknown sentinel in the installed extension root after the first isolated install and requires it to survive the second install, behaviorally proving the root was not replaced.
+
+Current workstation state is intentionally asymmetric while recovery is being proven: v0.9.11 files/helper are installed, but Chrome no longer has the notifier registered. **Do not ask Dan to re-add/reload/reinstall the unpacked extension yet.** First prove the final v0.9.12 exact source, deploy that exact candidate through the guarded Glass lane, and verify installed/helper identity. Only then perform the unavoidable one-time Chrome `Load unpacked` recovery against the already-safe on-disk stable-ID extension directory and resume live acceptance. Do not publish/merge PR #33 based only on deterministic tests.
+
+The v0.9.11 “automatic legacy-ID migration” path is retired and must not be restored. Ordinary future updates must preserve both the registered directory object and extension identity. The active producer/consumer status contract remains v1 with seven codes; the coordinated v2 `INCOMPLETE_CONTINUE` amendment remains planned only.
+
+## Previous checkpoint — 2026-09-13
 
 Dan reports v0.9.7 already installed and Windows notifications still missing. Later #34/#283 comments supersede their older “install 0.9.7” instructions. Do not request a repeat install without contrary live identity.
 
