@@ -3,12 +3,12 @@
 (() => {
   if (globalThis.__chatgptNotifierV0914Safety) return;
 
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
   const PASSIVE_STATUS_REASON = 'status-missing-passive';
   const RESOLVED_COMPAT_REASON = 'work-resumed-after-reload';
 
   function passiveStatusMissing(classification = {}) {
-    if (String(classification?.reason || '') !== 'status-missing') return classification;
+    if (!['status-missing', PASSIVE_STATUS_REASON].includes(String(classification?.reason || ''))) return classification;
     return {
       ...classification,
       state: 'waiting',
@@ -25,8 +25,7 @@
       ...originalPolicy,
       runtimeVersion: Math.max(5, Number(originalPolicy.runtimeVersion || 0)),
       classifyObservation(observation = {}) {
-        const result = originalPolicy.classifyObservation?.(observation) || {};
-        return passiveStatusMissing(result);
+        return passiveStatusMissing(originalPolicy.classifyObservation?.(observation) || {});
       },
       recoveryActionDecision(kind, budgetValue = {}, options = {}) {
         if (String(kind || '') === 'format-repair') {
@@ -64,7 +63,7 @@
       recoveryCandidate(classification = {}, observation = {}, incidentValue = {}) {
         const classificationReason = String(classification?.reason || '');
         if (classificationReason === 'status-missing' || classificationReason === PASSIVE_STATUS_REASON) {
-          return { kind: '', reason: RESOLVED_COMPAT_REASON };
+          return { kind: '', reason: PASSIVE_STATUS_REASON };
         }
         const result = originalModel.recoveryCandidate?.(classification, observation, incidentValue) || { kind: '', reason: 'no-recovery-candidate' };
         if (String(result?.kind || '') === 'format-repair' || String(result?.reason || '') === 'status-missing') {
@@ -90,45 +89,6 @@
     });
   }
 
-  function conversationFromUrl(rawUrl) {
-    try {
-      const url = new URL(String(rawUrl || ''));
-      if (!['chatgpt.com', 'www.chatgpt.com'].includes(url.hostname)) return null;
-      const parts = url.pathname.split('/').filter(Boolean);
-      for (let index = parts.length - 2; index >= 0; index -= 1) {
-        if (parts[index] !== 'c') continue;
-        const id = decodeURIComponent(parts[index + 1] || '').trim();
-        if (id) return { id, url: `https://chatgpt.com${url.pathname.replace(/\/+$/, '')}` };
-      }
-    } catch {}
-    return null;
-  }
-
-  async function chromeOnlyConversationFocus(conversationId, conversationUrl) {
-    const id = String(conversationId || '');
-    const target = conversationFromUrl(conversationUrl);
-    if (!id || !target || target.id !== id) return false;
-
-    let tabs = [];
-    try { tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] }); } catch {}
-    const existing = tabs.find((tab) => conversationFromUrl(tab?.url || '')?.id === id);
-
-    if (Number.isInteger(existing?.id)) {
-      await chrome.tabs.update(existing.id, { active: true });
-      if (Number.isInteger(existing.windowId)) {
-        try { await chrome.windows.update(existing.windowId, { focused: true }); } catch {}
-      }
-    } else {
-      const created = await chrome.tabs.create({ url: target.url, active: true });
-      if (Number.isInteger(created?.windowId)) {
-        try { await chrome.windows.update(created.windowId, { focused: true }); } catch {}
-      }
-    }
-
-    try { globalThis.sendNative?.({ type: 'toast.dismissConversation', conversationId: id }); } catch {}
-    return true;
-  }
-
   const MONITOR_DB_NAME = 'chatgpt-response-notifier-monitor';
   const ATTENTION_STORE_NAME = 'attention';
   const staleAttentionIds = [];
@@ -140,8 +100,6 @@
       catch { resolve([]); return; }
 
       request.onupgradeneeded = () => {
-        // A missing database has nothing stale to clean. Abort rather than
-        // creating monitor state solely for this compatibility cleanup.
         try { request.transaction?.abort(); } catch {}
       };
       request.onerror = () => resolve([]);
@@ -193,22 +151,15 @@
     return false;
   }
 
-  function installChromeOnlyToastClick(attempt = 0) {
-    const focusReady = typeof globalThis.focusOrOpenConversation === 'function';
-    const nativeForegroundReady = typeof globalThis.requestNativeChromeForeground === 'function';
-    if (focusReady || nativeForegroundReady) {
-      // Defense in depth: even if a stale caller retains the old focus helper,
-      // the native Win32 foreground request is permanently disabled.
-      globalThis.requestNativeChromeForeground = async () => false;
-      globalThis.focusOrOpenConversation = chromeOnlyConversationFocus;
-      return true;
-    }
-    if (attempt < 120) setTimeout(() => installChromeOnlyToastClick(attempt + 1), 25);
-    return false;
+  // The primary service-worker now owns Chrome-only click navigation directly.
+  // This compatibility layer intentionally does not replace it; replacing the
+  // function would discard primary click-stage diagnostics and could regress the
+  // exact route this layer originally existed to protect.
+  function verifyPrimaryClickPath() {
+    return typeof globalThis.requestNativeChromeForeground !== 'function';
   }
 
   retirePersistedStatusMissingAttention().then(() => dismissRetiredAttentionToasts()).catch(() => {});
-  setTimeout(() => installChromeOnlyToastClick(), 0);
 
   globalThis.__chatgptNotifierV0914Safety = Object.freeze({
     version: RUNTIME_VERSION,
@@ -217,7 +168,6 @@
     staleStatusMissingAttentionRetired: true,
     retirePersistedStatusMissingAttention,
     dismissRetiredAttentionToasts,
-    chromeOnlyConversationFocus,
-    installChromeOnlyToastClick
+    verifyPrimaryClickPath
   });
 })();
