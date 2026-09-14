@@ -72,7 +72,7 @@ public static class BundleInstaller
         var hostRoot = NativeHostInstaller.HostVersionRoot(manifest.Version);
         Directory.CreateDirectory(hostRoot);
         var installedHost = NativeHostInstaller.HostExecutablePath(manifest.Version);
-        File.Copy(bundledHost, installedHost, overwrite: true);
+        ReplaceHostExecutable(bundledHost, installedHost);
 
         UpdateDirectoryPreservingRoot(bundledExtension, NativeHostInstaller.ExtensionRoot);
 
@@ -161,6 +161,51 @@ public static class BundleInstaller
     {
         using var stream = File.OpenRead(path);
         return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+    }
+
+    private static void ReplaceHostExecutable(string source, string destination)
+    {
+        if (File.Exists(destination))
+        {
+            try
+            {
+                if (new FileInfo(source).Length == new FileInfo(destination).Length &&
+                    HashFile(source).Equals(HashFile(destination), StringComparison.OrdinalIgnoreCase))
+                {
+                    // Reinstalling the exact same candidate must be idempotent. A running
+                    // helper can keep its image locked briefly after shutdown; rewriting an
+                    // identical binary buys nothing and creates an avoidable race.
+                    return;
+                }
+            }
+            catch (IOException)
+            {
+                // If the existing file cannot be read reliably, fall through to the
+                // bounded replacement path rather than assuming identity.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Same as above: never treat an unverifiable file as identical.
+            }
+        }
+
+        Exception? lastError = null;
+        for (var attempt = 0; attempt < 25; attempt += 1)
+        {
+            try
+            {
+                File.Copy(source, destination, overwrite: true);
+                return;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                lastError = error;
+                if (attempt == 24) break;
+                Thread.Sleep(100);
+            }
+        }
+
+        throw new IOException("Notifier helper executable could not be replaced after a bounded unlock wait.", lastError);
     }
 
     private static void UpdateDirectoryPreservingRoot(string source, string destination)
