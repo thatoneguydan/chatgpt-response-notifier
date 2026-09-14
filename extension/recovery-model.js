@@ -1,9 +1,10 @@
 'use strict';
 
 (() => {
-  if (globalThis.ChatGPTNotifierRecoveryModel) return;
+  if (globalThis.ChatGPTNotifierRecoveryModel?.version === 2) return;
 
-  const ACTION_KINDS = Object.freeze(['reload', 'continue', 'format-repair', 'normal-continue']);
+  const VERSION = 2;
+  const ACTION_KINDS = Object.freeze(['reload', 'continue', 'normal-continue']);
   const ACTION_KIND_SET = new Set(ACTION_KINDS);
   const FIRST_INCIDENT_BACKOFF_MS = 30_000;
   const LATER_INCIDENT_BACKOFF_MS = 120_000;
@@ -80,10 +81,8 @@
 
     const reason = String(classification.reason || incident.reason || '');
     const reloadCap = Math.max(1, Number(globalThis.ChatGPTNotifierContinuationPolicy?.thresholds?.incidentReloadCap || 3));
-    if (reason === 'status-missing') {
-      return incident.budget.formatRepairs >= 1
-        ? { kind: '', reason: 'format-repair-spent' }
-        : { kind: 'format-repair', reason };
+    if (reason === 'status-missing' || reason === 'status-missing-passive') {
+      return { kind: '', reason: 'status-missing-passive' };
     }
     if (reason === POST_RELOAD_EXPLICIT_REASON) {
       return incident.budget.continuations >= 1
@@ -118,7 +117,7 @@
 
   function firstEligibleAt(reason, now, ordinal = 1) {
     const base = number(now);
-    if (reason === 'silent-stop-confirmed' || reason === 'status-missing') return base;
+    if (reason === 'silent-stop-confirmed') return base;
     return base + (Number(ordinal || 1) <= 1 ? FIRST_INCIDENT_BACKOFF_MS : LATER_INCIDENT_BACKOFF_MS);
   }
 
@@ -138,6 +137,7 @@
   }
 
   function admissionDecision(kind, humanRunValue, incidentValue, profileValue, observation = {}, options = {}) {
+    if (kind === 'format-repair') return { allowed: false, reason: 'format-repair-retired' };
     if (!ACTION_KIND_SET.has(String(kind || ''))) return { allowed: false, reason: 'unknown-recovery-action' };
     if (options.recoveryEnabled !== true && kind !== 'normal-continue') return { allowed: false, reason: 'recovery-not-enabled' };
     const veto = observationVeto(observation);
@@ -239,13 +239,14 @@
     if (EXPLICIT_RELOAD_REASONS.has(String(classification.reason || ''))) {
       return { kind: 'continue', state: 'scheduled', reason: POST_RELOAD_EXPLICIT_REASON };
     }
-    if (observation.assistantKey && observation.stableTerminal) return { kind: 'format-repair', state: 'scheduled', reason: 'status-missing' };
+    if (observation.assistantKey && observation.stableTerminal) return { kind: '', state: 'resolved', reason: 'status-missing-passive' };
     if (!observation.assistantKey && Number(observation.silentIdleConfirmations || 0) >= 2) return { kind: 'continue', state: 'scheduled', reason: 'post-reload-silent-stop' };
     if (observation.stopGenerating || observation.toolActivity) return { kind: '', state: 'observing', reason: 'work-resumed-after-reload' };
     return { kind: '', state: 'attention', reason: 'post-reload-outcome-ambiguous' };
   }
 
   globalThis.ChatGPTNotifierRecoveryModel = Object.freeze({
+    version: VERSION,
     actionKinds: ACTION_KINDS,
     explicitReloadReasons: Object.freeze(Array.from(EXPLICIT_RELOAD_REASONS)),
     postReloadExplicitReason: POST_RELOAD_EXPLICIT_REASON,
