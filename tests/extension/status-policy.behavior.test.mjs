@@ -171,14 +171,17 @@ test('long-chat evaluation keeps omission, wrong classification, and format fail
   assert.equal(observedKinds.get('ordinary-progress-no-footer'), 'none');
 });
 
-test('observation classifier distinguishes active work, missing status, silent stop, blockers and coded results', () => {
+test('observation classifier distinguishes active work, passive missing status, silent stop, blockers and coded results', () => {
   const policy = loadPolicy();
   assert.equal(policy.classifyObservation({ statusCode: 'COMPLETE_APPLIED' }).state, 'coded-terminal');
   assert.equal(policy.classifyObservation({ statusCode: 'COMPLETE_APPLIED' }).automaticActionAllowed, false);
   assert.equal(policy.classifyObservation({ statusCode: 'INCOMPLETE_LIMIT' }).automaticActionAllowed, true);
   assert.equal(policy.classifyObservation({ stopGenerating: true }).state, 'working');
   assert.equal(policy.classifyObservation({ toolActivity: true }).reason, 'tool-activity');
-  assert.equal(policy.classifyObservation({ assistantKey: 'a1', stableTerminal: true }).reason, 'status-missing');
+  const missing = policy.classifyObservation({ assistantKey: 'a1', stableTerminal: true });
+  assert.equal(missing.state, 'waiting');
+  assert.equal(missing.reason, 'status-missing-passive');
+  assert.equal(missing.formatRepairCandidate, false);
   assert.equal(policy.classifyObservation({ silentIdleConfirmations: 2 }).reason, 'silent-stop-confirmed');
   assert.equal(policy.classifyObservation({ explicitInterruption: true, interruptionKind: 'connection-interrupted' }).reason, 'connection-interrupted');
   assert.equal(policy.classifyObservation({ rateLimited: true }).openProfileBreaker, true);
@@ -192,7 +195,7 @@ test('observation classifier distinguishes active work, missing status, silent s
   assert.equal(policy.classifyObservation({ workingDurationMs: 15 * 60_000 }).reason, 'long-thinking-diagnostic');
 });
 
-test('recovery budget permits at most three reloads, one continuation, one format repair and two automatic messages per incident', () => {
+test('recovery budget permits reloads and one continuation while format repair is permanently retired', () => {
   const policy = loadPolicy();
   assert.equal(policy.thresholds.incidentReloadCap, 3);
   let budget = {};
@@ -211,14 +214,11 @@ test('recovery budget permits at most three reloads, one continuation, one forma
   assert.equal(continued.budget.automaticMessages, 1);
   assert.equal(continued.budget.runGenerationActions, 1);
 
-  const repaired = policy.beginRecoveryAction('format-repair', continued.budget, { now: 121_000 });
-  assert.equal(repaired.allowed, true);
-  assert.equal(repaired.budget.formatRepairs, 1);
-  assert.equal(repaired.budget.automaticMessages, 2);
-  assert.equal(repaired.budget.runGenerationActions, 2);
-
-  assert.equal(policy.recoveryActionDecision('continue', repaired.budget, { now: 151_000 }).allowed, false);
-  assert.equal(policy.recoveryActionDecision('format-repair', repaired.budget, { now: 151_000 }).allowed, false);
+  const retired = policy.beginRecoveryAction('format-repair', continued.budget, { now: 121_000 });
+  assert.equal(retired.allowed, false);
+  assert.equal(retired.reason, 'format-repair-retired');
+  assert.equal(policy.recoveryActionDecision('format-repair', {}, { now: 151_000 }).reason, 'format-repair-retired');
+  assert.equal(policy.recoveryActionDecision('continue', continued.budget, { now: 151_000 }).reason, 'incident-continuation-cap-reached');
 });
 
 test('uncertain action, profile breaker, spacing and whole-run cap fail closed', () => {
