@@ -3,90 +3,86 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 
-const source = readFileSync(new URL('../../extension/v0914-safety-background.js', import.meta.url), 'utf8');
+const readText = (relative) => readFileSync(new URL(`../../${relative}`, import.meta.url), 'utf8');
+const source = readText('extension/v0914-safety-background.js');
 
-function contextWithStubs() {
-  const timers = [];
-  const calls = [];
+function contextWithSafePrimary() {
   const context = vm.createContext({
-    URL,
     console,
-    setTimeout: (fn) => { timers.push(fn); return timers.length; },
-    clearTimeout: () => {},
-    chrome: {
-      tabs: {
-        query: async () => [{ id: 12, windowId: 4, url: 'https://chatgpt.com/c/conversation-1' }],
-        update: async (...args) => { calls.push(['tabs.update', ...args]); return {}; },
-        create: async (...args) => { calls.push(['tabs.create', ...args]); return { id: 13, windowId: 5 }; }
-      },
-      windows: {
-        update: async (...args) => { calls.push(['windows.update', ...args]); return {}; }
-      }
+    setTimeout,
+    clearTimeout,
+    indexedDB: {
+      open: () => ({
+        set onupgradeneeded(fn) { this._upgrade = fn; },
+        set onerror(fn) { this._error = fn; },
+        set onsuccess(fn) { this._success = fn; }
+      })
     },
-    sendNative: (message) => { calls.push(['sendNative', message]); return true; },
     ChatGPTNotifierContinuationPolicy: {
-      runtimeVersion: 4,
-      isAutoContinueStatusCode: (code) => ['INCOMPLETE_LIMIT', 'INCOMPLETE_TOOL_FAILURE'].includes(String(code || '')),
+      runtimeVersion: 5,
       normalizeBudget: (value = {}) => ({ ...value }),
-      classifyObservation: (observation = {}) => {
-        if (observation.statusCode) return { state: 'coded-terminal', reason: observation.statusCode, automaticActionAllowed: ['INCOMPLETE_LIMIT','INCOMPLETE_TOOL_FAILURE'].includes(observation.statusCode) };
-        return { state: 'attention', reason: 'status-missing', automaticActionAllowed: false, formatRepairCandidate: true };
-      },
-      recoveryActionDecision: (kind, budget = {}) => ({ allowed: true, reason: 'allowed', budget: { ...budget }, kind }),
-      beginRecoveryAction: (kind, budget = {}) => ({ allowed: true, reason: 'started', budget: { ...budget }, kind })
+      classifyObservation: (observation = {}) => observation.statusCode
+        ? { state: 'coded-terminal', reason: observation.statusCode, automaticActionAllowed: observation.statusCode === 'INCOMPLETE_LIMIT' }
+        : { state: 'waiting', reason: 'status-missing-passive', automaticActionAllowed: false, formatRepairCandidate: false },
+      recoveryActionDecision: (kind, budget = {}) => kind === 'format-repair'
+        ? { allowed: false, reason: 'format-repair-retired', budget: { ...budget } }
+        : { allowed: true, reason: 'allowed', budget: { ...budget } },
+      beginRecoveryAction: (kind, budget = {}) => kind === 'format-repair'
+        ? { allowed: false, reason: 'format-repair-retired', budget: { ...budget } }
+        : { allowed: true, reason: 'started', budget: { ...budget } }
     },
     ChatGPTNotifierRecoveryModel: {
-      recoveryCandidate: (classification) => classification.reason === 'status-missing' ? { kind: 'format-repair', reason: 'status-missing' } : { kind: '', reason: classification.reason },
-      admissionDecision: () => ({ allowed: true, reason: 'allowed' }),
-      claimAction: () => ({ allowed: true, reason: 'claimed' }),
-      postReloadDecision: () => ({ kind: 'format-repair', state: 'scheduled', reason: 'status-missing' })
-    },
-    focusOrOpenConversation: async () => false,
-    requestNativeChromeForeground: async () => true
+      actionKinds: ['reload', 'continue', 'normal-continue'],
+      recoveryCandidate: (classification) => ({ kind: '', reason: classification.reason }),
+      admissionDecision: (kind) => kind === 'format-repair' ? { allowed: false, reason: 'format-repair-retired' } : { allowed: true, reason: 'allowed' },
+      claimAction: (kind) => kind === 'format-repair' ? { allowed: false, reason: 'format-repair-retired' } : { allowed: true, reason: 'claimed' },
+      postReloadDecision: () => ({ kind: '', state: 'resolved', reason: 'status-missing-passive' })
+    }
   });
   vm.runInContext(source, context);
-  return { context, timers, calls };
+  return context;
 }
 
-test('missing-footer classification is passive and cannot trigger format repair', () => {
-  const { context } = contextWithStubs();
+test('compatibility safety keeps missing footer passive and format repair retired', () => {
+  const context = contextWithSafePrimary();
   const policy = context.ChatGPTNotifierContinuationPolicy;
   const model = context.ChatGPTNotifierRecoveryModel;
   const classification = policy.classifyObservation({});
   assert.equal(classification.state, 'waiting');
   assert.equal(classification.reason, 'status-missing-passive');
   assert.equal(classification.formatRepairCandidate, false);
-  assert.deepEqual({ ...model.recoveryCandidate(classification, {}, {}) }, { kind: '', reason: 'work-resumed-after-reload' });
-  assert.equal(policy.recoveryActionDecision('format-repair', {}).allowed, false);
-  assert.equal(model.admissionDecision('format-repair').allowed, false);
-  assert.equal(model.claimAction('format-repair').allowed, false);
-  assert.deepEqual({ ...model.postReloadDecision({}, {}) }, { kind: '', state: 'resolved', reason: 'status-missing-passive' });
+  assert.deepEqual({ ...model.recoveryCandidate(classification, {}, {}) }, { kind: '', reason: 'status-missing-passive' });
+  assert.equal(policy.recoveryActionDecision('format-repair', {}).reason, 'format-repair-retired');
+  assert.equal(model.admissionDecision('format-repair').reason, 'format-repair-retired');
+  assert.equal(model.claimAction('format-repair').reason, 'format-repair-retired');
 });
 
-test('valid terminal codes outrank the passive missing-footer fallback', () => {
-  const { context } = contextWithStubs();
+test('valid terminal codes still outrank passive missing-footer fallback', () => {
+  const context = contextWithSafePrimary();
   const policy = context.ChatGPTNotifierContinuationPolicy;
-  const blocked = policy.classifyObservation({ statusCode: 'BLOCKED_HUMAN' });
-  assert.equal(blocked.state, 'coded-terminal');
-  assert.equal(blocked.reason, 'BLOCKED_HUMAN');
-  assert.equal(blocked.automaticActionAllowed, false);
-  for (const code of ['INCOMPLETE_LIMIT', 'INCOMPLETE_TOOL_FAILURE']) {
-    const result = policy.classifyObservation({ statusCode: code });
-    assert.equal(result.state, 'coded-terminal');
-    assert.equal(result.automaticActionAllowed, true);
-  }
+  assert.equal(policy.classifyObservation({ statusCode: 'BLOCKED_HUMAN' }).reason, 'BLOCKED_HUMAN');
+  assert.equal(policy.classifyObservation({ statusCode: 'INCOMPLETE_LIMIT' }).automaticActionAllowed, true);
 });
 
-test('toast click override uses Chrome APIs only and disables native foreground handoff', async () => {
-  const { context, timers, calls } = contextWithStubs();
-  for (const timer of timers.splice(0)) timer();
-  assert.equal(await context.requestNativeChromeForeground(), false);
-  assert.equal(await context.focusOrOpenConversation('conversation-1', 'https://chatgpt.com/c/conversation-1'), true);
-  assert.equal(calls.some(([name]) => name === 'tabs.update'), true);
-  assert.equal(calls.some(([name]) => name === 'windows.update'), true);
-  assert.equal(calls.some(([name, message]) => name === 'sendNative' && message?.type === 'toast.dismissConversation'), true);
+test('primary click path is Chrome-only and helper Win32 source is removed', () => {
+  const worker = readText('extension/service-worker.js');
+  const host = readText('src/ChatGPTResponseNotifier.Host/NativeHostApplication.cs');
+  assert.doesNotMatch(worker, /window\.foreground/);
+  assert.doesNotMatch(worker, /requestNativeChromeForeground/);
+  assert.match(worker, /chrome\.tabs\.update/);
+  assert.match(worker, /chrome\.windows\.update/);
+  assert.match(worker, /state === 'minimized'/);
+  assert.match(worker, /state: 'normal'/);
+  assert.match(host, /native-foreground-retired/);
+  assert.doesNotMatch(host, /ChromeWindowForeground\.TryForeground/);
+  assert.throws(() => readText('src/ChatGPTResponseNotifier.Host/ChromeWindowForeground.cs'));
+});
+
+test('compatibility layer does not replace the primary click route', () => {
+  assert.match(source, /primary service-worker now owns Chrome-only click navigation directly/);
+  assert.doesNotMatch(source, /globalThis\.focusOrOpenConversation\s*=/);
+  assert.doesNotMatch(source, /requestNativeChromeForeground\s*=/);
   assert.doesNotMatch(source, /window\.foreground/);
-  assert.doesNotMatch(source, /SetForegroundWindow|BringWindowToTop/);
 });
 
 test('startup safety layer retires persisted status-missing attention and its stale toast only', () => {
