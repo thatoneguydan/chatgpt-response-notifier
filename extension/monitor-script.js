@@ -291,6 +291,8 @@
       if (!visibleApplicationNode(node)) continue;
       try { if (node.closest?.(EXCLUDED_ERROR_CONTEXT_SELECTOR)) continue; } catch {}
 
+      // Current-turn ownership is intentionally derived from node.closest(TURN_SELECTOR).
+      // The optional chain below is only defensive for synthetic test doubles.
       let ownerTurn = null;
       try { ownerTurn = node.closest?.(TURN_SELECTOR) || null; } catch {}
       let attribution = '';
