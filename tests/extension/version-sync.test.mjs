@@ -107,22 +107,24 @@ test('both incomplete limit and tool failure are recoverable continuation codes'
   assert.equal(policy.identityMatches({ ...expected, statusCode: 'INCOMPLETE_LIMIT' }, expected), false);
 });
 
-test('explicit interruption outranks missing-footer classification on the same document', () => {
+test('explicit interruption outranks passive missing-footer classification on the same document', () => {
   const context = loadRecoveryPolicyAndModel();
   const policy = context.ChatGPTNotifierContinuationPolicy;
   assert.equal(policy.classifyObservation(recoveryObservation({ explicitInterruption: true, interruptionKind: 'timed-out' })).reason, 'timed-out');
   assert.equal(policy.classifyObservation(recoveryObservation()).reason, 'timed-out');
-  assert.equal(policy.classifyObservation(recoveryObservation({ documentId: 'document-2' })).reason, 'status-missing');
+  assert.equal(policy.classifyObservation(recoveryObservation({ documentId: 'document-2' })).reason, 'status-missing-passive');
 });
 
-test('missing-footer repair waits for the ChatGPT request to settle', () => {
+test('missing footer stays passive after the ChatGPT request settles', () => {
   const context = loadRecoveryPolicyAndModel();
   const policy = context.ChatGPTNotifierContinuationPolicy;
   const active = policy.classifyObservation(recoveryObservation({ requestPhase: 'started' }));
   assert.equal(active.state, 'waiting');
   assert.equal(active.reason, 'awaiting-request-settlement');
   const done = policy.classifyObservation(recoveryObservation({ requestPhase: 'completed' }));
-  assert.equal(done.reason, 'status-missing');
+  assert.equal(done.state, 'waiting');
+  assert.equal(done.reason, 'status-missing-passive');
+  assert.equal(done.formatRepairCandidate, false);
 });
 
 test('explicit transport failures reload once, then continue once if the same failure survives reload', () => {
@@ -196,21 +198,29 @@ test('tool failure coded completion is routed through the existing continuation 
   assert.equal(queued.length, 1);
 });
 
-test('live repair recognizes semantic timeout UI and replays activation state into recovery', () => {
+test('compatibility repair delegates current-request UI attribution to the primary monitor', () => {
   const background = readText('extension/recovery-live-fix-background.js');
   const content = readText('extension/recovery-live-fix-content.js');
+  const monitor = readText('extension/monitor-script.js');
   const control = readText('extension/recovery-control-background.js');
 
   assert.doesNotThrow(() => new vm.Script(background));
   assert.doesNotThrow(() => new vm.Script(content));
+  assert.doesNotThrow(() => new vm.Script(monitor));
 
   assert.match(background, /SET_BUILD_AUTOMATION_STATE/);
   assert.match(background, /CHATGPT_RECOVERY_LIVE_REPUBLISH/);
+  assert.match(background, /expected = \{/);
+  assert.match(background, /documentId/);
+  assert.match(background, /promptKey/);
   assert.match(background, /isAutoContinueStatusCode/);
   assert.match(background, /coded-completion-status-observer/);
-  assert.match(content, /\[role="alert"\]/);
-  assert.match(content, /message delivery timed out/);
-  assert.match(content, /connection interrupted/);
+  assert.match(content, /inspectCurrentRequestUi/);
+  assert.doesNotMatch(content, /message delivery timed out/);
+  assert.match(monitor, /SEMANTIC_UI_SELECTOR/);
+  assert.match(monitor, /message delivery timed out/);
+  assert.match(monitor, /current-request-global/);
+  assert.match(monitor, /EXCLUDED_ERROR_CONTEXT_SELECTOR/);
   assert.match(content, /CHATGPT_MONITOR_STATE/);
   assert.match(control, /recovery-live-fix-background\.js/);
 });
