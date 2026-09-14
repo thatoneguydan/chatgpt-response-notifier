@@ -5,7 +5,6 @@ public static class LocalBridgeConstants
     public const int DefaultPort = 38473;
     public const string Path = "/bridge";
     public const string ExtensionOrigin = "chrome-extension://lciedmoiiapbgemklkpoadimhffaaaah";
-    public const string LegacyIdentityMigrationOrigin = "chrome-extension://pbbmmjcakamllfpcglbhcpmbpegapgih";
     public const string StartupRegistrySubKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
     public const string StartupRegistryValueName = "ChatGPTResponseNotifier";
 

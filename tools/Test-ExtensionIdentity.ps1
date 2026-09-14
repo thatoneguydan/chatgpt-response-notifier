@@ -6,10 +6,11 @@ $repoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $manifestPath = Join-Path $repoRoot 'extension\manifest.json'
 $constantsPath = Join-Path $repoRoot 'src\ChatGPTResponseNotifier.Core\LocalBridgeConstants.cs'
 $bridgePath = Join-Path $repoRoot 'src\ChatGPTResponseNotifier.Host\LocalBridgeServer.cs'
+$installerPath = Join-Path $repoRoot 'src\ChatGPTResponseNotifier.Core\BundleInstaller.cs'
 $expectedId = 'lciedmoiiapbgemklkpoadimhffaaaah'
 $expectedOrigin = "chrome-extension://$expectedId"
-$expectedLegacyId = 'pbbmmjcakamllfpcglbhcpmbpegapgih'
-$expectedLegacyOrigin = "chrome-extension://$expectedLegacyId"
+$unsafeLegacyId = 'pbbmmjcakamllfpcglbhcpmbpegapgih'
+$unsafeLegacyOrigin = "chrome-extension://$unsafeLegacyId"
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $key = [string]$manifest.key
@@ -56,32 +57,30 @@ if ($helperOrigin -cne $expectedOrigin) {
     throw "Helper extension Origin mismatch: expected $expectedOrigin, got $helperOrigin."
 }
 
-$legacyOriginMatch = [regex]::Match($constantsText, 'LegacyIdentityMigrationOrigin\s*=\s*"(chrome-extension://[a-p]{32})"')
-if (-not $legacyOriginMatch.Success) { throw 'Could not resolve helper LegacyIdentityMigrationOrigin constant.' }
-$legacyOrigin = $legacyOriginMatch.Groups[1].Value
-if ($legacyOrigin -cne $expectedLegacyOrigin) {
-    throw "Legacy migration Origin mismatch: expected $expectedLegacyOrigin, got $legacyOrigin."
-}
-if ($legacyOrigin -ceq $helperOrigin) { throw 'Legacy migration Origin must remain distinct from the stable extension Origin.' }
-
-# Do not impersonate either browser Origin in validation. Instead enforce the
-# migration branch structurally: it may send the version-bearing ready frame,
-# but must return before normal client registration or command receive logic.
 $bridgeText = Get-Content -LiteralPath $bridgePath -Raw -Encoding UTF8
-$legacyStart = $bridgeText.IndexOf('if (isLegacyIdentityMigrationOrigin)', [StringComparison]::Ordinal)
-if ($legacyStart -lt 0) { throw 'Legacy identity migration branch is missing from LocalBridgeServer.' }
-$stableClientStart = $bridgeText.IndexOf('using var socket = await context.WebSockets.AcceptWebSocketAsync()', $legacyStart, [StringComparison]::Ordinal)
-if ($stableClientStart -lt 0) { throw 'Stable bridge client branch could not be resolved after the legacy migration branch.' }
-$legacyBlock = $bridgeText.Substring($legacyStart, $stableClientStart - $legacyStart)
-foreach ($required in @('migrationSocket', 'SendToSocketAsync(', '_readyMessageFactory()', 'return;')) {
-    if ($legacyBlock.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
-        throw "Legacy identity migration branch is missing required marker: $required"
-    }
-}
-foreach ($forbidden in @('_clients[', 'ReceiveLoopAsync(', '_onMessage(')) {
-    if ($legacyBlock.IndexOf($forbidden, [StringComparison]::Ordinal) -ge 0) {
-        throw "Legacy identity migration branch must not expose normal bridge command handling: $forbidden"
+foreach ($pair in @(
+    @{ Name = 'helper constants'; Text = $constantsText },
+    @{ Name = 'bridge server'; Text = $bridgeText }
+)) {
+    if ($pair.Text.IndexOf($unsafeLegacyId, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+        $pair.Text.IndexOf($unsafeLegacyOrigin, [StringComparison]::OrdinalIgnoreCase) -ge 0 -or
+        $pair.Text.IndexOf('LegacyIdentityMigrationOrigin', [StringComparison]::Ordinal) -ge 0) {
+        throw "Unsafe legacy Chrome-ID migration remains in $($pair.Name)."
     }
 }
 
-Write-Host "Extension identity contract passed: stable=$derivedId legacy-migration=$expectedLegacyId"
+if ($bridgeText.IndexOf('LocalBridgeConstants.ExtensionOrigin', [StringComparison]::Ordinal) -lt 0 -or
+    $bridgeText.IndexOf('StatusCodes.Status403Forbidden', [StringComparison]::Ordinal) -lt 0) {
+    throw 'Bridge server no longer structurally enforces the single stable extension Origin.'
+}
+
+$installerText = Get-Content -LiteralPath $installerPath -Raw -Encoding UTF8
+if ($installerText.IndexOf('UpdateDirectoryPreservingRoot', [StringComparison]::Ordinal) -lt 0 -or
+    $installerText.IndexOf('CopyExtensionDirectoryManifestLast', [StringComparison]::Ordinal) -lt 0) {
+    throw 'Extension installer is missing the root-preserving manifest-last update contract.'
+}
+if ($installerText -match 'Directory\.Move\s*\(\s*destination\s*,') {
+    throw 'Extension installer must never rename/move away the live unpacked extension root.'
+}
+
+Write-Host "Extension identity/update contract passed: stable=$derivedId; legacy-ID migration rejected; live root preserved"

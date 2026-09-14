@@ -88,51 +88,9 @@ internal sealed class LocalBridgeServer : IAsyncDisposable
         }
 
         var origin = context.Request.Headers.Origin.ToString();
-        var isStableExtensionOrigin = string.Equals(
-            origin,
-            LocalBridgeConstants.ExtensionOrigin,
-            StringComparison.OrdinalIgnoreCase);
-        var isLegacyIdentityMigrationOrigin = string.Equals(
-            origin,
-            LocalBridgeConstants.LegacyIdentityMigrationOrigin,
-            StringComparison.OrdinalIgnoreCase);
-        if (!isStableExtensionOrigin && !isLegacyIdentityMigrationOrigin)
+        if (!string.Equals(origin, LocalBridgeConstants.ExtensionOrigin, StringComparison.OrdinalIgnoreCase))
         {
             context.Response.StatusCode = StatusCodes.Status403Forbidden;
-            return;
-        }
-
-        // v0.9.5-v0.9.9 were accidentally shipped with a truncated manifest key,
-        // which gave their already-loaded unpacked runtime a one-off Chrome ID.
-        // Give that exact legacy Origin only the version-bearing ready frame it
-        // needs to invoke chrome.runtime.reload(). Never register it as a normal
-        // client and never enter the command receive loop.
-        if (isLegacyIdentityMigrationOrigin)
-        {
-            using var migrationSocket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
-            try
-            {
-                await SendToSocketAsync(migrationSocket, _readyMessageFactory(), context.RequestAborted).ConfigureAwait(false);
-                await Task.Delay(TimeSpan.FromSeconds(1), context.RequestAborted).ConfigureAwait(false);
-            }
-            catch (OperationCanceledException)
-            {
-                // A successful extension reload normally cancels the old socket first.
-            }
-            finally
-            {
-                if (migrationSocket.State is WebSocketState.Open or WebSocketState.CloseReceived)
-                {
-                    try
-                    {
-                        await migrationSocket.CloseAsync(
-                            WebSocketCloseStatus.NormalClosure,
-                            "legacy identity migration",
-                            CancellationToken.None).ConfigureAwait(false);
-                    }
-                    catch { }
-                }
-            }
             return;
         }
 
