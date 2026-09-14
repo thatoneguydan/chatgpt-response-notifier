@@ -120,7 +120,10 @@ internal sealed class RuntimeEvidencePublisher
         var extensionConnectionLive = bridgeFresh && identityFresh;
         var payload = new
         {
-            schemaVersion = 2,
+            // Keep the envelope at schema v1 for the trusted Glass deployment
+            // contract. The explicit v2 capability below gates the new freshness
+            // semantics, so legacy schema-v1 evidence cannot be mistaken for live.
+            schemaVersion = 1,
             observedAtUtc = now,
             installedVersion = installed.version,
             sourceCommit = installed.sourceCommit,
