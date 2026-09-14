@@ -198,7 +198,9 @@ jobs:
             if ($evidence.installedManifestVersion -ne $version) { throw "Bounded runtime evidence manifest mismatch: $($evidence.installedManifestVersion)" }
             if ($evidence.observationCapability -ne 'extension-bridge-runtime-self-report-v2') { throw 'Bounded runtime evidence freshness capability is missing.' }
             $evidenceRaw = Get-Content -LiteralPath $evidencePath -Raw -Encoding UTF8
-            foreach ($forbidden in @('responseBody','responseText','sessionTitle','promptText','conversationUrl','commandLine','"error"','"reason"')) {
+            # `reason` is a bounded/sanitized diagnostic category used by the
+            # click-route evidence. Raw user/chat content fields remain forbidden.
+            foreach ($forbidden in @('responseBody','responseText','sessionTitle','promptText','conversationUrl','commandLine','"error"')) {
               if ($evidenceRaw -match [regex]::Escape($forbidden)) { throw "Bounded runtime evidence contains forbidden marker: $forbidden" }
             }
           }
