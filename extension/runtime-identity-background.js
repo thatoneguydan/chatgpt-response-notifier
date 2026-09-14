@@ -8,21 +8,26 @@
   try { extensionVersion = String(chrome.runtime.getManifest().version || ''); } catch {}
   try { runtimeId = crypto.randomUUID(); } catch { runtimeId = `${Date.now()}-${Math.random()}`; }
 
-  const diagnostic = {
-    source: 'extension-runtime',
-    status: 'worker-connected',
-    observedAt: new Date().toISOString(),
-    extensionVersion,
-    correlationId: runtimeId
-  };
+  function publish(status = 'worker-alive') {
+    const diagnostic = {
+      source: 'extension-runtime',
+      status: String(status || 'worker-alive'),
+      observedAt: new Date().toISOString(),
+      extensionVersion,
+      correlationId: runtimeId
+    };
+    try {
+      if (typeof sendNative === 'function') return sendNative({ type: 'diagnostics.event', diagnostic });
+    } catch {}
+    return false;
+  }
 
-  try {
-    if (typeof sendNative === 'function') sendNative({ type: 'diagnostics.event', diagnostic });
-  } catch {}
-
-  globalThis.__chatgptNotifierRuntimeIdentity = Object.freeze({
-    version: 1,
+  const runtime = Object.freeze({
+    version: 2,
     extensionVersion,
-    runtimeId
+    runtimeId,
+    publish
   });
+  globalThis.__chatgptNotifierRuntimeIdentity = runtime;
+  publish('worker-connected');
 })();
