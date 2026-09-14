@@ -71,10 +71,15 @@ function stopKeepAlive() {
   }
 }
 
+function publishRuntimeIdentity(status) {
+  try { globalThis.__chatgptNotifierRuntimeIdentity?.publish?.(status); } catch {}
+}
+
 function startKeepAlive() {
   stopKeepAlive();
   keepAliveTimer = setInterval(() => {
     if (!bridgeSocket || bridgeSocket.readyState !== WebSocket.OPEN) return;
+    publishRuntimeIdentity('worker-alive');
     try { bridgeSocket.send(JSON.stringify({ type: 'ping' })); } catch {}
   }, 20000);
 }
@@ -103,6 +108,7 @@ function connectNativeHost() {
       reconnectDelayMs = 750;
       startKeepAlive();
       flushNativeQueue();
+      publishRuntimeIdentity('worker-connected');
       flushNotificationOutbox().catch((error) => console.warn('Durable notification replay failed', error));
     };
 
@@ -246,6 +252,26 @@ function sleep(delayMs) {
   return new Promise((resolve) => setTimeout(resolve, Math.max(0, delayMs)));
 }
 
+function suffix(value) {
+  const text = String(value || '');
+  return text ? text.slice(-8) : '';
+}
+
+function emitClickDiagnostic(status, context = {}) {
+  const diagnostic = {
+    source: 'toast-click',
+    status: String(status || ''),
+    observedAt: new Date().toISOString(),
+    extensionVersion: String(chrome.runtime.getManifest().version || ''),
+    correlationId: String(context.correlationId || ''),
+    conversationSuffix: suffix(context.conversationId),
+    notificationSuffix: suffix(context.notificationId),
+    reason: String(context.reason || '')
+  };
+  if (Number.isInteger(context.tabId)) diagnostic.tabId = context.tabId;
+  sendNative({ type: 'diagnostics.event', diagnostic });
+}
+
 async function currentConversationForTab(tabId) {
   try {
     const tab = await chrome.tabs.get(tabId);
@@ -266,10 +292,6 @@ async function resolveConversationIdentity(initialUrl, tabId) {
   return null;
 }
 
-function finiteWindowCoordinate(value) {
-  return Number.isFinite(value) ? Math.round(value) : null;
-}
-
 async function foregroundChromeWindow(windowId) {
   if (typeof windowId !== 'number') return false;
   try {
@@ -282,44 +304,48 @@ async function foregroundChromeWindow(windowId) {
   }
 }
 
-async function requestNativeChromeForeground(tabId, windowId) {
-  if (typeof tabId !== 'number' || typeof windowId !== 'number') return false;
+async function focusOrOpenConversation(conversationId, conversationUrl, clickContext = {}) {
   try {
-    await sleep(50);
-    const [tabInfo, windowInfo] = await Promise.all([chrome.tabs.get(tabId), chrome.windows.get(windowId)]);
-    const response = await sendNativeRequest({
-      type: 'window.foreground',
-      windowTitle: String(tabInfo?.title || ''),
-      windowLeft: finiteWindowCoordinate(windowInfo?.left),
-      windowTop: finiteWindowCoordinate(windowInfo?.top),
-      windowWidth: finiteWindowCoordinate(windowInfo?.width),
-      windowHeight: finiteWindowCoordinate(windowInfo?.height)
-    }, ['window.foregroundResult'], 1500);
-    return response?.success === true;
+    const tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] });
+    const existing = tabs.find((tab) => conversationFromUrl(tab.url)?.id === conversationId);
+    if (existing?.id !== undefined) {
+      emitClickDiagnostic('selected-existing-tab', { ...clickContext, conversationId, tabId: existing.id });
+      await chrome.tabs.update(existing.id, { active: true });
+      emitClickDiagnostic('chrome-tab-activated', { ...clickContext, conversationId, tabId: existing.id });
+      if (typeof existing.windowId === 'number') {
+        const focused = await foregroundChromeWindow(existing.windowId);
+        emitClickDiagnostic(focused ? 'chrome-window-focused' : 'chrome-window-focus-failed', {
+          ...clickContext,
+          conversationId,
+          tabId: existing.id,
+          reason: focused ? '' : 'chrome-api-focus-failed'
+        });
+      }
+      sendNative({ type: 'toast.dismissConversation', conversationId });
+      emitClickDiagnostic('click-navigation-complete', { ...clickContext, conversationId, tabId: existing.id });
+      return true;
+    }
+
+    emitClickDiagnostic('selected-new-tab', { ...clickContext, conversationId });
+    const created = await chrome.tabs.create({ url: conversationUrl, active: true });
+    const createdTabId = Number.isInteger(created?.id) ? created.id : null;
+    emitClickDiagnostic('chrome-tab-created', { ...clickContext, conversationId, tabId: createdTabId });
+    if (typeof created?.windowId === 'number') {
+      const focused = await foregroundChromeWindow(created.windowId);
+      emitClickDiagnostic(focused ? 'chrome-window-focused' : 'chrome-window-focus-failed', {
+        ...clickContext,
+        conversationId,
+        tabId: createdTabId,
+        reason: focused ? '' : 'chrome-api-focus-failed'
+      });
+    }
+    sendNative({ type: 'toast.dismissConversation', conversationId });
+    emitClickDiagnostic('click-navigation-complete', { ...clickContext, conversationId, tabId: createdTabId });
+    return true;
   } catch {
+    emitClickDiagnostic('click-navigation-error', { ...clickContext, conversationId, reason: 'chrome-api-navigation-failed' });
     return false;
   }
-}
-
-async function focusOrOpenConversation(conversationId, conversationUrl) {
-  const tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] });
-  const existing = tabs.find((tab) => conversationFromUrl(tab.url)?.id === conversationId);
-  if (existing?.id !== undefined) {
-    await chrome.tabs.update(existing.id, { active: true });
-    if (typeof existing.windowId === 'number') {
-      const nativeFocused = await requestNativeChromeForeground(existing.id, existing.windowId);
-      if (!nativeFocused) await foregroundChromeWindow(existing.windowId);
-    }
-  } else {
-    const created = await chrome.tabs.create({ url: conversationUrl, active: true });
-    if (typeof created?.id === 'number' && typeof created?.windowId === 'number') {
-      const nativeFocused = await requestNativeChromeForeground(created.id, created.windowId);
-      if (!nativeFocused) await foregroundChromeWindow(created.windowId);
-    } else if (typeof created?.windowId === 'number') {
-      await foregroundChromeWindow(created.windowId);
-    }
-  }
-  sendNative({ type: 'toast.dismissConversation', conversationId });
 }
 
 async function injectScriptsIntoExistingChatgptTabs() {
@@ -331,7 +357,7 @@ async function injectScriptsIntoExistingChatgptTabs() {
     try {
       await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        files: ['attachment-script.js', 'content-script.js', 'persistence-script.js', 'status-code.js', 'status-policy.js', 'status-script.js']
+        files: ['attachment-script.js', 'content-script.js', 'persistence-script.js', 'status-code.js', 'status-policy.js', 'monitor-script.js', 'status-script.js']
       });
     } catch {}
   }
@@ -691,8 +717,11 @@ async function handleNativeMessage(message) {
   if (message.type === 'toast.clicked') {
     const conversationId = String(message.conversationId || '');
     const conversationUrl = String(message.conversationUrl || '');
+    const notificationId = String(message.notificationId || '');
+    const correlationId = String(message.correlationId || crypto.randomUUID());
     if (!conversationId || !conversationUrl) return;
-    await focusOrOpenConversation(conversationId, conversationUrl);
+    emitClickDiagnostic('worker-click-received', { conversationId, notificationId, correlationId });
+    await focusOrOpenConversation(conversationId, conversationUrl, { notificationId, correlationId });
   }
 }
 
