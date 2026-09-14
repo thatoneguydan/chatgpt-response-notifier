@@ -3,7 +3,7 @@
 (() => {
   if (globalThis.__chatgptNotifierRecoveryLiveFix) return;
 
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   const CONTENT_SCRIPT = 'recovery-live-fix-content.js';
   const INITIAL_CODED_NOTIFICATION_REASONS = new Set(['coded-completion', 'coded-completion-status-observer']);
   const previousSendMessage = chrome.tabs.sendMessage.bind(chrome.tabs);
@@ -20,15 +20,19 @@
     } catch { return false; }
     try {
       const ping = await previousSendMessage(tabId, { type: 'CHATGPT_RECOVERY_LIVE_PING' });
-      return ping?.ok === true;
+      return ping?.ok === true && Number(ping.runtimeVersion || 0) >= RUNTIME_VERSION;
     } catch { return false; }
   }
 
-  async function inspectExplicitInterruption(tabId) {
+  async function inspectExplicitInterruption(tabId, expected = {}) {
     if (!(await ensureContentRuntime(tabId))) return null;
     try {
-      const result = await previousSendMessage(tabId, { type: 'CHATGPT_RECOVERY_LIVE_INSPECT' });
-      return result?.ok === true ? result : null;
+      const result = await previousSendMessage(tabId, { type: 'CHATGPT_RECOVERY_LIVE_INSPECT', expected });
+      if (result?.ok !== true || result.applicationStateIdentityMatched === false) return null;
+      if (expected.documentId && String(result.documentId || '') !== String(expected.documentId)) return null;
+      if (expected.conversationId && String(result.conversationId || '') !== String(expected.conversationId)) return null;
+      if (expected.promptKey && String(result.promptKey || '') !== String(expected.promptKey)) return null;
+      return result;
     } catch { return null; }
   }
 
@@ -42,18 +46,25 @@
 
   chrome.tabs.sendMessage = async function recoveryAwareSendMessage(tabId, message, ...rest) {
     const result = await previousSendMessage(tabId, message, ...rest);
-    if (message?.type !== 'CHATGPT_MONITOR_QUERY') return result;
-    const interruption = await inspectExplicitInterruption(tabId);
-    if (interruption?.explicitInterruption !== true) return result;
-    const patch = {
-      explicitInterruption: true,
-      interruptionKind: String(interruption.interruptionKind || 'explicit-interruption')
+    if (message?.type !== 'CHATGPT_MONITOR_QUERY' || !result?.snapshot || typeof result.snapshot !== 'object') return result;
+    const base = result.snapshot;
+    const expected = {
+      conversationId: String(base.conversationId || ''),
+      documentId: String(base.documentId || ''),
+      promptKey: String(base.promptKey || '')
     };
-    if (result?.snapshot && typeof result.snapshot === 'object') {
-      const snapshot = { ...result.snapshot, ...patch };
-      return { ...result, ...patch, snapshot };
-    }
-    return result && typeof result === 'object' ? { ...result, ...patch } : result;
+    if (!expected.conversationId || !expected.documentId || !expected.promptKey) return result;
+    const applicationState = await inspectExplicitInterruption(tabId, expected);
+    if (!applicationState) return result;
+    const patch = {
+      explicitInterruption: applicationState.explicitInterruption === true,
+      interruptionKind: String(applicationState.interruptionKind || ''),
+      interruptionAttribution: String(applicationState.interruptionAttribution || ''),
+      rateLimited: applicationState.rateLimited === true,
+      authRequired: applicationState.authRequired === true,
+      approvalRequired: applicationState.approvalRequired === true
+    };
+    return { ...result, ...patch, snapshot: { ...base, ...patch } };
   };
 
   async function activeChatTabId() {
