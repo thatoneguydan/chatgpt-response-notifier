@@ -1,10 +1,10 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 4;
+  const RUNTIME_VERSION = 5;
   if (globalThis.ChatGPTNotifierContinuationPolicy?.runtimeVersion === RUNTIME_VERSION) return;
 
-  const MONITOR_POLICY_VERSION = 3;
+  const MONITOR_POLICY_VERSION = 4;
   const MISSING_FOOTER_GRACE_MS = 30_000;
   const SILENT_IDLE_FIRST_MS = 90_000;
   const SILENT_IDLE_CONFIRM_MS = 30_000;
@@ -109,7 +109,7 @@
       if (String(observation.requestPhase || '') === 'started') {
         return { state: 'waiting', reason: 'awaiting-request-settlement', automaticActionAllowed: false };
       }
-      return { state: 'attention', reason: 'status-missing', automaticActionAllowed: false, formatRepairCandidate: true };
+      return { state: 'waiting', reason: 'status-missing-passive', automaticActionAllowed: false, formatRepairCandidate: false };
     }
     if (!observation.assistantKey && Number(observation.silentIdleConfirmations || 0) >= 2) {
       return { state: 'attention', reason: 'silent-stop-confirmed', automaticActionAllowed: false, recoveryCandidate: true };
@@ -136,17 +136,15 @@
   function recoveryActionDecision(kind, budgetValue = {}, options = {}) {
     const budget = normalizeBudget(budgetValue);
     const now = Number(options.now || Date.now());
+    if (kind === 'format-repair') return { allowed: false, reason: 'format-repair-retired', budget };
     if (budget.uncertainAction) return { allowed: false, reason: 'prior-action-uncertain', budget };
     if (budget.breakerOpen) return { allowed: false, reason: 'profile-breaker-open', budget };
     if (budget.runGenerationActions >= RUN_GENERATION_ACTION_CAP) return { allowed: false, reason: 'run-action-cap-reached', budget };
     if (now < budget.nextProfileActionAt) return { allowed: false, reason: 'profile-action-spacing', budget };
     if (kind === 'reload' && budget.reloads >= INCIDENT_RELOAD_CAP) return { allowed: false, reason: 'incident-reload-cap-reached', budget };
     if (kind === 'continue' && budget.continuations >= 1) return { allowed: false, reason: 'incident-continuation-cap-reached', budget };
-    if (kind === 'format-repair' && budget.formatRepairs >= 1) return { allowed: false, reason: 'incident-format-repair-cap-reached', budget };
-    if ((kind === 'continue' || kind === 'format-repair') && budget.automaticMessages >= 2) {
-      return { allowed: false, reason: 'incident-message-cap-reached', budget };
-    }
-    if (!['reload', 'continue', 'format-repair'].includes(kind)) return { allowed: false, reason: 'unknown-recovery-action', budget };
+    if (kind === 'continue' && budget.automaticMessages >= 2) return { allowed: false, reason: 'incident-message-cap-reached', budget };
+    if (!['reload', 'continue'].includes(kind)) return { allowed: false, reason: 'unknown-recovery-action', budget };
     return { allowed: true, reason: 'allowed', budget };
   }
 
@@ -158,11 +156,6 @@
     if (kind === 'reload') next.reloads += 1;
     if (kind === 'continue') {
       next.continuations += 1;
-      next.automaticMessages += 1;
-      next.runGenerationActions += 1;
-    }
-    if (kind === 'format-repair') {
-      next.formatRepairs += 1;
       next.automaticMessages += 1;
       next.runGenerationActions += 1;
     }
