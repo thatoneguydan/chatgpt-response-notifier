@@ -147,6 +147,7 @@ jobs:
           $extensionRoot = Join-Path $testInstallRoot 'extension'
           $rootSentinel = Join-Path $extensionRoot '.root-preservation-sentinel'
           $sentinelValue = 'registered-unpacked-extension-root-must-survive'
+          $runnerSetupLog = Join-Path $env:LOCALAPPDATA 'ChatGPTResponseNotifier\Data\setup.log'
 
           $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
           $listener.Start()
@@ -160,7 +161,14 @@ jobs:
               $setupProcess = Start-Process -FilePath $candidateSetup -ArgumentList '--silent','--skip-startup' -PassThru
               Wait-Process -Id $setupProcess.Id -Timeout 45
               $setupProcess.Refresh()
-              if ($setupProcess.ExitCode -ne 0) { throw "Setup.exe isolated acceptance attempt $attempt failed with exit code $($setupProcess.ExitCode)." }
+              if ($setupProcess.ExitCode -ne 0) {
+                if (Test-Path -LiteralPath $runnerSetupLog -PathType Leaf) {
+                  Write-Host "--- isolated Setup.exe diagnostic tail ---"
+                  Get-Content -LiteralPath $runnerSetupLog -Tail 80 -Encoding UTF8
+                  Write-Host "--- end isolated Setup.exe diagnostic tail ---"
+                }
+                throw "Setup.exe isolated acceptance attempt $attempt failed with exit code $($setupProcess.ExitCode)."
+              }
 
               if ($attempt -eq 1) {
                 if (-not (Test-Path -LiteralPath $extensionRoot -PathType Container)) { throw 'Extension root is missing after first isolated install.' }
