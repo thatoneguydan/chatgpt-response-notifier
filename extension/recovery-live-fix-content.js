@@ -1,52 +1,56 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   try { globalThis.__chatgptNotifierRecoveryLiveContent?.dispose?.(); } catch {}
 
-  const abortController = new AbortController();
   let observer = null;
   let publishTimer = null;
   let disposed = false;
 
-  const SEMANTIC_UI_SELECTOR = [
-    '[role="alert"]',
-    '[aria-live="assertive"]',
-    '[data-testid="toast"]',
-    '[data-testid*="error" i]',
-    '[data-testid*="warning" i]',
-    '[data-testid*="retry" i]',
-    'button[aria-label*="retry" i]'
-  ].join(', ');
-
-  const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
-
-  function detectExplicitInterruption() {
-    let nodes = [];
-    try { nodes = Array.from(document.querySelectorAll(SEMANTIC_UI_SELECTOR)).slice(-24); } catch {}
-    for (let index = nodes.length - 1; index >= 0; index -= 1) {
-      const text = normalize(nodes[index]?.innerText || nodes[index]?.textContent || '');
-      if (!text) continue;
-      if (/message delivery timed out|timed out|request timeout/.test(text)) return { explicitInterruption: true, interruptionKind: 'timed-out' };
-      if (/connection interrupted|network error|connection lost/.test(text)) return { explicitInterruption: true, interruptionKind: 'connection-interrupted' };
-      if (/systems? (?:are )?taking longer|taking longer than expected/.test(text)) return { explicitInterruption: true, interruptionKind: 'systems-taking-longer' };
-      if (/failed to (?:generate|respond)|something went wrong|there was an error/.test(text)) return { explicitInterruption: true, interruptionKind: 'generation-error' };
+  function detectExplicitInterruption(expected = {}) {
+    try {
+      const monitor = globalThis.__chatgptNotifierMonitorRuntime;
+      if (typeof monitor?.inspectCurrentRequestUi !== 'function') {
+        return { explicitInterruption: false, interruptionKind: '', applicationStateIdentityMatched: false, applicationStateReason: 'monitor-classifier-unavailable' };
+      }
+      const result = monitor.inspectCurrentRequestUi(expected) || {};
+      return {
+        explicitInterruption: result.explicitInterruption === true,
+        interruptionKind: String(result.interruptionKind || ''),
+        interruptionAttribution: String(result.interruptionAttribution || ''),
+        rateLimited: result.rateLimited === true,
+        authRequired: result.authRequired === true,
+        approvalRequired: result.approvalRequired === true,
+        conversationId: String(result.conversationId || ''),
+        documentId: String(result.documentId || ''),
+        promptKey: String(result.promptKey || ''),
+        applicationStateIdentityMatched: result.applicationStateIdentityMatched !== false,
+        applicationStateReason: String(result.applicationStateReason || '')
+      };
+    } catch {
+      return { explicitInterruption: false, interruptionKind: '', applicationStateIdentityMatched: false, applicationStateReason: 'monitor-classifier-failed' };
     }
-    return { explicitInterruption: false, interruptionKind: '' };
   }
 
-  function augmentedSnapshot() {
+  function augmentedSnapshot(expected = {}) {
     let base = null;
     try { base = globalThis.__chatgptNotifierMonitorRuntime?.snapshot?.() || null; } catch {}
     if (!base?.conversationId || !base?.promptKey) return base;
-    const interruption = detectExplicitInterruption();
-    return interruption.explicitInterruption ? { ...base, ...interruption } : base;
+    const boundExpected = {
+      conversationId: String(expected.conversationId || base.conversationId || ''),
+      documentId: String(expected.documentId || base.documentId || ''),
+      promptKey: String(expected.promptKey || base.promptKey || '')
+    };
+    const applicationState = detectExplicitInterruption(boundExpected);
+    if (applicationState.applicationStateIdentityMatched === false) return base;
+    return { ...base, ...applicationState };
   }
 
   async function publishExplicitState() {
     if (disposed) return false;
     const snapshot = augmentedSnapshot();
-    if (!snapshot?.explicitInterruption) return false;
+    if (!snapshot?.explicitInterruption && !snapshot?.rateLimited && !snapshot?.authRequired && !snapshot?.approvalRequired) return false;
     try {
       await chrome.runtime.sendMessage({ type: 'CHATGPT_MONITOR_STATE', snapshot });
       return true;
@@ -67,7 +71,8 @@
       return false;
     }
     if (message?.type === 'CHATGPT_RECOVERY_LIVE_INSPECT') {
-      sendResponse?.({ ok: true, ...detectExplicitInterruption() });
+      const expected = message?.expected && typeof message.expected === 'object' ? message.expected : {};
+      sendResponse?.({ ok: true, ...detectExplicitInterruption(expected) });
       return false;
     }
     if (message?.type === 'CHATGPT_RECOVERY_LIVE_REPUBLISH') {
@@ -82,7 +87,7 @@
   const root = document.documentElement || document.body;
   if (root && typeof MutationObserver === 'function') {
     observer = new MutationObserver(schedulePublish);
-    observer.observe(root, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['role', 'aria-live', 'aria-label', 'data-testid'] });
+    observer.observe(root, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['role', 'aria-live', 'aria-label', 'aria-hidden', 'hidden', 'data-testid', 'class', 'style'] });
   }
   setTimeout(() => publishExplicitState().catch(() => {}), 0);
 
@@ -93,7 +98,6 @@
     publishExplicitState,
     dispose() {
       disposed = true;
-      try { abortController.abort(); } catch {}
       try { chrome.runtime.onMessage.removeListener(messageListener); } catch {}
       try { observer?.disconnect(); } catch {}
       if (publishTimer !== null) clearTimeout(publishTimer);
