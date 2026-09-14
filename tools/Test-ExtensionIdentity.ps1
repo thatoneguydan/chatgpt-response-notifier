@@ -5,8 +5,11 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 $manifestPath = Join-Path $repoRoot 'extension\manifest.json'
 $constantsPath = Join-Path $repoRoot 'src\ChatGPTResponseNotifier.Core\LocalBridgeConstants.cs'
+$bridgePath = Join-Path $repoRoot 'src\ChatGPTResponseNotifier.Host\LocalBridgeServer.cs'
 $expectedId = 'lciedmoiiapbgemklkpoadimhffaaaah'
 $expectedOrigin = "chrome-extension://$expectedId"
+$expectedLegacyId = 'pbbmmjcakamllfpcglbhcpmbpegapgih'
+$expectedLegacyOrigin = "chrome-extension://$expectedLegacyId"
 
 $manifest = Get-Content -LiteralPath $manifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
 $key = [string]$manifest.key
@@ -53,4 +56,32 @@ if ($helperOrigin -cne $expectedOrigin) {
     throw "Helper extension Origin mismatch: expected $expectedOrigin, got $helperOrigin."
 }
 
-Write-Host "Extension identity contract passed: $derivedId"
+$legacyOriginMatch = [regex]::Match($constantsText, 'LegacyIdentityMigrationOrigin\s*=\s*"(chrome-extension://[a-p]{32})"')
+if (-not $legacyOriginMatch.Success) { throw 'Could not resolve helper LegacyIdentityMigrationOrigin constant.' }
+$legacyOrigin = $legacyOriginMatch.Groups[1].Value
+if ($legacyOrigin -cne $expectedLegacyOrigin) {
+    throw "Legacy migration Origin mismatch: expected $expectedLegacyOrigin, got $legacyOrigin."
+}
+if ($legacyOrigin -ceq $helperOrigin) { throw 'Legacy migration Origin must remain distinct from the stable extension Origin.' }
+
+# Do not impersonate either browser Origin in validation. Instead enforce the
+# migration branch structurally: it may send the version-bearing ready frame,
+# but must return before normal client registration or command receive logic.
+$bridgeText = Get-Content -LiteralPath $bridgePath -Raw -Encoding UTF8
+$legacyStart = $bridgeText.IndexOf('if (isLegacyIdentityMigrationOrigin)', [StringComparison]::Ordinal)
+if ($legacyStart -lt 0) { throw 'Legacy identity migration branch is missing from LocalBridgeServer.' }
+$stableClientStart = $bridgeText.IndexOf('using var socket = await context.WebSockets.AcceptWebSocketAsync()', $legacyStart, [StringComparison]::Ordinal)
+if ($stableClientStart -lt 0) { throw 'Stable bridge client branch could not be resolved after the legacy migration branch.' }
+$legacyBlock = $bridgeText.Substring($legacyStart, $stableClientStart - $legacyStart)
+foreach ($required in @('migrationSocket', 'SendToSocketAsync(', '_readyMessageFactory()', 'return;')) {
+    if ($legacyBlock.IndexOf($required, [StringComparison]::Ordinal) -lt 0) {
+        throw "Legacy identity migration branch is missing required marker: $required"
+    }
+}
+foreach ($forbidden in @('_clients[', 'ReceiveLoopAsync(', '_onMessage(')) {
+    if ($legacyBlock.IndexOf($forbidden, [StringComparison]::Ordinal) -ge 0) {
+        throw "Legacy identity migration branch must not expose normal bridge command handling: $forbidden"
+    }
+}
+
+Write-Host "Extension identity contract passed: stable=$derivedId legacy-migration=$expectedLegacyId"
