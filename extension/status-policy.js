@@ -1,10 +1,10 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 3;
+  const RUNTIME_VERSION = 4;
   if (globalThis.ChatGPTNotifierContinuationPolicy?.runtimeVersion === RUNTIME_VERSION) return;
 
-  const MONITOR_POLICY_VERSION = 2;
+  const MONITOR_POLICY_VERSION = 3;
   const MISSING_FOOTER_GRACE_MS = 30_000;
   const SILENT_IDLE_FIRST_MS = 90_000;
   const SILENT_IDLE_CONFIRM_MS = 30_000;
@@ -12,11 +12,20 @@
   const RUN_GENERATION_ACTION_CAP = 12;
   const PROFILE_ACTION_SPACING_MS = 30_000;
   const INCIDENT_RELOAD_CAP = 3;
+  const AUTO_CONTINUE_STATUS_CODES = Object.freeze(['INCOMPLETE_LIMIT', 'INCOMPLETE_TOOL_FAILURE']);
+  const AUTO_CONTINUE_STATUS_CODE_SET = new Set(AUTO_CONTINUE_STATUS_CODES);
+  const EXPLICIT_INTERRUPTION_STICKY_MS = 5 * 60_000;
+  const explicitInterruptionMemory = new Map();
+
+  function isAutoContinueStatusCode(value) {
+    return AUTO_CONTINUE_STATUS_CODE_SET.has(String(value || ''));
+  }
 
   function identityMatches(current, expected) {
     return Boolean(
       current && expected &&
-      current.statusCode === 'INCOMPLETE_LIMIT' &&
+      isAutoContinueStatusCode(current.statusCode) &&
+      (!expected.statusCode || current.statusCode === expected.statusCode) &&
       current.conversationId === expected.conversationId &&
       current.documentId === expected.documentId &&
       current.promptKey === expected.promptKey &&
@@ -47,7 +56,41 @@
     return { accepted: true, reason: 'continuation-confirmed' };
   }
 
-  function classifyObservation(observation = {}) {
+  function observationIdentityKey(observation = {}) {
+    const conversationId = String(observation.conversationId || '');
+    const promptKey = String(observation.promptKey || '');
+    return conversationId && promptKey ? `${conversationId}|${promptKey}` : '';
+  }
+
+  function withStickyExplicitInterruption(observation = {}) {
+    const key = observationIdentityKey(observation);
+    if (!key) return observation;
+    const now = Date.now();
+    const validStatus = Boolean(observation.statusCode && globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(observation.statusCode));
+    if (validStatus || observation.stopGenerating === true || observation.toolActivity === true || observation.manualStopped === true) {
+      explicitInterruptionMemory.delete(key);
+      return observation;
+    }
+    if (observation.explicitInterruption === true) {
+      explicitInterruptionMemory.set(key, {
+        interruptionKind: String(observation.interruptionKind || 'explicit-interruption'),
+        documentId: String(observation.documentId || ''),
+        observedAt: now
+      });
+      return observation;
+    }
+    const prior = explicitInterruptionMemory.get(key);
+    if (!prior) return observation;
+    if (now - Number(prior.observedAt || 0) > EXPLICIT_INTERRUPTION_STICKY_MS ||
+        (prior.documentId && observation.documentId && String(observation.documentId) !== prior.documentId)) {
+      explicitInterruptionMemory.delete(key);
+      return observation;
+    }
+    return { ...observation, explicitInterruption: true, interruptionKind: prior.interruptionKind };
+  }
+
+  function classifyObservation(observationValue = {}) {
+    const observation = withStickyExplicitInterruption(observationValue);
     const validStatus = Boolean(observation.statusCode && globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(observation.statusCode));
     if (observation.observable === false) return { state: 'attention', reason: 'page-unobservable', automaticActionAllowed: false };
     if (observation.online === false) return { state: 'waiting', reason: 'offline', automaticActionAllowed: false };
@@ -60,9 +103,12 @@
     if (observation.stopGenerating === true || observation.toolActivity === true) {
       return { state: 'working', reason: observation.toolActivity ? 'tool-activity' : 'generation-active', automaticActionAllowed: false };
     }
-    if (validStatus) return { state: 'coded-terminal', reason: String(observation.statusCode), automaticActionAllowed: observation.statusCode === 'INCOMPLETE_LIMIT' };
+    if (validStatus) return { state: 'coded-terminal', reason: String(observation.statusCode), automaticActionAllowed: isAutoContinueStatusCode(observation.statusCode) };
     if (observation.explicitInterruption === true) return { state: 'attention', reason: String(observation.interruptionKind || 'explicit-interruption'), automaticActionAllowed: false, recoveryCandidate: true };
     if (observation.assistantKey && observation.stableTerminal === true) {
+      if (String(observation.requestPhase || '') === 'started') {
+        return { state: 'waiting', reason: 'awaiting-request-settlement', automaticActionAllowed: false };
+      }
       return { state: 'attention', reason: 'status-missing', automaticActionAllowed: false, formatRepairCandidate: true };
     }
     if (!observation.assistantKey && Number(observation.silentIdleConfirmations || 0) >= 2) {
@@ -126,6 +172,9 @@
   globalThis.ChatGPTNotifierContinuationPolicy = Object.freeze({
     runtimeVersion: RUNTIME_VERSION,
     monitorPolicyVersion: MONITOR_POLICY_VERSION,
+    autoContinueStatusCodes: AUTO_CONTINUE_STATUS_CODES,
+    isAutoContinueStatusCode,
+    withStickyExplicitInterruption,
     thresholds: Object.freeze({
       missingFooterGraceMs: MISSING_FOOTER_GRACE_MS,
       silentIdleFirstMs: SILENT_IDLE_FIRST_MS,

@@ -9,6 +9,11 @@
   const LATER_INCIDENT_BACKOFF_MS = 120_000;
   const PROFILE_ACTION_SPACING_MS = 30_000;
   const RUN_GENERATION_ACTION_CAP = 12;
+  const EXPLICIT_RELOAD_REASONS = new Set([
+    'connection-interrupted', 'request-error', 'request-rejected', 'timed-out', 'timeout',
+    'connection-lost', 'systems-taking-longer', 'generation-error'
+  ]);
+  const POST_RELOAD_EXPLICIT_REASON = 'post-reload-explicit-interruption';
 
   const number = (value) => Math.max(0, Number(value || 0));
 
@@ -80,6 +85,11 @@
         ? { kind: '', reason: 'format-repair-spent' }
         : { kind: 'format-repair', reason };
     }
+    if (reason === POST_RELOAD_EXPLICIT_REASON) {
+      return incident.budget.continuations >= 1
+        ? { kind: '', reason: 'continuation-spent' }
+        : { kind: 'continue', reason };
+    }
     if (reason === 'post-reload-silent-stop') {
       if (incident.budget.reloads < reloadCap) return { kind: 'reload', reason };
       return incident.budget.continuations >= 1
@@ -87,11 +97,14 @@
         : { kind: 'continue', reason };
     }
 
-    const reloadEligible = new Set([
-      'silent-stop-confirmed', 'connection-interrupted', 'request-error', 'request-rejected',
-      'timed-out', 'timeout', 'connection-lost'
-    ]);
-    if (reloadEligible.has(reason)) {
+    if (EXPLICIT_RELOAD_REASONS.has(reason)) {
+      if (incident.budget.reloads < 1) return { kind: 'reload', reason };
+      return incident.budget.continuations >= 1
+        ? { kind: '', reason: 'continuation-spent' }
+        : { kind: 'continue', reason: POST_RELOAD_EXPLICIT_REASON };
+    }
+
+    if (reason === 'silent-stop-confirmed') {
       if (incident.budget.reloads < reloadCap) return { kind: 'reload', reason };
       if (!observation.assistantKey && Number(observation.silentIdleConfirmations || 0) >= 2) {
         return incident.budget.continuations >= 1
@@ -222,6 +235,10 @@
     if (observation.statusCode) return { kind: '', state: 'resolved', reason: `coded:${observation.statusCode}` };
     const veto = observationVeto(observation);
     if (veto) return { kind: '', state: 'paused', reason: veto };
+    const classification = globalThis.ChatGPTNotifierContinuationPolicy?.classifyObservation?.(observation) || {};
+    if (EXPLICIT_RELOAD_REASONS.has(String(classification.reason || ''))) {
+      return { kind: 'continue', state: 'scheduled', reason: POST_RELOAD_EXPLICIT_REASON };
+    }
     if (observation.assistantKey && observation.stableTerminal) return { kind: 'format-repair', state: 'scheduled', reason: 'status-missing' };
     if (!observation.assistantKey && Number(observation.silentIdleConfirmations || 0) >= 2) return { kind: 'continue', state: 'scheduled', reason: 'post-reload-silent-stop' };
     if (observation.stopGenerating || observation.toolActivity) return { kind: '', state: 'observing', reason: 'work-resumed-after-reload' };
@@ -230,6 +247,8 @@
 
   globalThis.ChatGPTNotifierRecoveryModel = Object.freeze({
     actionKinds: ACTION_KINDS,
+    explicitReloadReasons: Object.freeze(Array.from(EXPLICIT_RELOAD_REASONS)),
+    postReloadExplicitReason: POST_RELOAD_EXPLICIT_REASON,
     thresholds: Object.freeze({
       firstIncidentBackoffMs: FIRST_INCIDENT_BACKOFF_MS,
       laterIncidentBackoffMs: LATER_INCIDENT_BACKOFF_MS,
