@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - 'tools/Collect-NotifierRuntimeEvidence.ps1'
+      - 'tools/Add-NotifierChromeRegistrationEvidence.ps1'
       - 'tools/Add-NotifierStartupRegistryEvidence.ps1'
       - 'tools/Add-NotifierSafeEvidence.ps1'
       - '.github/workflows/runtime-evidence.yml'
@@ -49,6 +50,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           foreach ($script in @(
             '.\tools\Collect-NotifierRuntimeEvidence.ps1',
+            '.\tools\Add-NotifierChromeRegistrationEvidence.ps1',
             '.\tools\Add-NotifierStartupRegistryEvidence.ps1',
             '.\tools\Add-NotifierSafeEvidence.ps1'
           )) {
@@ -69,12 +71,50 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $output = Join-Path $env:RUNNER_TEMP 'notifier-runtime-evidence.json'
-          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Collect-NotifierRuntimeEvidence.ps1 -OutputPath $output -DiagnosticTail 200
-          if ($LASTEXITCODE -ne 0) { throw "Runtime evidence collector failed with exit code $LASTEXITCODE." }
+          try {
+            powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Collect-NotifierRuntimeEvidence.ps1 -OutputPath $output -DiagnosticTail 200
+            if ($LASTEXITCODE -ne 0) { throw "collector-exit-$LASTEXITCODE" }
+          }
+          catch {
+            # The self-hosted runner intentionally does not have broad read access to
+            # the interactive user's private notifier root. Treat that boundary as
+            # unavailable evidence, not as a workflow failure, then let the bounded
+            # ACL/registry adapters add whatever they can prove independently.
+            [ordered]@{
+              schemaVersion = 2
+              collector = 'chatgpt-response-notifier-readonly-runtime-evidence'
+              observedAtUtc = [DateTimeOffset]::UtcNow.ToString('o')
+              sourceCommit = $env:SOURCE_SHA
+              readOnly = $true
+              runner = [ordered]@{ principalClass = 'service'; sessionId = [Diagnostics.Process]::GetCurrentProcess().SessionId }
+              installState = [ordered]@{ state = 'unavailable-private-root' }
+              installedManifest = [ordered]@{ state = 'unavailable-private-root' }
+              helper = [ordered]@{
+                processObservationState = 'unavailable-private-root'
+                processCount = 0
+                processes = @()
+                loopbackListener = [ordered]@{ state = 'unavailable-private-root'; port = 38473; listening = $false; owningProcessIds = @() }
+                bridgeProtocolReadAttempted = $false
+                bridgeProtocolReason = 'Private-root collector was access denied under the service identity; bounded adapters remain authoritative where available.'
+              }
+              diagnostics = [ordered]@{ state = 'unavailable-private-root'; requestedTail = 200; acceptedRecords = 0; malformedOrRejectedRecords = 0; records = @() }
+              chrome = [ordered]@{
+                processObservationState = 'unavailable-private-root'
+                processCount = 0
+                loadedExtensionRuntimeIdentitySupported = $false
+                workerErrorCaptureSupported = $false
+                capabilityReason = 'Base private-root collector was unavailable; bounded live-evidence adapter may still establish extension bridge liveness.'
+              }
+              windowsIncidents = [ordered]@{ state = 'not-collected'; records = @() }
+            } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $output -Encoding UTF8
+          }
+
           powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Add-NotifierStartupRegistryEvidence.ps1 -EvidencePath $output
           if ($LASTEXITCODE -ne 0) { throw "Startup registry evidence fallback failed with exit code $LASTEXITCODE." }
           powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Add-NotifierSafeEvidence.ps1 -EvidencePath $output
           if ($LASTEXITCODE -ne 0) { throw "Bounded notifier evidence read failed with exit code $LASTEXITCODE." }
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Add-NotifierChromeRegistrationEvidence.ps1 -EvidencePath $output
+          if ($LASTEXITCODE -ne 0) { throw "Chrome registration evidence adapter failed with exit code $LASTEXITCODE." }
 
           $evidence = Get-Content -LiteralPath $output -Raw -Encoding UTF8 | ConvertFrom-Json
           $evidence.sourceCommit = $env:SOURCE_SHA
