@@ -6,6 +6,8 @@
   const AUTO_CONTINUE_TEXT = 'continue until you finish or need something from me';
   // Retired contract tombstone only; this text is never written or sent by this runtime:
   // Classify the existing work result and supply the missing final GitHub status. Do not rerun tools, builds, deployments, writes, or completed actions. Use the actual current end state and end with exactly one valid `[GITHUB_STATUS: CODE]` line.
+  // The retired repair identity also required current.assistantKey === expected.assistantKey
+  // and current.assistantRevision. Continuation intentionally requires no assistant turn instead.
   const READY_WAIT_MS = 5_000;
   const USER_TURN_WAIT_MS = 3_500;
   const ACTIVE_GUARD_MS = 3_000;
