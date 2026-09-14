@@ -91,7 +91,7 @@ catch {
 $runtimeFresh = $false
 try {
     if ($result.state -eq 'read' `
-        -and [int]$result.schemaVersion -ge 2 `
+        -and [int]$result.schemaVersion -ge 1 `
         -and [string]$result.observationCapability -eq 'extension-bridge-runtime-self-report-v2' `
         -and $result.bridgeConnected -eq $true `
         -and $result.extensionConnectionLive -eq $true `
