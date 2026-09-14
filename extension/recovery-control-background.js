@@ -99,9 +99,13 @@
     overview
   });
 
-  // v0.9.13 live-acceptance compatibility: load the narrow recovery repair
-  // after monitor query normalization but before bounded recovery/service-worker
-  // consumers begin handling future browser events.
-  try { if (typeof importScripts === 'function') importScripts('recovery-live-fix-background.js'); }
-  catch (error) { try { console.warn('Recovery live-fix layer failed to load', error); } catch {} }
+  // Compatibility layers load after monitor query normalization but before
+  // bounded recovery/service-worker consumers begin handling future events.
+  try {
+    if (typeof importScripts === 'function') {
+      importScripts('recovery-live-fix-background.js', 'v0914-safety-background.js');
+    }
+  } catch (error) {
+    try { console.warn('Notifier recovery safety layers failed to load', error); } catch {}
+  }
 })();
