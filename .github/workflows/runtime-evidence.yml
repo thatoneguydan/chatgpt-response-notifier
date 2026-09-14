@@ -77,21 +77,11 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Bounded notifier evidence read failed with exit code $LASTEXITCODE." }
 
           $evidence = Get-Content -LiteralPath $output -Raw -Encoding UTF8 | ConvertFrom-Json
-          # Pull-request GITHUB_SHA is the synthetic merge ref. Evidence must name
-          # the exact checked-out application head instead.
           $evidence.sourceCommit = $env:SOURCE_SHA
-          foreach ($record in @($evidence.diagnostics.records)) {
-            $errorProperty = $record.PSObject.Properties['error']
-            if ($null -ne $errorProperty) {
-              $hasError = -not [string]::IsNullOrWhiteSpace([string]$errorProperty.Value)
-              $record.PSObject.Properties.Remove('error')
-              $record | Add-Member -NotePropertyName hasError -NotePropertyValue $hasError -Force
-            }
-          }
-          $evidence | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $output -Encoding UTF8
+          $evidence | ConvertTo-Json -Depth 14 | Set-Content -LiteralPath $output -Encoding UTF8
           $raw = Get-Content -LiteralPath $output -Raw -Encoding UTF8
 
-          if ($evidence.schemaVersion -ne 1 -or $evidence.readOnly -ne $true) {
+          if ($evidence.schemaVersion -ne 2 -or $evidence.readOnly -ne $true) {
             throw 'Runtime evidence schema/read-only marker is invalid.'
           }
           if ([string]$evidence.sourceCommit -ne $env:SOURCE_SHA) {
@@ -106,18 +96,20 @@ jobs:
             throw 'Runtime evidence leaked the interactive profile path.'
           }
 
-          Write-Host ("Evidence summary: install={0}; manifest={1}; helperProcesses={2}; listener={3}; startupRegistration={4}; startupVersion={5}; safeEvidence={6}; safeInstalled={7}; safeLoaded={8}; diagnostics={9}; liveRuntimeIdentity={10}" -f `
+          Write-Host ("Evidence summary: install={0}; manifest={1}; helperProcesses={2}; listener={3}; registration={4}; startupRegistration={5}; safeEvidence={6}; safeInstalled={7}; currentLoaded={8}; historicalLoaded={9}; diagnostics={10}; liveRuntimeIdentity={11}; windowsIncidents={12}" -f `
             $evidence.installState.state,
             $evidence.installedManifest.state,
             $evidence.helper.processCount,
             $evidence.helper.loopbackListener.listening,
+            $evidence.chrome.registration.state,
             $evidence.helper.startupRegistration.state,
-            $evidence.helper.startupRegistration.versionFromCommand,
             $evidence.safeRuntimeEvidence.state,
             $evidence.safeRuntimeEvidence.installedVersion,
-            $evidence.safeRuntimeEvidence.loadedExtensionVersion,
+            $evidence.safeRuntimeEvidence.currentExtensionVersion,
+            $evidence.safeRuntimeEvidence.historicalExtensionVersion,
             $evidence.diagnostics.state,
-            $evidence.chrome.loadedExtensionRuntimeIdentitySupported)
+            $evidence.chrome.loadedExtensionRuntimeIdentitySupported,
+            @($evidence.windowsIncidents.records).Count)
 
       - name: Upload sanitized runtime evidence
         uses: actions/upload-artifact@v4
