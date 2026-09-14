@@ -106,10 +106,13 @@ catch {
     $runtimeFresh = $false
 }
 
+$identitySource = 'not-live-or-not-fresh'
+if ($runtimeFresh) { $identitySource = 'notifier-live-bridge-self-report-v2' }
+
 $evidence = Get-Content -LiteralPath $EvidencePath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
 $evidence | Add-Member -NotePropertyName safeRuntimeEvidence -NotePropertyValue ([pscustomobject]$result) -Force
 $evidence.chrome.loadedExtensionRuntimeIdentitySupported = $runtimeFresh
-$evidence.chrome | Add-Member -NotePropertyName loadedRuntimeIdentitySource -NotePropertyValue ($runtimeFresh ? 'notifier-live-bridge-self-report-v2' : 'not-live-or-not-fresh') -Force
+$evidence.chrome | Add-Member -NotePropertyName loadedRuntimeIdentitySource -NotePropertyValue $identitySource -Force
 $evidence.chrome | Add-Member -NotePropertyName historicalExtensionVersion -NotePropertyValue $result.historicalExtensionVersion -Force
 $evidence.chrome | Add-Member -NotePropertyName currentExtensionVersion -NotePropertyValue $result.currentExtensionVersion -Force
 $evidence.chrome | Add-Member -NotePropertyName extensionConnectionLive -NotePropertyValue $runtimeFresh -Force
