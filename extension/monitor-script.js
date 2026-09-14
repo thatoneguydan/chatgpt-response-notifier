@@ -1,13 +1,16 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 4;
+  const RUNTIME_VERSION = 5;
   try { globalThis.__chatgptNotifierMonitorRuntime?.dispose?.(); } catch {}
 
   const abortController = new AbortController();
   const documentId = (() => { try { return crypto.randomUUID(); } catch { return `${Date.now()}-${Math.random()}`; } })();
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const STOP_SELECTOR = 'button[data-testid="stop-button"], button[data-testid="fruitjuice-stop-button"], button[aria-label="Stop generating"]';
+  const SEMANTIC_UI_SELECTOR = '[role="alert"], [aria-live="assertive"], [data-testid="toast"], [data-testid*="error" i], [data-testid*="warning" i], [data-testid*="retry" i], button[aria-label*="retry" i]';
+  const EXCLUDED_ERROR_CONTEXT_SELECTOR = 'pre, code, blockquote, .markdown, [class*="prose"], [data-message-author-role="tool"], [data-tool], [data-testid*="tool" i]';
+  const GLOBAL_ERROR_ASSOCIATION_MS = 30_000;
   const thresholds = globalThis.ChatGPTNotifierContinuationPolicy?.thresholds || {};
   const MISSING_FOOTER_GRACE_MS = Number(thresholds.missingFooterGraceMs || 30_000);
   const SILENT_IDLE_FIRST_MS = Number(thresholds.silentIdleFirstMs || 90_000);
@@ -185,43 +188,14 @@
     } catch { return false; }
   }
 
-  function scopedApplicationState() {
-    const result = {
-      rateLimited: false,
-      authRequired: false,
-      approvalRequired: false,
-      explicitInterruption: false,
-      interruptionKind: ''
-    };
-    let nodes = [];
-    try { nodes = Array.from(document.querySelectorAll('[role="alert"], [data-testid="toast"], [data-testid*="error"]')).slice(-12); } catch {}
-    for (const node of nodes) {
-      try { if (node.closest(TURN_SELECTOR)) continue; } catch {}
-      const text = normalize(node?.innerText || node?.textContent || '').toLowerCase();
-      if (!text) continue;
-      if (/too many requests|rate limit|try again later/.test(text)) result.rateLimited = true;
-      if (/session expired|please log in|please sign in|authentication required/.test(text)) result.authRequired = true;
-      if (/approval required|requires approval|approve this action/.test(text)) result.approvalRequired = true;
-      const interruption = [
-        ['connection-interrupted', /connection interrupted|network error|connection lost/],
-        ['systems-taking-longer', /systems? (?:are )?taking longer|taking longer than expected/],
-        ['timed-out', /timed out|request timeout/],
-        ['generation-error', /failed to (?:generate|respond)|something went wrong|there was an error/]
-      ].find(([, pattern]) => pattern.test(text));
-      if (interruption) {
-        result.explicitInterruption = true;
-        if (!result.interruptionKind) result.interruptionKind = interruption[0];
-      }
-    }
-    return result;
-  }
-
   function latestTurnState() {
     const identity = conversationIdentity();
     const nodes = turns();
     let userIndex = -1;
     for (let index = 0; index < nodes.length; index += 1) if (roleOf(nodes[index]) === 'user') userIndex = index;
-    if (!identity || userIndex < 0) return { identity, promptKey: '', promptRevision: '', assistantKey: '', assistantRevision: '', statusCode: '', hasStatusEvidence: false, workStartSignal: false };
+    if (!identity || userIndex < 0) {
+      return { identity, nodes, userIndex, assistantIndex: -1, promptKey: '', promptRevision: '', assistantKey: '', assistantRevision: '', statusCode: '', hasStatusEvidence: false, workStartSignal: false };
+    }
 
     const userId = turnId(nodes[userIndex], 'user', userIndex);
     const userText = turnText(nodes[userIndex], 'user');
@@ -238,6 +212,9 @@
     const domStatusCode = assistantIndex >= 0 ? assistantStatusCodeFromDom(nodes[assistantIndex]) : '';
     return {
       identity,
+      nodes,
+      userIndex,
+      assistantIndex,
       promptKey: `${identity.id}|${userId}`,
       promptRevision: revisionOf(userText),
       assistantKey: assistantIndex >= 0 ? turnId(nodes[assistantIndex], 'assistant', assistantIndex) : '',
@@ -248,9 +225,109 @@
     };
   }
 
+  function currentPromptKey() {
+    const identity = conversationIdentity();
+    const nodes = turns();
+    let userIndex = -1;
+    for (let index = 0; index < nodes.length; index += 1) if (roleOf(nodes[index]) === 'user') userIndex = index;
+    if (!identity || userIndex < 0) return '';
+    return `${identity.id}|${turnId(nodes[userIndex], 'user', userIndex)}`;
+  }
+
+  function visibleApplicationNode(node) {
+    if (!node || node.isConnected === false) return false;
+    try {
+      if (node.hidden === true || node.closest?.('[hidden], [aria-hidden="true"]')) return false;
+      const style = typeof getComputedStyle === 'function' ? getComputedStyle(node) : null;
+      if (style && (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse')) return false;
+    } catch {}
+    return true;
+  }
+
+  function interruptionFromText(text) {
+    return [
+      ['connection-interrupted', /connection interrupted|network error|connection lost|failed to connect/],
+      ['systems-taking-longer', /systems? (?:are )?taking longer|taking longer than expected/],
+      ['timed-out', /message delivery timed out|timed out|request timeout|request timed out/],
+      ['generation-error', /failed to (?:generate|respond)|something went wrong|there was an error/]
+    ].find(([, pattern]) => pattern.test(text)) || null;
+  }
+
+  function emptyApplicationState(turnState, reason = '') {
+    return {
+      rateLimited: false,
+      authRequired: false,
+      approvalRequired: false,
+      explicitInterruption: false,
+      interruptionKind: '',
+      interruptionAttribution: '',
+      applicationStateIdentityMatched: reason !== 'identity-mismatch',
+      applicationStateReason: reason,
+      conversationId: turnState?.identity?.id || '',
+      documentId,
+      promptKey: turnState?.promptKey || ''
+    };
+  }
+
+  function expectedIdentityMatches(turnState, expected = {}) {
+    if (expected.documentId && String(expected.documentId) !== documentId) return false;
+    if (expected.conversationId && String(expected.conversationId) !== String(turnState?.identity?.id || '')) return false;
+    if (expected.promptKey && String(expected.promptKey) !== String(turnState?.promptKey || '')) return false;
+    return true;
+  }
+
+  function currentRequestApplicationState(turnStateValue = null, expected = {}) {
+    const turnState = turnStateValue || latestTurnState();
+    if (!turnState?.identity || !turnState.promptKey || !expectedIdentityMatches(turnState, expected)) {
+      return emptyApplicationState(turnState, 'identity-mismatch');
+    }
+
+    const result = emptyApplicationState(turnState);
+    let nodes = [];
+    try { nodes = Array.from(document.querySelectorAll(SEMANTIC_UI_SELECTOR)).slice(-32); } catch {}
+    const freshGlobalRequestError = requestPhase === 'error' && requestSettledAt > 0 && (Date.now() - requestSettledAt) <= GLOBAL_ERROR_ASSOCIATION_MS;
+
+    for (const node of nodes) {
+      if (!visibleApplicationNode(node)) continue;
+      try { if (node.closest?.(EXCLUDED_ERROR_CONTEXT_SELECTOR)) continue; } catch {}
+
+      let ownerTurn = null;
+      try { ownerTurn = node.closest?.(TURN_SELECTOR) || null; } catch {}
+      let attribution = '';
+      if (ownerTurn) {
+        const ownerIndex = turnState.nodes.indexOf(ownerTurn);
+        if (ownerIndex < turnState.userIndex) continue;
+        if (ownerIndex < 0) continue;
+        attribution = 'current-turn';
+      } else {
+        attribution = 'page-global';
+      }
+
+      const text = normalize(node?.innerText || node?.textContent || '').toLowerCase();
+      if (!text) continue;
+      if (/too many requests|rate limit|try again later/.test(text)) result.rateLimited = true;
+      if (/session expired|please log in|please sign in|authentication required/.test(text)) result.authRequired = true;
+      if (/approval required|requires approval|approve this action/.test(text)) result.approvalRequired = true;
+
+      const interruption = interruptionFromText(text);
+      if (!interruption) continue;
+      if (attribution === 'page-global' && !freshGlobalRequestError) continue;
+      if (!result.explicitInterruption) {
+        result.explicitInterruption = true;
+        result.interruptionKind = interruption[0];
+        result.interruptionAttribution = attribution === 'page-global' ? 'current-request-global' : attribution;
+      }
+    }
+
+    if (conversationIdentity()?.id !== turnState.identity.id || currentPromptKey() !== turnState.promptKey) {
+      return emptyApplicationState(turnState, 'identity-mismatch');
+    }
+    return result;
+  }
+
   function snapshot() {
     const turnState = latestTurnState();
-    const app = scopedApplicationState();
+    const app = currentRequestApplicationState(turnState);
     const promptChanged = turnState.promptKey && turnState.promptKey !== manualStopPromptKey;
     if (manualStopped && promptChanged) manualStopped = false;
     if (turnState.promptKey) manualStopPromptKey = turnState.promptKey;
@@ -283,7 +360,14 @@
       requestStartedAt,
       requestSettledAt,
       workingDurationMs: requestStartedAt > 0 && requestPhase === 'started' ? Math.max(0, Date.now() - requestStartedAt) : 0,
-      ...app
+      rateLimited: app.rateLimited,
+      authRequired: app.authRequired,
+      approvalRequired: app.approvalRequired,
+      explicitInterruption: app.explicitInterruption,
+      interruptionKind: app.interruptionKind,
+      interruptionAttribution: app.interruptionAttribution,
+      applicationStateIdentityMatched: app.applicationStateIdentityMatched,
+      applicationStateReason: app.applicationStateReason
     };
   }
 
@@ -415,7 +499,7 @@
   const root = document.querySelector('main') || document.body || document.documentElement;
   if (root && typeof MutationObserver === 'function') {
     observer = new MutationObserver(schedulePublish);
-    observer.observe(root, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['data-testid', 'aria-label', 'aria-disabled', 'disabled'] });
+    observer.observe(root, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['data-testid', 'aria-label', 'aria-disabled', 'aria-hidden', 'hidden', 'disabled', 'style', 'class'] });
   }
 
   globalThis.__chatgptNotifierMonitorRuntime = Object.freeze({
@@ -423,6 +507,9 @@
     documentId,
     workStartLine: String(globalThis.ChatGPTNotifierStatusCode?.workStartSignal || ''),
     snapshot,
+    inspectCurrentRequestUi(expected = {}) {
+      return currentRequestApplicationState(null, expected);
+    },
     dispose() {
       disposed = true;
       abortController.abort();
