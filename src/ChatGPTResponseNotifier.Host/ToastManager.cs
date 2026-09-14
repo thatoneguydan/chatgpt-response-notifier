@@ -29,8 +29,6 @@ internal sealed class ToastManager
     {
         foreach (var record in _store.Load().OrderBy(item => item.CompletedAt))
         {
-            // Migrates older pending.json entries into the stable accepted-ID set
-            // without changing the v0.6-compatible pending notification format.
             _acceptedStore.Remember(record.Id);
             AddWindow(record, persist: false);
         }
@@ -50,9 +48,6 @@ internal sealed class ToastManager
 
         if (_acceptedStore.Contains(record.Id))
         {
-            // The browser may replay an outbox item after the user already
-            // dismissed it. Accepted IDs are tombstones: acknowledge the same
-            // event, but never reopen a dismissed notification.
             return new ToastShowResult(true, false, "dismissed-tombstone");
         }
 
@@ -97,7 +92,8 @@ internal sealed class ToastManager
                 type = "toast.clicked",
                 notificationId = record.Id,
                 conversationId = record.ConversationId,
-                conversationUrl = record.ConversationUrl
+                conversationUrl = record.ConversationUrl,
+                correlationId = Guid.NewGuid().ToString("N")
             });
         };
         window.ToastDismissed += async (_, _) =>
@@ -116,8 +112,6 @@ internal sealed class ToastManager
 
         if (persist)
         {
-            // Persist both the active notification and its stable accepted ID
-            // before the bridge is allowed to acknowledge toast.show.
             Persist();
             _acceptedStore.Remember(record.Id);
         }
