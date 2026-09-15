@@ -1,0 +1,101 @@
+{
+  "contractId": "github-work-status/v2",
+  "cases": [
+    {
+      "id": "resumable-same-chat-continue",
+      "applicable": true,
+      "expectedCode": "INCOMPLETE_CONTINUE",
+      "expectedFailureKind": "none",
+      "assistantSummaryCarriesCapsule": true,
+      "response": "Work remains, the direction is decided, and the same chat can resume from the durable next action without human intervention.\n[GITHUB_STATUS: INCOMPLETE_CONTINUE]"
+    },
+    {
+      "id": "hard-capacity-limit-remains-limit",
+      "applicable": true,
+      "expectedCode": "INCOMPLETE_LIMIT",
+      "expectedFailureKind": "none",
+      "assistantSummaryCarriesCapsule": true,
+      "response": "Work remains and execution capacity is exhausted.\n[GITHUB_STATUS: INCOMPLETE_LIMIT]"
+    },
+    {
+      "id": "tool-failure-remains-tool-failure",
+      "applicable": true,
+      "expectedCode": "INCOMPLETE_TOOL_FAILURE",
+      "expectedFailureKind": "none",
+      "assistantSummaryCarriesCapsule": true,
+      "response": "Work remains and a recoverable connector failure prevents this response from continuing.\n[GITHUB_STATUS: INCOMPLETE_TOOL_FAILURE]"
+    },
+    {
+      "id": "explicit-transfer-remains-handoff",
+      "applicable": true,
+      "expectedCode": "INCOMPLETE_HANDOFF",
+      "expectedFailureKind": "none",
+      "assistantSummaryCarriesCapsule": true,
+      "response": "Work remains, and the operator explicitly requested transfer to another chat at this checkpoint.\n[GITHUB_STATUS: INCOMPLETE_HANDOFF]"
+    },
+    {
+      "id": "compaction-omitted-footer",
+      "applicable": true,
+      "expectedCode": "INCOMPLETE_CONTINUE",
+      "expectedFailureKind": "omission",
+      "assistantSummaryCarriesCapsule": false,
+      "response": "Work remains and the same chat can continue from the durable next action."
+    },
+    {
+      "id": "wrong-valid-classification",
+      "applicable": true,
+      "expectedCode": "BLOCKED_HUMAN",
+      "expectedFailureKind": "wrong-classification",
+      "assistantSummaryCarriesCapsule": true,
+      "response": "A protected operator action is required before work can continue.\n[GITHUB_STATUS: INCOMPLETE_CONTINUE]"
+    },
+    {
+      "id": "ordinary-progress-no-footer",
+      "applicable": false,
+      "expectedCode": "",
+      "expectedFailureKind": "none",
+      "assistantSummaryCarriesCapsule": false,
+      "response": "I found the parser boundary and am continuing with the fix."
+    },
+    {
+      "id": "quoted-footer-not-terminal",
+      "applicable": true,
+      "expectedCode": "BLOCKED_HUMAN",
+      "expectedFailureKind": "format",
+      "assistantSummaryCarriesCapsule": true,
+      "response": "The policy example is:\n> [GITHUB_STATUS: BLOCKED_HUMAN]"
+    },
+    {
+      "id": "duplicate-footer-rejected",
+      "applicable": true,
+      "expectedCode": "INCOMPLETE_CONTINUE",
+      "expectedFailureKind": "format",
+      "assistantSummaryCarriesCapsule": true,
+      "response": "Work remains.\n[GITHUB_STATUS: INCOMPLETE_CONTINUE]\n[GITHUB_STATUS: INCOMPLETE_CONTINUE]"
+    },
+    {
+      "id": "unclosed-fence-footer-rejected",
+      "applicable": true,
+      "expectedCode": "INCOMPLETE_CONTINUE",
+      "expectedFailureKind": "format",
+      "assistantSummaryCarriesCapsule": true,
+      "response": "Example only:\n```text\n[GITHUB_STATUS: INCOMPLETE_CONTINUE]"
+    },
+    {
+      "id": "footer-with-trailing-text-rejected",
+      "applicable": true,
+      "expectedCode": "COMPLETE_APPLIED",
+      "expectedFailureKind": "format",
+      "assistantSummaryCarriesCapsule": true,
+      "response": "Applied.\n[GITHUB_STATUS: COMPLETE_APPLIED]\nAnything after the footer invalidates it."
+    },
+    {
+      "id": "malformed-code-rejected",
+      "applicable": true,
+      "expectedCode": "INCOMPLETE_CONTINUE",
+      "expectedFailureKind": "format",
+      "assistantSummaryCarriesCapsule": true,
+      "response": "Work remains and can continue.\n[GITHUB_STATUS: INCOMPLETECONTINUE]"
+    }
+  ]
+}
