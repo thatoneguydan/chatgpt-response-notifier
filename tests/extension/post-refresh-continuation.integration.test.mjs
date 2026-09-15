@@ -100,6 +100,7 @@ function createBoundedRecoveryHarness({ recoveryClass = 'explicit-interruption',
 
   const context = vm.createContext({
     console,
+    AbortController,
     Date,
     Intl,
     Math,
