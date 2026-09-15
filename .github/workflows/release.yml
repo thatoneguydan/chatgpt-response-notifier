@@ -87,6 +87,16 @@ jobs:
           $version = (Get-Content -LiteralPath .\VERSION.txt -Raw).Trim()
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'VERSION.txt is empty.' }
           $tag = "v$version"
+          $releaseNotes = @(
+            'Fixes quick-prompt layout and persistent interruption recovery.',
+            '',
+            '- Anchors the quick-prompt toolbar to the full composer and tracks composer resizing.',
+            '- Keeps ChatGPT-owned menus, popovers, and modal surfaces above the notifier toolbar.',
+            '- Shows the actual local timestamped prompt in preset hover text.',
+            '- Retries verified current-request interruption recovery up to five reloads with five minutes between surviving attempts, then permits one guarded Continue.',
+            '- Preserves the separate three-reload silent-stop cap and all existing Pause, identity, draft/upload, auth/approval/rate-limit, uncertainty, dedupe, and action-budget vetoes.',
+            '- Does not add ChatGPT API/session polling, prompt replay, Regenerate, foregrounding, or unbounded retry loops.'
+          ) -join [Environment]::NewLine
           $artifactRoot = Join-Path $env:RUNNER_TEMP "chatgpt-response-notifier-release-$version"
           Remove-Item -LiteralPath $artifactRoot -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
@@ -163,7 +173,7 @@ jobs:
             gh release create $tag $managedZip $setupExe `
               --target $sourceCommit `
               --title "ChatGPT Response Notifier $version" `
-              --notes "Adds local completion timestamps to native notifier toasts and an isolated timestamped quick-prompt toolbar beside the ChatGPT composer. Quick prompts insert Continue, Status, Checkpoint, or Handoff text without auto-sending, overwriting drafts, or entering recovery/action-budget paths. Existing notification delivery, coded history, monitoring, and bounded recovery behavior remain unchanged."
+              --notes $releaseNotes
             if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
           }
           else {
@@ -173,6 +183,8 @@ jobs:
             if ([string]::IsNullOrWhiteSpace($sourceCommit)) { throw 'Could not resolve existing release source commit.' }
             gh release download $tag --pattern "ChatGPT-Response-Notifier-$version.zip" --dir $artifactRoot --clobber
             if ($LASTEXITCODE -ne 0) { throw 'Could not download existing managed-update release asset.' }
+            gh release edit $tag --notes $releaseNotes
+            if ($LASTEXITCODE -ne 0) { throw 'Could not refresh existing release notes.' }
             $managedZip = Join-Path $artifactRoot "ChatGPT-Response-Notifier-$version.zip"
           }
 
