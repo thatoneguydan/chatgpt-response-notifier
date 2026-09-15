@@ -266,6 +266,11 @@ function makeContext({
         'INCOMPLETE_LIMIT', 'INCOMPLETE_HANDOFF', 'PLAN_IN_PROGRESS'
       ].includes(String(value || ''))
     },
+    ChatGPTNotifierContinuationPolicy: {
+      isAutoContinueStatusCode: (value) => [
+        'INCOMPLETE_LIMIT', 'INCOMPLETE_TOOL_FAILURE', 'INCOMPLETE_CONTINUE'
+      ].includes(String(value || ''))
+    },
     truncateResponse: (value) => String(value || '').slice(0, 300),
     coordinator: () => coordinatorState,
     sendNative: (message) => diagnostics.push(clone(message)),
