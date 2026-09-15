@@ -224,3 +224,33 @@ test('compatibility repair delegates current-request UI attribution to the prima
   assert.match(content, /CHATGPT_MONITOR_STATE/);
   assert.match(control, /recovery-live-fix-background\.js/);
 });
+
+test('quick prompt toolbar is timestamped, insert-only, and isolated from recovery commands', () => {
+  const content = readText('extension/content-script.js');
+  const start = content.indexOf("const TOOLBAR_ID = 'chatgpt-notifier-quick-prompts'");
+  assert.ok(start >= 0, 'quick prompt toolbar source was not found');
+  const quickPrompts = content.slice(start);
+
+  for (const label of ['Continue', 'Status', 'Checkpoint', 'Handoff']) {
+    assert.match(quickPrompts, new RegExp(`label: '${label}'`));
+  }
+  assert.match(quickPrompts, /Intl\.DateTimeFormat/);
+  assert.match(quickPrompts, /timestampedPrompt/);
+  assert.match(quickPrompts, /if \(!composer \|\| composerText\(composer\)\) return;/);
+  assert.match(quickPrompts, /button\.type = 'button'/);
+  assert.doesNotMatch(quickPrompts, /sendButton\.click\s*\(/);
+  assert.doesNotMatch(quickPrompts, /chrome\.runtime\.sendMessage/);
+  assert.doesNotMatch(quickPrompts, /CHATGPT_BOUNDED_RECOVERY_COMMAND/);
+});
+
+test('native toast renders persisted completion time in local time and release versions stay aligned', () => {
+  const toast = readText('src/ChatGPTResponseNotifier.Host/ToastWindow.cs');
+  const manifest = JSON.parse(readText('extension/manifest.json'));
+  const version = readText('VERSION.txt').trim();
+
+  assert.match(toast, /FormatCompletedAt\(record\.CompletedAt\)/);
+  assert.match(toast, /value\.ToLocalTime\(\)/);
+  assert.match(toast, /local\.ToString\("t"\)/);
+  assert.equal(version, '0.9.20');
+  assert.equal(manifest.version, version);
+});
