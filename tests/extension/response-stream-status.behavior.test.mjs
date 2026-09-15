@@ -34,6 +34,12 @@ async function settle() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
+test('response-stream sources are valid JavaScript', () => {
+  assert.doesNotThrow(() => new vm.Script(mainSource));
+  assert.doesNotThrow(() => new vm.Script(bridgeSource));
+  assert.doesNotThrow(() => new vm.Script(backgroundSource));
+});
+
 test('MAIN-world observer tees the existing fetch once and emits only the terminal status token', async () => {
   const posted = [];
   const calls = [];
@@ -128,7 +134,6 @@ test('isolated bridge validates status grammar and forwards no response content'
   };
   const context = vm.createContext({
     window,
-    globalThis: {},
     location: { origin: 'https://chatgpt.com' },
     ChatGPTNotifierStatusCode: {
       isStatusCode(value) { return ['COMPLETE_NO_CHANGES', 'INCOMPLETE_LIMIT'].includes(String(value || '')); }
@@ -145,7 +150,6 @@ test('isolated bridge validates status grammar and forwards no response content'
     String,
     Promise
   });
-  context.globalThis = context;
   vm.runInContext(bridgeSource, context);
   assert.equal(listeners.length, 1);
 
