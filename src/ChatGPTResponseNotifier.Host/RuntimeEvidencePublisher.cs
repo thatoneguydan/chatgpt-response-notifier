@@ -13,6 +13,7 @@ internal sealed class RuntimeEvidencePublisher
     private readonly string _root;
     private readonly string _path;
     private readonly List<JsonElement> _diagnostics = new();
+    private readonly HiddenWindowIncidentRetention _hiddenWindowIncidents = new();
     private string? _historicalExtensionVersion;
     private string? _historicalExtensionRuntimeSuffix;
     private DateTimeOffset? _historicalExtensionObservedAtUtc;
@@ -66,8 +67,11 @@ internal sealed class RuntimeEvidencePublisher
             var safe = ProjectDiagnostic(diagnostic);
             lock (_sync)
             {
-                _diagnostics.Add(safe);
-                while (_diagnostics.Count > MaxDiagnostics) _diagnostics.RemoveAt(0);
+                if (!_hiddenWindowIncidents.TryUpsert(diagnostic))
+                {
+                    _diagnostics.Add(safe);
+                    while (_diagnostics.Count > MaxDiagnostics) _diagnostics.RemoveAt(0);
+                }
 
                 var source = StringValue(diagnostic, "source", 40);
                 var status = StringValue(diagnostic, "status", 96);
@@ -147,6 +151,7 @@ internal sealed class RuntimeEvidencePublisher
             // can never make restored identity look current again.
             loadedExtensionVersion = extensionConnectionLive ? _currentExtensionVersion : null,
             extensionRuntimeSuffix = extensionConnectionLive ? _currentExtensionRuntimeSuffix : null,
+            hiddenWindowDiagnostics = _hiddenWindowIncidents.Snapshot(),
             diagnostics = _diagnostics
         };
 
@@ -227,6 +232,7 @@ internal sealed class RuntimeEvidencePublisher
             _currentExtensionObservedAtUtc = null;
             _bridgeLastSeenAtUtc = null;
             _bridgeClientCount = 0;
+            _hiddenWindowIncidents.Load(root);
 
             if (!root.TryGetProperty("diagnostics", out var diagnostics) || diagnostics.ValueKind != JsonValueKind.Array) return;
             foreach (var item in diagnostics.EnumerateArray().TakeLast(MaxDiagnostics))
