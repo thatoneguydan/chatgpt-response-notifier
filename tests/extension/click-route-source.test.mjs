@@ -1,6 +1,9 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import './current-request-error.behavior.test.mjs';
+import './v0914-safety-regression.test.mjs';
+import './version-sync.test.mjs';
 
 const readText = (relative) => readFileSync(new URL(`../../${relative}`, import.meta.url), 'utf8');
 
