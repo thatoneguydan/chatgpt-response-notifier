@@ -325,7 +325,6 @@
     const issuedAt = Date.now();
     appendTransition(incident, 'page-query-issued', { reason, originObservedAt: issuedAt, workerReceivedAt: issuedAt });
     let timer = null;
-    let settled = false;
     const timeout = new Promise((resolve) => {
       timer = setTimeout(() => resolve({ kind: 'deadline' }), PAGE_QUERY_DEADLINE_MS);
     });
@@ -335,7 +334,6 @@
       { documentId: incident.chromeDocumentId }
     )).then((response) => ({ kind: 'reply', response }), () => ({ kind: 'error' }));
     const result = await Promise.race([request, timeout]);
-    settled = true;
     if (timer !== null) clearTimeout(timer);
     const receivedAt = Date.now();
     if (result.kind === 'deadline') {
@@ -474,6 +472,16 @@
     const tabId = sender?.tab?.id;
     const documentId = String(sender?.documentId || '');
     if (!Number.isInteger(tabId) || !documentId) return;
+    const kind = String(message.kind || 'diagnostic');
+    if (kind === 'observer-installed') {
+      recordFlat('main-observer-installed', {
+        tabId,
+        chromeDocumentId: documentId,
+        reason: `observer-version=${Number(message.observerVersion || 0)};fetch=${message.fetchWrapped === true};xhr=${message.xhrWrapped === true}`
+      });
+      return;
+    }
+
     const receivedAt = Date.now();
     const nonce = String(message.streamNonce || '');
     let incident = nonce ? incidents.get(streamIndex.get(nonce) || '') || null : null;
@@ -498,7 +506,6 @@
       if (nonce) streamIndex.set(nonce, incident.incidentId);
     }
 
-    const kind = String(message.kind || 'diagnostic');
     appendTransition(incident, `stream-${kind}`, streamFields(message, incident, receivedAt));
     if (kind === 'stream-observed') {
       void captureBrowserState(incident, 'stream-observed');
@@ -577,8 +584,8 @@
     for (const tab of tabs) {
       if (!Number.isInteger(tab?.id) || tab.discarded === true || tab.frozen === true) continue;
       try {
-        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['hidden-window-diagnostics-main.js'], world: 'MAIN' });
         await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['hidden-window-diagnostics-page.js'] });
+        await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['hidden-window-diagnostics-main.js'], world: 'MAIN' });
         recordFlat('existing-tab-diagnostics-attached', { tabId: tab.id, reason: 'passive-observers-installed' });
       } catch {
         recordFlat('existing-tab-diagnostics-attach-error', { tabId: tab.id, reason: 'script-injection-failed' });
