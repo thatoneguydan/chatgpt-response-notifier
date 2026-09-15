@@ -1,13 +1,14 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
-  const AUTO_CONTINUE_TEXT = 'continue until you finish or need something from me';
+  const AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me.';
   // Retired contract tombstone only; this text is never written or sent by this runtime:
   // Classify the existing work result and supply the missing final GitHub status. Do not rerun tools, builds, deployments, writes, or completed actions. Use the actual current end state and end with exactly one valid `[GITHUB_STATUS: CODE]` line.
   // The retired repair identity also required current.assistantKey === expected.assistantKey
-  // and current.assistantRevision. Continuation intentionally requires no assistant turn instead.
+  // and current.assistantRevision. Recovery continuation now revalidates according to
+  // the active recovery class instead of applying silent-stop rules to every case.
   const READY_WAIT_MS = 5_000;
   const USER_TURN_WAIT_MS = 3_500;
   const ACTIVE_GUARD_MS = 3_000;
@@ -18,6 +19,23 @@
 
   const inline = (value) => String(value || '').replace(/\s+/g, ' ').trim();
   const cleanComposer = (value) => inline(String(value || '').replace(/[\u200B-\u200D\uFEFF]/g, ''));
+
+  function formatPromptTimestamp(date = new Date()) {
+    try {
+      return new Intl.DateTimeFormat(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+      }).format(date);
+    } catch {
+      return date.toLocaleString();
+    }
+  }
+
+  function timestampedContinueText(date = new Date()) {
+    return `[${formatPromptTimestamp(date)}] ${AUTO_CONTINUE_PROMPT}`;
+  }
 
   function monitorSnapshot() {
     try { return globalThis.__chatgptNotifierMonitorRuntime?.snapshot?.() || null; } catch { return null; }
@@ -169,12 +187,37 @@
     return '';
   }
 
-  function exactIdentityMatches(current, expected) {
+  function baseIdentityMatches(current, expected) {
     if (!current || !expected) return false;
     if (current.conversationId !== expected.conversationId) return false;
     if (current.documentId !== expected.documentId) return false;
     if (current.promptKey !== expected.promptKey) return false;
     if (String(current.promptRevision || '') !== String(expected.promptRevision || '')) return false;
+    return true;
+  }
+
+  function currentExplicitInterruption(current, expected) {
+    if (!baseIdentityMatches(current, expected)) return false;
+    const bound = {
+      conversationId: current.conversationId,
+      documentId: current.documentId,
+      promptKey: current.promptKey
+    };
+    let applicationState = null;
+    try { applicationState = globalThis.__chatgptNotifierRecoveryLiveContent?.detectExplicitInterruption?.(bound) || null; } catch {}
+    if (!applicationState) {
+      try { applicationState = globalThis.__chatgptNotifierMonitorRuntime?.inspectCurrentRequestUi?.(bound) || null; } catch {}
+    }
+    const observation = applicationState ? { ...current, ...applicationState } : current;
+    try { return globalThis.ChatGPTNotifierContinuationPolicy?.isCurrentExplicitInterruption?.(observation) === true; }
+    catch { return false; }
+  }
+
+  function recoveryIdentityMatches(current, expected) {
+    if (!baseIdentityMatches(current, expected)) return false;
+    const recoveryClass = String(expected?.recoveryClass || '');
+    if (recoveryClass === 'explicit-interruption') return currentExplicitInterruption(current, expected);
+    if (!recoveryClass && currentExplicitInterruption(current, expected)) return true;
     return Boolean(!current.assistantKey && Number(current.silentIdleConfirmations || 0) >= 2);
   }
 
@@ -186,7 +229,7 @@
   async function perform(kind, expected) {
     if (kind !== 'continue') return { ok: false, clicked: false, reason: kind === 'format-repair' ? 'format-repair-retired' : 'unsupported-recovery-command' };
     const initial = monitorSnapshot();
-    if (!exactIdentityMatches(initial, expected)) return { ok: false, clicked: false, reason: 'recovery-identity-changed', documentId: initial?.documentId || '' };
+    if (!recoveryIdentityMatches(initial, expected)) return { ok: false, clicked: false, reason: 'recovery-identity-changed', documentId: initial?.documentId || '' };
     if (stopPresent()) return { ok: false, clicked: false, reason: 'response-still-generating', documentId: initial?.documentId || '' };
 
     const composer = composerElement();
@@ -194,7 +237,7 @@
     const blocked = activeUserBlockReason(composer);
     if (blocked) return { ok: false, clicked: false, reason: blocked, documentId: initial?.documentId || '' };
 
-    const text = AUTO_CONTINUE_TEXT;
+    const text = timestampedContinueText();
     const previousUserKey = latestUserTurn()?.key || '';
     if (!writeComposer(composer, text)) return { ok: false, clicked: false, reason: 'composer-write-failed', documentId: initial?.documentId || '' };
 
@@ -205,7 +248,7 @@
     }
 
     const before = monitorSnapshot();
-    if (!exactIdentityMatches(before, expected) || stopPresent()) {
+    if (!recoveryIdentityMatches(before, expected) || stopPresent()) {
       if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
       return { ok: false, clicked: false, reason: 'recovery-identity-changed-before-send', documentId: before?.documentId || '' };
     }
@@ -248,7 +291,8 @@
   const runtime = {
     version: RUNTIME_VERSION,
     formatRepairRetired: true,
-    autoContinueText: AUTO_CONTINUE_TEXT,
+    autoContinuePrompt: AUTO_CONTINUE_PROMPT,
+    timestampedContinueText,
     dispose() {
       try { abortController.abort(); } catch {}
       try { chrome.runtime.onMessage.removeListener(messageListener); } catch {}

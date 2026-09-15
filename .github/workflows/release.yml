@@ -45,6 +45,8 @@ jobs:
             '.\extension\recovery-model.js',
             '.\extension\monitor-query-compat-background.js',
             '.\extension\recovery-control-background.js',
+            '.\extension\recovery-live-fix-background.js',
+            '.\extension\recovery-live-fix-content.js',
             '.\extension\bounded-recovery-background.js',
             '.\extension\bounded-recovery-attachment-background.js',
             '.\extension\quick-prompts-attachment-background.js',
@@ -62,6 +64,7 @@ jobs:
             .\tests\extension\status-policy.behavior.test.mjs `
             .\tests\extension\automation-control.behavior.test.mjs `
             .\tests\extension\bounded-recovery.behavior.test.mjs `
+            .\tests\extension\post-refresh-continuation.integration.test.mjs `
             .\tests\extension\version-sync.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Extension architecture/behavior tests failed.' }
 
@@ -88,14 +91,14 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'VERSION.txt is empty.' }
           $tag = "v$version"
           $releaseNotes = @(
-            'Fixes quick-prompt layout and persistent interruption recovery.',
+            'Fixes post-refresh continuation reliability and timestamp parity.',
             '',
-            '- Anchors the quick-prompt toolbar to the full composer and tracks composer resizing.',
-            '- Keeps ChatGPT-owned menus, popovers, and modal surfaces above the notifier toolbar.',
-            '- Shows the actual local timestamped prompt in preset hover text.',
-            '- Retries verified current-request interruption recovery up to five reloads with five minutes between surviving attempts, then permits one guarded Continue.',
-            '- Preserves the separate three-reload silent-stop cap and all existing Pause, identity, draft/upload, auth/approval/rate-limit, uncertainty, dedupe, and action-budget vetoes.',
-            '- Does not add ChatGPT API/session polling, prompt replay, Regenerate, foregrounding, or unbounded retry loops.'
+            '- Revalidates explicit timeout/system recovery with exact request identity plus a still-current interruption instead of applying silent-stop-only assistant/idle rules.',
+            '- Persists the interrupted response fingerprint across reloads so a vanished banner does not count as recovery when the response itself is unchanged.',
+            '- Keeps explicit interruption recovery bounded to five total reloads with five minutes between surviving attempts, then at most one guarded Continue; silent-stop remains capped at three reloads.',
+            '- Timestamps both bounded-recovery and coded-status automatic Continue messages using the same local format as manual quick prompts.',
+            '- Self-heals the reviewed recovery page action runtime before automatic send and still requires passive user-turn/request acceptance confirmation.',
+            '- Preserves Pause/manual-stop, draft/upload, auth/approval/rate-limit/offline, uncertainty, dedupe, profile spacing, whole-run action caps, no foregrounding, and no ChatGPT API/session polling.'
           ) -join [Environment]::NewLine
           $artifactRoot = Join-Path $env:RUNNER_TEMP "chatgpt-response-notifier-release-$version"
           Remove-Item -LiteralPath $artifactRoot -Recurse -Force -ErrorAction SilentlyContinue

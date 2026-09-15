@@ -62,6 +62,8 @@ jobs:
             '.\extension\recovery-model.js',
             '.\extension\monitor-query-compat-background.js',
             '.\extension\recovery-control-background.js',
+            '.\extension\recovery-live-fix-background.js',
+            '.\extension\recovery-live-fix-content.js',
             '.\extension\bounded-recovery-background.js',
             '.\extension\bounded-recovery-attachment-background.js',
             '.\extension\bounded-recovery-script.js',
@@ -78,6 +80,7 @@ jobs:
             .\tests\extension\status-policy.behavior.test.mjs `
             .\tests\extension\automation-control.behavior.test.mjs `
             .\tests\extension\bounded-recovery.behavior.test.mjs `
+            .\tests\extension\post-refresh-continuation.integration.test.mjs `
             .\tests\extension\version-sync.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Extension architecture/behavior tests failed.' }
 
