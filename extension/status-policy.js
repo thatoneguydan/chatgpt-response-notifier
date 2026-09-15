@@ -92,6 +92,7 @@
       explicitInterruptionMemory.set(key, {
         interruptionKind: String(observation.interruptionKind || ''),
         interruptionAttribution: String(observation.interruptionAttribution || ''),
+        applicationStateIdentityMatched: true,
         documentId: String(observation.documentId || ''),
         observedAt: now
       });
@@ -101,7 +102,16 @@
       explicitInterruptionMemory.delete(key);
       return observation;
     }
-    if (observation.explicitInterruption === true) return observation;
+    if (observation.explicitInterruption === true) {
+      explicitInterruptionMemory.set(key, {
+        interruptionKind: String(observation.interruptionKind || 'explicit-interruption'),
+        interruptionAttribution: String(observation.interruptionAttribution || ''),
+        applicationStateIdentityMatched: observation.applicationStateIdentityMatched,
+        documentId: String(observation.documentId || ''),
+        observedAt: now
+      });
+      return observation;
+    }
     const prior = explicitInterruptionMemory.get(key);
     if (!prior) return observation;
     if (now - Number(prior.observedAt || 0) > EXPLICIT_INTERRUPTION_STICKY_MS ||
@@ -114,7 +124,7 @@
       explicitInterruption: true,
       interruptionKind: prior.interruptionKind,
       interruptionAttribution: prior.interruptionAttribution,
-      applicationStateIdentityMatched: true
+      applicationStateIdentityMatched: prior.applicationStateIdentityMatched
     };
   }
 
@@ -135,6 +145,9 @@
     }
     if (observation.stopGenerating === true || observation.toolActivity === true) {
       return { state: 'working', reason: observation.toolActivity ? 'tool-activity' : 'generation-active', automaticActionAllowed: false };
+    }
+    if (observation.explicitInterruption === true) {
+      return { state: 'attention', reason: String(observation.interruptionKind || 'explicit-interruption'), automaticActionAllowed: false, recoveryCandidate: true };
     }
     if (observation.assistantKey && observation.stableTerminal === true) {
       if (String(observation.requestPhase || '') === 'started') {
