@@ -5,19 +5,30 @@ import test from 'node:test';
 
 const source = readFileSync(new URL('../../extension/runtime-identity-background.js', import.meta.url), 'utf8');
 
+const V1_SHA = '9c60a07bc26b639c15a6456b08707c2e92fa06fe98baa21b6b731b3f9dda4cd1';
+const V2_SHA = 'a2570315b911add3c57231f08b84214daa56750f9c93fd76c5d8b459d28c3efb';
+
 function loadRuntimeIdentity() {
   const nativeMessages = [];
   const alarms = [];
   const alarmListeners = [];
   const context = vm.createContext({
     console,
-    crypto: { randomUUID: () => 'runtime-id-0917' },
+    crypto: { randomUUID: () => 'runtime-id-0918' },
+    ChatGPTNotifierStatusCode: {
+      contractId: 'github-work-status/v2',
+      contractSemanticSha256: V2_SHA,
+      supportedContracts: {
+        'github-work-status/v1': V1_SHA,
+        'github-work-status/v2': V2_SHA
+      }
+    },
     sendNative: (message) => {
       nativeMessages.push(structuredClone(message));
       return true;
     },
     chrome: {
-      runtime: { getManifest: () => ({ version: '0.9.17' }) },
+      runtime: { getManifest: () => ({ version: '0.9.18' }) },
       alarms: {
         create: (name, options) => alarms.push({ name, options: structuredClone(options) }),
         onAlarm: { addListener: (listener) => alarmListeners.push(listener) }
@@ -28,14 +39,21 @@ function loadRuntimeIdentity() {
   return { context, nativeMessages, alarms, alarmListeners };
 }
 
-test('runtime identity publishes a versioned connection marker and schedules a local heartbeat', () => {
+test('runtime identity publishes exact v1/v2 work-status capability and schedules a local heartbeat', () => {
   const runtime = loadRuntimeIdentity();
   assert.equal(runtime.nativeMessages.length, 1);
   assert.equal(runtime.nativeMessages[0].type, 'diagnostics.event');
-  assert.equal(runtime.nativeMessages[0].diagnostic.source, 'extension-runtime');
-  assert.equal(runtime.nativeMessages[0].diagnostic.status, 'worker-connected');
-  assert.equal(runtime.nativeMessages[0].diagnostic.extensionVersion, '0.9.17');
-  assert.equal(runtime.nativeMessages[0].diagnostic.captureSource, 'runtime-identity-heartbeat-v3');
+  const diagnostic = runtime.nativeMessages[0].diagnostic;
+  assert.equal(diagnostic.source, 'extension-runtime');
+  assert.equal(diagnostic.status, 'worker-connected');
+  assert.equal(diagnostic.extensionVersion, '0.9.18');
+  assert.equal(diagnostic.captureSource, 'runtime-identity-heartbeat-v4');
+  assert.equal(diagnostic.workStatusContractId, 'github-work-status/v2');
+  assert.equal(diagnostic.workStatusContractSemanticSha256, V2_SHA);
+  assert.equal(
+    diagnostic.workStatusCompatibility,
+    `github-work-status/v1@${V1_SHA};github-work-status/v2@${V2_SHA}`
+  );
 
   assert.equal(runtime.alarms.length, 1);
   assert.equal(runtime.alarms[0].name, 'chatgpt-notifier-runtime-identity-heartbeat');
@@ -43,14 +61,17 @@ test('runtime identity publishes a versioned connection marker and schedules a l
   assert.equal(runtime.alarmListeners.length, 1);
 });
 
-test('runtime heartbeat refreshes identity only for its own alarm', () => {
+test('runtime heartbeat refreshes identity and contract capability only for its own alarm', () => {
   const runtime = loadRuntimeIdentity();
   runtime.alarmListeners[0]({ name: 'unrelated' });
   assert.equal(runtime.nativeMessages.length, 1);
 
   runtime.alarmListeners[0]({ name: 'chatgpt-notifier-runtime-identity-heartbeat' });
   assert.equal(runtime.nativeMessages.length, 2);
-  assert.equal(runtime.nativeMessages[1].diagnostic.status, 'worker-alive');
-  assert.equal(runtime.nativeMessages[1].diagnostic.extensionVersion, '0.9.17');
-  assert.equal(runtime.nativeMessages[1].diagnostic.captureSource, 'runtime-identity-heartbeat-v3');
+  const diagnostic = runtime.nativeMessages[1].diagnostic;
+  assert.equal(diagnostic.status, 'worker-alive');
+  assert.equal(diagnostic.extensionVersion, '0.9.18');
+  assert.equal(diagnostic.captureSource, 'runtime-identity-heartbeat-v4');
+  assert.equal(diagnostic.workStatusContractId, 'github-work-status/v2');
+  assert.equal(diagnostic.workStatusContractSemanticSha256, V2_SHA);
 });
