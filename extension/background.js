@@ -54,6 +54,7 @@ try {
     'service-worker.js',
     'runtime-identity-background.js',
     'normal-continuation-budget-hook.js',
+    'tab-lifecycle-diagnostics-background.js',
     'delivery-diagnostics-hook.js'
   );
   importsReady = true;
