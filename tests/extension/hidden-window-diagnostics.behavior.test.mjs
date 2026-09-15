@@ -146,7 +146,7 @@ function makeBackgroundHarness({ pageReply = 'reply', startTime = 1_000_000 } = 
   };
 }
 
-function requestDetails({ requestId = 'request-1', tabId = 7, documentId = 'document-1' } = {}) {
+function requestDetails({ requestId = 'req-1', tabId = 7, documentId = 'document-1' } = {}) {
   return {
     requestId,
     tabId,
@@ -390,7 +390,7 @@ test('one request remains traceable after more than five minutes without request
   streamDiagnostic(harness, { kind: 'stream-ended', originObservedAt: harness.now() });
   await settle();
 
-  const incident = harness.incidentSnapshots().findLast((item) => item?.requestSuffix === 'request-1');
+  const incident = harness.incidentSnapshots().findLast((item) => item?.requestSuffix === 'req-1');
   assert.ok(incident, 'long-running request should retain an incident');
   assert.equal(incident.mappingConfidence, 'document-single-request');
   assert.equal(incident.firstUnresolvedBoundary, '');
@@ -420,7 +420,7 @@ test('never-replying page query reaches a worker-owned deadline with the boundar
   harness.fireTimers(2000);
   await settle();
 
-  const incident = harness.incidentSnapshots().findLast((item) => item?.requestSuffix === 'request-1');
+  const incident = harness.incidentSnapshots().findLast((item) => item?.requestSuffix === 'req-1');
   assert.ok(incident);
   assert.equal(incident.firstUnresolvedBoundary, 'page-query-deadline');
   assert.equal(incident.traceState, 'failed-boundary');
