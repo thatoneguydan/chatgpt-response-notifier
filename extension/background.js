@@ -50,6 +50,7 @@ try {
     'recovery-control-background.js',
     'bounded-recovery-background.js',
     'bounded-recovery-attachment-background.js',
+    'quick-prompts-attachment-background.js',
     'service-worker.js',
     'runtime-identity-background.js',
     'normal-continuation-budget-hook.js',
