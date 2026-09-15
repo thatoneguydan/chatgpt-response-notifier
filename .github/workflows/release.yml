@@ -164,7 +164,7 @@ jobs:
             if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
           }
           else {
-            git fetch origin "refs/tags/$tag:refs/tags/$tag" --force
+            git fetch origin "refs/tags/${tag}:refs/tags/${tag}" --force
             if ($LASTEXITCODE -ne 0) { throw 'Could not fetch existing release tag.' }
             $sourceCommit = (git rev-list -n 1 $tag).Trim()
             if ([string]::IsNullOrWhiteSpace($sourceCommit)) { throw 'Could not resolve existing release source commit.' }
