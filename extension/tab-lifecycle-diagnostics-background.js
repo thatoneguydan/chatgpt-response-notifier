@@ -31,7 +31,7 @@
 
   function record(status, tabId, tab = null, reason = '') {
     try {
-      globalThis.__chatgptNotifierDeliveryReliability?.record?.(status, {
+      globalThis.__chatgptNotifierDeliveryDiagnostics?.record?.(status, {
         tabId,
         reason: reason || `frozen=${tab?.frozen === true};discarded=${tab?.discarded === true};active=${tab?.active === true}`
       });
