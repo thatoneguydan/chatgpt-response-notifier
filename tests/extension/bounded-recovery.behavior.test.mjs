@@ -93,32 +93,69 @@ test('profile-wide lease, spacing and whole-run fuse serialize automatic generat
   assert.equal(run.generationActions, 12);
 });
 
-test('incident budget permits at most three reloads and one recovery continuation with no repair message budget', () => {
+test('silent stop remains capped at three reload candidates and one recovery continuation', () => {
   const { policy, model } = loadModel();
-  assert.equal(policy.thresholds.incidentReloadCap, 3);
-  let run = humanRun();
-  let shared = profile();
-  let currentIncident = incident({ reason: 'silent-stop-confirmed' });
-  let now = 1_000;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const reload = model.claimAction('reload', run, currentIncident, shared, baseObservation(), { now, leaseId: `r-${attempt}`, recoveryEnabled: true });
-    assert.equal(reload.allowed, true, `reload ${attempt}`);
-    ({ humanRun: run, incident: currentIncident, profile: shared } = model.finishAction(reload.humanRun, reload.incident, reload.profile, { leaseId: `r-${attempt}`, state: 'scheduled' }, { now: now + 1 }));
-    now = shared.nextProfileActionAt;
-  }
-  assert.equal(currentIncident.budget.reloads, 3);
-  assert.equal(model.admissionDecision('reload', run, currentIncident, shared, baseObservation(), { now, recoveryEnabled: true }).reason, 'incident-reload-cap-reached');
-  currentIncident.reason = 'post-reload-silent-stop';
-  const continuation = model.claimAction('continue', run, currentIncident, shared, baseObservation(), { now, leaseId: 'c', recoveryEnabled: true });
-  assert.equal(continuation.allowed, true);
-  ({ humanRun: run, incident: currentIncident, profile: shared } = model.finishAction(continuation.humanRun, continuation.incident, continuation.profile, { leaseId: 'c', state: 'scheduled' }, { now: now + 1 }));
-  now = shared.nextProfileActionAt;
-  assert.equal(currentIncident.budget.automaticMessages, 1);
-  assert.equal(model.admissionDecision('continue', run, currentIncident, shared, baseObservation(), { now, recoveryEnabled: true }).reason, 'incident-continuation-cap-reached');
-  assert.equal(model.admissionDecision('format-repair', run, currentIncident, shared, baseObservation(), { now, recoveryEnabled: true }).reason, 'format-repair-retired');
+  assert.equal(policy.thresholds.incidentReloadCap, 5);
+  assert.equal(policy.thresholds.silentStopReloadCap, 3);
+  assert.equal(policy.thresholds.explicitInterruptionReloadCap, 5);
+  assert.equal(policy.thresholds.explicitInterruptionRetryMs, 300_000);
+
+  const broken = baseObservation({ assistantKey: '', silentIdleConfirmations: 2 });
+  assert.equal(model.recoveryCandidate({ state: 'attention', reason: 'silent-stop-confirmed' }, broken, incident({ budget: { reloads: 0 } })).kind, 'reload');
+  assert.equal(model.recoveryCandidate({ state: 'attention', reason: 'silent-stop-confirmed' }, broken, incident({ budget: { reloads: 2 } })).kind, 'reload');
+  assert.equal(model.recoveryCandidate({ state: 'attention', reason: 'post-reload-silent-stop' }, broken, incident({ reason: 'post-reload-silent-stop', budget: { reloads: 3, continuations: 0 } })).kind, 'continue');
+  assert.equal(model.recoveryCandidate({ state: 'attention', reason: 'post-reload-silent-stop' }, broken, incident({ reason: 'post-reload-silent-stop', budget: { reloads: 3, continuations: 1 } })).kind, '');
 });
 
-test('post-reload stable uncoded assistant is passive; only confirmed silent stop can continue', () => {
+test('explicit interruption persists through five reloads spaced five minutes apart, then continues once', () => {
+  const { policy, model } = loadModel();
+  const broken = baseObservation({
+    assistantKey: 'assistant-1',
+    silentIdleConfirmations: 0,
+    explicitInterruption: true,
+    interruptionKind: 'timed-out',
+    interruptionAttribution: 'current-request-global',
+    applicationStateIdentityMatched: true
+  });
+  const classification = { state: 'attention', reason: 'timed-out' };
+
+  assert.equal(model.firstEligibleAt('timed-out', 10_000, 1), 10_000);
+  assert.equal(model.firstEligibleAt('connection-interrupted', 10_000, 2), 10_000);
+  assert.equal(model.postReloadScheduleDelay(model.postReloadExplicitReason, incident({ reason: model.postReloadExplicitReason, budget: { reloads: 1 } })), 300_000);
+
+  let run = humanRun();
+  let shared = profile();
+  let currentIncident = incident({ reason: 'timed-out', budget: {} });
+  let now = 10_000;
+
+  for (let attempt = 1; attempt <= 5; attempt += 1) {
+    const candidate = model.recoveryCandidate(classification, broken, currentIncident);
+    assert.equal(candidate.kind, 'reload', `candidate reload ${attempt}`);
+    const reload = model.claimAction('reload', run, currentIncident, shared, broken, { now, leaseId: `explicit-r-${attempt}`, recoveryEnabled: true });
+    assert.equal(reload.allowed, true, `reload ${attempt}`);
+    assert.equal(reload.incident.budget.reloads, attempt, `reload budget ${attempt}`);
+    const expectedSpacing = attempt < 5 ? 300_000 : 30_000;
+    assert.equal(reload.profile.nextProfileActionAt, now + expectedSpacing, `spacing after reload ${attempt}`);
+    ({ humanRun: run, incident: currentIncident, profile: shared } = model.finishAction(reload.humanRun, reload.incident, reload.profile, { leaseId: `explicit-r-${attempt}`, state: 'scheduled' }, { now: now + 1 }));
+    currentIncident.reason = model.postReloadExplicitReason;
+    now = shared.nextProfileActionAt;
+  }
+
+  assert.equal(currentIncident.budget.reloads, 5);
+  assert.equal(model.recoveryCandidate({ state: 'attention', reason: model.postReloadExplicitReason }, broken, currentIncident).kind, 'continue');
+  assert.equal(model.admissionDecision('reload', run, currentIncident, shared, broken, { now, recoveryEnabled: true }).reason, 'incident-reload-cap-reached');
+
+  const continuation = model.claimAction('continue', run, currentIncident, shared, broken, { now, leaseId: 'explicit-c', recoveryEnabled: true });
+  assert.equal(continuation.allowed, true);
+  ({ humanRun: run, incident: currentIncident, profile: shared } = model.finishAction(continuation.humanRun, continuation.incident, continuation.profile, { leaseId: 'explicit-c', state: 'resolved' }, { now: now + 1 }));
+  assert.equal(currentIncident.budget.continuations, 1);
+  assert.equal(currentIncident.budget.automaticMessages, 1);
+  assert.equal(model.recoveryCandidate({ state: 'attention', reason: model.postReloadExplicitReason }, broken, currentIncident).kind, '');
+  assert.equal(model.admissionDecision('continue', run, currentIncident, shared, broken, { now: shared.nextProfileActionAt, recoveryEnabled: true }).reason, 'incident-continuation-cap-reached');
+  assert.equal(policy.recoveryActionDecision('format-repair', {}, { now }).reason, 'format-repair-retired');
+});
+
+test('post-reload explicit interruption schedules another reload while stable or resumed work resolves safely', () => {
   const { model } = loadModel();
   const expected = { conversationId: 'conversation-1', promptKey: 'conversation-1|user-1', documentId: 'doc-old' };
   const base = { ...baseObservation(), conversationId: 'conversation-1', promptKey: 'conversation-1|user-1', documentId: 'doc-new', statusCode: '', stableTerminal: false };
@@ -128,8 +165,15 @@ test('post-reload stable uncoded assistant is passive; only confirmed silent sto
   assert.deepEqual({ ...model.postReloadDecision({ ...base, statusCode: 'INCOMPLETE_LIMIT' }, expected) }, { kind: '', state: 'resolved', reason: 'coded:INCOMPLETE_LIMIT' });
   assert.deepEqual({ ...model.postReloadDecision({ ...base, assistantKey: 'assistant-1', stableTerminal: true, silentIdleConfirmations: 0 }, expected) }, { kind: '', state: 'resolved', reason: 'status-missing-passive' });
   assert.deepEqual({ ...model.postReloadDecision({ ...base, assistantKey: '', silentIdleConfirmations: 2 }, expected) }, { kind: 'continue', state: 'scheduled', reason: 'post-reload-silent-stop' });
-  assert.equal(model.recoveryCandidate({ state: 'attention', reason: 'post-reload-silent-stop' }, base, incident({ reason: 'post-reload-silent-stop', budget: { reloads: 1 } })).kind, 'reload');
-  assert.equal(model.recoveryCandidate({ state: 'attention', reason: 'post-reload-silent-stop' }, base, incident({ reason: 'post-reload-silent-stop', budget: { reloads: 3 } })).kind, 'continue');
+  assert.deepEqual({ ...model.postReloadDecision({
+    ...base,
+    assistantKey: 'assistant-1',
+    explicitInterruption: true,
+    interruptionKind: 'systems-taking-longer',
+    interruptionAttribution: 'current-request-global',
+    applicationStateIdentityMatched: true
+  }, expected) }, { kind: 'reload', state: 'scheduled', reason: 'post-reload-explicit-interruption' });
+  assert.deepEqual({ ...model.postReloadDecision({ ...base, stopGenerating: true, silentIdleConfirmations: 0 }, expected) }, { kind: '', state: 'observing', reason: 'work-resumed-after-reload' });
 });
 
 test('restart never replays an in-flight side effect and uncertainty remains sticky', () => {
@@ -143,10 +187,10 @@ test('restart never replays an in-flight side effect and uncertainty remains sti
   assert.equal(done.incident.state, 'attention');
 });
 
-test('incident timing preserves explicit-failure backoff and immediate confirmed silent-stop recovery', () => {
+test('incident timing keeps passive backoff but begins confirmed recovery immediately', () => {
   const { model } = loadModel();
-  assert.equal(model.firstEligibleAt('connection-interrupted', 10_000, 1), 40_000);
-  assert.equal(model.firstEligibleAt('connection-interrupted', 10_000, 2), 130_000);
+  assert.equal(model.firstEligibleAt('connection-interrupted', 10_000, 1), 10_000);
+  assert.equal(model.firstEligibleAt('timed-out', 10_000, 2), 10_000);
   assert.equal(model.firstEligibleAt('status-missing-passive', 10_000, 1), 40_000);
   assert.equal(model.firstEligibleAt('silent-stop-confirmed', 10_000, 3), 10_000);
 });
