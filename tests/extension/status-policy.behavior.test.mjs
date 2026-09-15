@@ -134,7 +134,8 @@ test('v1 and v2 grammar fixtures are self-consistent and runtime advertises addi
     '[GITHUB_STATUS: START]'
   ]) assert.equal(api.isWorkStartSignal(nonExact), false, nonExact);
   assert.equal(contractV2Fixture.workStartTerminal, false);
-  assert.deepEqual(Array.from(api.validStatusCodes), contractV2Fixture.validCodes);
+  assert.deepEqual(Array.from(api.validStatusCodes), contractV1Fixture.validCodes);
+  assert.deepEqual(Array.from(api.contractStatusCodes), contractV2Fixture.validCodes);
   assert.deepEqual(contractV2Fixture.autoContinuationCodes, [
     'INCOMPLETE_LIMIT',
     'INCOMPLETE_TOOL_FAILURE',
