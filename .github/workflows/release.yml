@@ -64,6 +64,7 @@ jobs:
             .\tests\extension\status-policy.behavior.test.mjs `
             .\tests\extension\automation-control.behavior.test.mjs `
             .\tests\extension\bounded-recovery.behavior.test.mjs `
+            .\tests\extension\hidden-tab-completion.behavior.test.mjs `
             .\tests\extension\post-refresh-continuation.integration.test.mjs `
             .\tests\extension\version-sync.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Extension architecture/behavior tests failed.' }
@@ -91,14 +92,13 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'VERSION.txt is empty.' }
           $tag = "v$version"
           $releaseNotes = @(
-            'Fixes post-refresh continuation reliability and timestamp parity.',
+            'Hardens response completion while ChatGPT tabs are hidden.',
             '',
-            '- Revalidates explicit timeout/system recovery with exact request identity plus a still-current interruption instead of applying silent-stop-only assistant/idle rules.',
-            '- Persists the interrupted response fingerprint across reloads so a vanished banner does not count as recovery when the response itself is unchanged.',
-            '- Keeps explicit interruption recovery bounded to five total reloads with five minutes between surviving attempts, then at most one guarded Continue; silent-stop remains capped at three reloads.',
-            '- Timestamps both bounded-recovery and coded-status automatic Continue messages using the same local format as manual quick prompts.',
-            '- Self-heals the reviewed recovery page action runtime before automatic send and still requires passive user-turn/request acceptance confirmation.',
-            '- Preserves Pause/manual-stop, draft/upload, auth/approval/rate-limit/offline, uncertainty, dedupe, profile spacing, whole-run action caps, no foregrounding, and no ChatGPT API/session polling.'
+            '- Hidden tabs bypass requestAnimationFrame for the final assistant-turn check after the existing 150 ms throttle.',
+            '- If a frame was queued while visible and the tab becomes hidden before it runs, the pending frame is cancelled and the completion check runs immediately.',
+            '- Preserves latest-prompt binding, duplicate and manual-stop suppression, the 30-second final-turn fallback, and the accepted v0.9.22 continuation/recovery guards.',
+            '- Adds deterministic regression coverage for hidden-from-start and visible-to-hidden scheduling races.',
+            '- Does not add ChatGPT API/session polling, foregrounding, prompt replay, Regenerate, or new retry loops.'
           ) -join [Environment]::NewLine
           $artifactRoot = Join-Path $env:RUNNER_TEMP "chatgpt-response-notifier-release-$version"
           Remove-Item -LiteralPath $artifactRoot -Recurse -Force -ErrorAction SilentlyContinue
