@@ -28,6 +28,23 @@
         "https://chatgpt.com/*"
       ],
       "js": [
+        "attachment-script.js",
+        "content-script.js",
+        "persistence-script.js",
+        "status-code.js",
+        "status-policy.js",
+        "monitor-script.js",
+        "bounded-recovery-script.js",
+        "status-script.js",
+        "recovery-script.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
         "response-stream-status-main.js"
       ],
       "run_at": "document_start",
@@ -38,16 +55,7 @@
         "https://chatgpt.com/*"
       ],
       "js": [
-        "attachment-script.js",
-        "content-script.js",
-        "persistence-script.js",
-        "status-code.js",
-        "response-stream-status-bridge.js",
-        "status-policy.js",
-        "monitor-script.js",
-        "bounded-recovery-script.js",
-        "status-script.js",
-        "recovery-script.js"
+        "response-stream-status-bridge.js"
       ],
       "run_at": "document_start"
     }
