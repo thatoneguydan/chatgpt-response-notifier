@@ -268,7 +268,8 @@
           monitorRuntimeId: observation.monitorRuntimeId
         });
 
-        if (String(status.statusCode || '') !== 'INCOMPLETE_LIMIT') {
+        const shouldContinue = globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(String(status.statusCode || '')) === true;
+        if (!shouldContinue) {
           const notificationId = await queueDurableNotification(claimedRecord, 'coded-completion-status-observer');
           await delivery.resolveObservation(observationKey, 'notification-queued', { statusRuntimeId });
           return notificationId;
@@ -495,7 +496,7 @@
   });
 
   globalThis.__chatgptNotifierNormalContinuationBudgetHook = Object.freeze({
-    version: 5,
+    version: 6,
     observeCodedCompletion,
     scheduleObservedStatusDelivery,
     resumePendingObservations,
