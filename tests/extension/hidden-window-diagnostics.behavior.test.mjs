@@ -41,6 +41,154 @@ async function settle() {
   await new Promise((resolve) => setImmediate(resolve));
 }
 
+function makeBackgroundHarness({ pageReply = 'reply', startTime = 1_000_000 } = {}) {
+  let now = startTime;
+  let uuid = 0;
+  let timerId = 0;
+  const timers = [];
+  const nativeMessages = [];
+  const beforeRequest = [];
+  const completedRequest = [];
+  const erroredRequest = [];
+  const runtimeMessages = [];
+  const alarmListeners = [];
+  const removedListeners = [];
+
+  class FakeDate extends Date {
+    constructor(...args) { super(...(args.length ? args : [now])); }
+    static now() { return now; }
+  }
+
+  const pendingPageReply = new Promise(() => {});
+  const chrome = {
+    runtime: {
+      getManifest: () => ({ version: '0.9.27' }),
+      onMessage: { addListener: (listener) => runtimeMessages.push(listener) }
+    },
+    webRequest: {
+      onBeforeRequest: { addListener: (listener) => beforeRequest.push(listener) },
+      onCompleted: { addListener: (listener) => completedRequest.push(listener) },
+      onErrorOccurred: { addListener: (listener) => erroredRequest.push(listener) }
+    },
+    tabs: {
+      query: async () => [],
+      get: async (tabId) => ({ id: tabId, active: false, frozen: false, discarded: false, windowId: 11 }),
+      sendMessage: async () => pageReply === 'never'
+        ? pendingPageReply
+        : ({ ok: true, visibility: 'hidden', hasFocus: false, pageFrozen: false, pageObservedAt: now, pageObserverId: 'page-observer' }),
+      onRemoved: { addListener: (listener) => removedListeners.push(listener) }
+    },
+    windows: {
+      get: async () => ({ focused: false, state: 'normal' })
+    },
+    scripting: { executeScript: async () => [] },
+    alarms: {
+      create() {},
+      clear: async () => true,
+      onAlarm: { addListener: (listener) => alarmListeners.push(listener) }
+    }
+  };
+
+  const context = vm.createContext({
+    chrome,
+    crypto: { randomUUID: () => `uuid-${++uuid}` },
+    sendNative: (message) => nativeMessages.push(message),
+    URL,
+    TextEncoder,
+    Date: FakeDate,
+    Promise,
+    Map,
+    Set,
+    Object,
+    Array,
+    JSON,
+    Number,
+    String,
+    Math,
+    Error,
+    setTimeout: (fn, delay) => {
+      const timer = { id: ++timerId, fn, delay, cleared: false };
+      timers.push(timer);
+      return timer.id;
+    },
+    clearTimeout: (id) => {
+      const timer = timers.find((item) => item.id === id);
+      if (timer) timer.cleared = true;
+    }
+  });
+
+  vm.runInContext(backgroundSource, context);
+
+  const diagnostics = () => nativeMessages
+    .filter((item) => item?.type === 'diagnostics.event')
+    .map((item) => item.diagnostic);
+  const incidentSnapshots = () => diagnostics()
+    .filter((item) => item?.status === 'incident-snapshot')
+    .map((item) => item.incident);
+
+  return {
+    beforeRequest,
+    completedRequest,
+    erroredRequest,
+    runtimeMessages,
+    alarmListeners,
+    removedListeners,
+    diagnostics,
+    incidentSnapshots,
+    now: () => now,
+    advance: (milliseconds) => { now += milliseconds; },
+    fireTimers: (delay) => {
+      for (const timer of timers.filter((item) => !item.cleared && item.delay === delay)) {
+        timer.cleared = true;
+        timer.fn();
+      }
+    }
+  };
+}
+
+function requestDetails({ requestId = 'request-1', tabId = 7, documentId = 'document-1' } = {}) {
+  return {
+    requestId,
+    tabId,
+    documentId,
+    method: 'POST',
+    url: 'https://chatgpt.com/backend-api/f/conversation'
+  };
+}
+
+function streamDiagnostic(harness, {
+  kind = 'stream-observed',
+  streamNonce = 'stream-1',
+  tabId = 7,
+  documentId = 'document-1',
+  originObservedAt = harness.now()
+} = {}) {
+  const message = {
+    type: 'CHATGPT_HIDDEN_WINDOW_STREAM_DIAGNOSTIC',
+    kind,
+    observerVersion: 1,
+    observerId: 'observer-1',
+    streamNonce,
+    eventSequence: kind === 'stream-observed' ? 1 : 2,
+    originObservedAt,
+    transport: 'fetch',
+    routeClass: 'conversation-f',
+    httpStatus: 200,
+    mediaTypeClass: 'event-stream',
+    protocolShape: 'sse',
+    byteCount: 321,
+    chunkCount: 3,
+    frameCount: 3,
+    dataFrameCount: 3,
+    jsonFrameCount: 2,
+    doneFrameCount: 1,
+    decodedCandidateCount: 1,
+    semanticFinalEligible: false,
+    semanticRejectionReason: 'schema-unclassified'
+  };
+  for (const listener of harness.runtimeMessages) listener(message, { tab: { id: tabId }, documentId }, () => {});
+}
+
 test('hidden-window diagnostic sources are syntactically valid and wired after the canonical background', () => {
   assert.doesNotThrow(() => new vm.Script(mainSource));
   assert.doesNotThrow(() => new vm.Script(pageSource));
@@ -109,6 +257,48 @@ test('passive MAIN observer exposes logical-delta evidence without authorizing a
   assert.equal('responseText' in final, false);
   assert.equal('responseBody' in final, false);
   assert.equal('url' in final, false);
+});
+
+test('decoded JSON escapes remain evidence only, never a terminal authorization', async () => {
+  const posted = [];
+  const response = streamResponse([
+    'data: {"v":"\\u005bGITHUB_STATUS: COMPLETE_NO_CHANGES]"}\n\n',
+    'data: [DONE]\n\n'
+  ]);
+  const window = {
+    fetch: async () => response,
+    postMessage(message) { posted.push(message); }
+  };
+  const context = vm.createContext({
+    window,
+    globalThis: window,
+    location: { href: 'https://chatgpt.com/c/conversation-1', origin: 'https://chatgpt.com' },
+    URL,
+    TextDecoder,
+    TextEncoder,
+    Request: undefined,
+    XMLHttpRequest: undefined,
+    Symbol,
+    Promise,
+    Date,
+    Math,
+    Object,
+    Array,
+    JSON,
+    Number,
+    String,
+    crypto: { randomUUID: () => 'uuid-json-escape' }
+  });
+  window.crypto = context.crypto;
+  vm.runInContext(mainSource, context);
+  await window.fetch('https://chatgpt.com/backend-api/f/conversation', { method: 'POST' });
+  await settle();
+  const final = posted.find((item) => item.kind === 'stream-ended');
+  assert.ok(final);
+  assert.equal(final.rawTokenCount, 0);
+  assert.equal(final.decodedCandidateCount, 1);
+  assert.equal(final.semanticFinalEligible, false);
+  assert.equal(final.semanticRejectionReason, 'schema-unclassified');
 });
 
 test('MAIN observer remains read-only and bounded', () => {
@@ -188,6 +378,77 @@ test('isolated page bridge forwards only fixed metadata and never response conte
   assert.equal('responseText' in forwarded, false);
   assert.equal('url' in forwarded, false);
   assert.equal(forwarded.routeClass, 'conversation-f');
+});
+
+test('one request remains traceable after more than five minutes without request-context expiry', async () => {
+  const harness = makeBackgroundHarness();
+  harness.beforeRequest[0](requestDetails());
+  await settle();
+  harness.advance(300_001);
+  streamDiagnostic(harness, { kind: 'stream-observed', originObservedAt: harness.now() });
+  await settle();
+  streamDiagnostic(harness, { kind: 'stream-ended', originObservedAt: harness.now() });
+  await settle();
+
+  const incident = harness.incidentSnapshots().findLast((item) => item?.requestSuffix === 'request-1');
+  assert.ok(incident, 'long-running request should retain an incident');
+  assert.equal(incident.mappingConfidence, 'document-single-request');
+  assert.equal(incident.firstUnresolvedBoundary, '');
+  assert.ok(incident.transitions.some((item) => item.stage === 'stream-stream-ended' && item.contextAgeMs >= 300_001));
+});
+
+test('overlapping requests fail closed as ambiguous instead of silently choosing the newest request', async () => {
+  const harness = makeBackgroundHarness();
+  harness.beforeRequest[0](requestDetails({ requestId: 'request-a' }));
+  harness.beforeRequest[0](requestDetails({ requestId: 'request-b' }));
+  await settle();
+  streamDiagnostic(harness, { kind: 'stream-observed', streamNonce: 'ambiguous-stream' });
+  await settle();
+
+  const incident = harness.incidentSnapshots().findLast((item) => item?.kind === 'stream-orphan');
+  assert.ok(incident, 'ambiguous stream should produce its own explicit incident');
+  assert.equal(incident.mappingConfidence, 'ambiguous-overlap');
+  assert.equal(incident.mappingCandidateCount, 2);
+  assert.equal(incident.firstUnresolvedBoundary, 'request-stream-mapping-ambiguous');
+  assert.equal(incident.traceState, 'failed-boundary');
+});
+
+test('never-replying page query reaches a worker-owned deadline with the boundary retained', async () => {
+  const harness = makeBackgroundHarness({ pageReply: 'never' });
+  harness.beforeRequest[0](requestDetails());
+  await settle();
+  harness.fireTimers(2000);
+  await settle();
+
+  const incident = harness.incidentSnapshots().findLast((item) => item?.requestSuffix === 'request-1');
+  assert.ok(incident);
+  assert.equal(incident.firstUnresolvedBoundary, 'page-query-deadline');
+  assert.equal(incident.traceState, 'failed-boundary');
+  assert.ok(incident.transitions.some((item) => item.stage === 'page-query-deadline'));
+});
+
+test('extension incident retention evicts oldest traces beyond the twenty-incident budget', async () => {
+  const harness = makeBackgroundHarness();
+  for (let index = 0; index < 22; index += 1) {
+    const tabId = 100 + index;
+    const documentId = `document-${index}`;
+    const requestId = `request-${index}`;
+    harness.beforeRequest[0](requestDetails({ requestId, tabId, documentId }));
+    await settle();
+    streamDiagnostic(harness, {
+      kind: 'stream-ended',
+      streamNonce: `stream-${index}`,
+      tabId,
+      documentId,
+      originObservedAt: harness.now()
+    });
+    await settle();
+  }
+
+  const snapshots = harness.incidentSnapshots();
+  const latest = snapshots.at(-1);
+  assert.ok(latest);
+  assert.ok(latest.retentionEvictedIncidents >= 2, 'retention should report evictions rather than grow without bound');
 });
 
 test('worker diagnostics bound correlation, deadlines, persistence and retention without action authority', () => {
