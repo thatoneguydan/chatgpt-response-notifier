@@ -1,10 +1,10 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 5;
+  const RUNTIME_VERSION = 6;
   if (globalThis.ChatGPTNotifierContinuationPolicy?.runtimeVersion === RUNTIME_VERSION) return;
 
-  const MONITOR_POLICY_VERSION = 4;
+  const MONITOR_POLICY_VERSION = 5;
   const MISSING_FOOTER_GRACE_MS = 30_000;
   const SILENT_IDLE_FIRST_MS = 90_000;
   const SILENT_IDLE_CONFIRM_MS = 30_000;
@@ -12,7 +12,11 @@
   const RUN_GENERATION_ACTION_CAP = 12;
   const PROFILE_ACTION_SPACING_MS = 30_000;
   const INCIDENT_RELOAD_CAP = 3;
-  const AUTO_CONTINUE_STATUS_CODES = Object.freeze(['INCOMPLETE_LIMIT', 'INCOMPLETE_TOOL_FAILURE']);
+  const AUTO_CONTINUE_STATUS_CODES = Object.freeze([
+    'INCOMPLETE_LIMIT',
+    'INCOMPLETE_TOOL_FAILURE',
+    'INCOMPLETE_CONTINUE'
+  ]);
   const AUTO_CONTINUE_STATUS_CODE_SET = new Set(AUTO_CONTINUE_STATUS_CODES);
   const EXPLICIT_INTERRUPTION_STICKY_MS = 5 * 60_000;
   const explicitInterruptionMemory = new Map();
