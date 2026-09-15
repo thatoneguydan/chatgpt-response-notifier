@@ -18,8 +18,8 @@ function loadStatusParser() {
   return context.ChatGPTNotifierStatusCode;
 }
 
-test('upstream completion detector remains byte-for-byte unchanged', () => {
-  assert.equal(normalizedBlobSha('extension/content-script.js'), 'fcea2bd286e1436d94addd9fe8c3b79feb0ad919');
+test('completion detector matches the reviewed hidden-tab-safe source', () => {
+  assert.equal(normalizedBlobSha('extension/content-script.js'), 'b12f8179d559d53cac460e1cad99c36b3ee1a035');
 });
 
 test('only the canonical seven exact terminal footer codes qualify', () => {
