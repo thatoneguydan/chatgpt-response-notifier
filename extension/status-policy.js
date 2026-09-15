@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 6;
+  const RUNTIME_VERSION = 7;
   if (globalThis.ChatGPTNotifierContinuationPolicy?.runtimeVersion === RUNTIME_VERSION) return;
 
   const MONITOR_POLICY_VERSION = 5;
@@ -18,11 +18,24 @@
     'INCOMPLETE_CONTINUE'
   ]);
   const AUTO_CONTINUE_STATUS_CODE_SET = new Set(AUTO_CONTINUE_STATUS_CODES);
+  const EXPLICIT_INTERRUPTION_KINDS = new Set([
+    'connection-interrupted', 'request-error', 'request-rejected', 'timed-out', 'timeout',
+    'connection-lost', 'systems-taking-longer', 'generation-error'
+  ]);
+  const CURRENT_INTERRUPTION_ATTRIBUTIONS = new Set(['current-turn', 'current-request-global']);
   const EXPLICIT_INTERRUPTION_STICKY_MS = 5 * 60_000;
   const explicitInterruptionMemory = new Map();
 
   function isAutoContinueStatusCode(value) {
     return AUTO_CONTINUE_STATUS_CODE_SET.has(String(value || ''));
+  }
+
+  function isCurrentExplicitInterruption(observation = {}) {
+    if (observation.explicitInterruption !== true) return false;
+    if (observation.applicationStateIdentityMatched === false) return false;
+    const kind = String(observation.interruptionKind || '');
+    const attribution = String(observation.interruptionAttribution || '');
+    return EXPLICIT_INTERRUPTION_KINDS.has(kind) && CURRENT_INTERRUPTION_ATTRIBUTIONS.has(attribution);
   }
 
   function identityMatches(current, expected) {
@@ -71,18 +84,24 @@
     if (!key) return observation;
     const now = Date.now();
     const validStatus = Boolean(observation.statusCode && globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(observation.statusCode));
-    if (validStatus || observation.stopGenerating === true || observation.toolActivity === true || observation.manualStopped === true) {
+    if (validStatus || observation.manualStopped === true) {
       explicitInterruptionMemory.delete(key);
       return observation;
     }
-    if (observation.explicitInterruption === true) {
+    if (isCurrentExplicitInterruption(observation)) {
       explicitInterruptionMemory.set(key, {
-        interruptionKind: String(observation.interruptionKind || 'explicit-interruption'),
+        interruptionKind: String(observation.interruptionKind || ''),
+        interruptionAttribution: String(observation.interruptionAttribution || ''),
         documentId: String(observation.documentId || ''),
         observedAt: now
       });
       return observation;
     }
+    if (observation.stopGenerating === true || observation.toolActivity === true) {
+      explicitInterruptionMemory.delete(key);
+      return observation;
+    }
+    if (observation.explicitInterruption === true) return observation;
     const prior = explicitInterruptionMemory.get(key);
     if (!prior) return observation;
     if (now - Number(prior.observedAt || 0) > EXPLICIT_INTERRUPTION_STICKY_MS ||
@@ -90,7 +109,13 @@
       explicitInterruptionMemory.delete(key);
       return observation;
     }
-    return { ...observation, explicitInterruption: true, interruptionKind: prior.interruptionKind };
+    return {
+      ...observation,
+      explicitInterruption: true,
+      interruptionKind: prior.interruptionKind,
+      interruptionAttribution: prior.interruptionAttribution,
+      applicationStateIdentityMatched: true
+    };
   }
 
   function classifyObservation(observationValue = {}) {
@@ -104,11 +129,13 @@
     if (observation.rateLimited === true) return { state: 'attention', reason: 'rate-limited', automaticActionAllowed: false, openProfileBreaker: true };
     if (observation.hasDraft === true) return { state: 'paused', reason: 'draft-present', automaticActionAllowed: false };
     if (observation.hasUpload === true) return { state: 'paused', reason: 'upload-present', automaticActionAllowed: false };
+    if (validStatus) return { state: 'coded-terminal', reason: String(observation.statusCode), automaticActionAllowed: isAutoContinueStatusCode(observation.statusCode) };
+    if (isCurrentExplicitInterruption(observation)) {
+      return { state: 'attention', reason: String(observation.interruptionKind), automaticActionAllowed: false, recoveryCandidate: true };
+    }
     if (observation.stopGenerating === true || observation.toolActivity === true) {
       return { state: 'working', reason: observation.toolActivity ? 'tool-activity' : 'generation-active', automaticActionAllowed: false };
     }
-    if (validStatus) return { state: 'coded-terminal', reason: String(observation.statusCode), automaticActionAllowed: isAutoContinueStatusCode(observation.statusCode) };
-    if (observation.explicitInterruption === true) return { state: 'attention', reason: String(observation.interruptionKind || 'explicit-interruption'), automaticActionAllowed: false, recoveryCandidate: true };
     if (observation.assistantKey && observation.stableTerminal === true) {
       if (String(observation.requestPhase || '') === 'started') {
         return { state: 'waiting', reason: 'awaiting-request-settlement', automaticActionAllowed: false };
@@ -171,6 +198,7 @@
     monitorPolicyVersion: MONITOR_POLICY_VERSION,
     autoContinueStatusCodes: AUTO_CONTINUE_STATUS_CODES,
     isAutoContinueStatusCode,
+    isCurrentExplicitInterruption,
     withStickyExplicitInterruption,
     thresholds: Object.freeze({
       missingFooterGraceMs: MISSING_FOOTER_GRACE_MS,
