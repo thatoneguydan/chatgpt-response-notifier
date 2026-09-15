@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import test from 'node:test';
 
 const source = readFileSync(new URL('../../extension/runtime-identity-background.js', import.meta.url), 'utf8');
+const sanitizerSource = readFileSync(new URL('../../src/ChatGPTResponseNotifier.Host/DiagnosticsSanitizer.cs', import.meta.url), 'utf8');
 
 const V1_SHA = '9c60a07bc26b639c15a6456b08707c2e92fa06fe98baa21b6b731b3f9dda4cd1';
 const V2_SHA = 'a2570315b911add3c57231f08b84214daa56750f9c93fd76c5d8b459d28c3efb';
@@ -74,4 +75,10 @@ test('runtime heartbeat refreshes identity and contract capability only for its 
   assert.equal(diagnostic.captureSource, 'runtime-identity-heartbeat-v4');
   assert.equal(diagnostic.workStatusContractId, 'github-work-status/v2');
   assert.equal(diagnostic.workStatusContractSemanticSha256, V2_SHA);
+});
+
+test('helper sanitizer preserves only bounded work-status capability fields for runtime evidence', () => {
+  assert.match(sanitizerSource, /workStatusContractId = StringValue\(input, "workStatusContractId", 64\)/);
+  assert.match(sanitizerSource, /workStatusContractSemanticSha256 = StringValue\(input, "workStatusContractSemanticSha256", 64\)/);
+  assert.match(sanitizerSource, /workStatusCompatibility = StringValue\(input, "workStatusCompatibility", 320\)/);
 });
