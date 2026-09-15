@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 4;
+  const RUNTIME_VERSION = 5;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const AUTO_CONTINUE_TEXT = 'continue until you finish or need something from me';
   const DEFAULT_WAIT_MS = 30000;
@@ -134,12 +134,14 @@
     const statusCode = parsed.statusCode || domStatusCode || '';
     const statusLine = parsed.statusLine || (statusCode ? `[GITHUB_STATUS: ${statusCode}]` : '');
     const userId = turnId(nodes[userIndex], 'user', userIndex);
+    const userText = turnText(nodes[userIndex], 'user');
     return {
       conversationId: identity.id,
       conversationUrl: identity.url,
       documentId,
       promptKey: `${identity.id}|${userId}`,
       promptTurnId: userId,
+      promptRevision: revisionOf(userText),
       assistantKey: turnId(nodes[assistantIndex], 'assistant', assistantIndex),
       revision: revisionOf(responseText),
       responseText,
@@ -300,7 +302,7 @@
         responseText: snapshot?.responseText || '', responseBody: snapshot?.responseBody || '',
         conversationId: snapshot?.conversationId || '', conversationUrl: snapshot?.conversationUrl || '',
         documentId: snapshot?.documentId || documentId, promptKey: snapshot?.promptKey || '',
-        assistantKey: snapshot?.assistantKey || '', revision: snapshot?.revision || '',
+        promptRevision: snapshot?.promptRevision || '', assistantKey: snapshot?.assistantKey || '', revision: snapshot?.revision || '',
         autoContinued: false, autoContinueReason: 'read-only-observation'
       })).catch((error) => sendResponse?.({ ok: false, statusCode: '', error: String(error?.message || error), documentId }));
       return true;
