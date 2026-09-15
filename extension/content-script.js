@@ -150,6 +150,7 @@
         if (observer) observer.disconnect();
         if (timeoutId !== null) clearTimeout(timeoutId);
         cleanupScheduledCheck();
+        document.removeEventListener('visibilitychange', rescueHiddenFrame, true);
         resolve(text);
       };
 
@@ -158,6 +159,13 @@
         lastCheckAt = performance.now();
         const text = answerBoundToLatestPrompt();
         if (text) finish(text);
+      };
+
+      const rescueHiddenFrame = () => {
+        if (settled || document.visibilityState !== 'hidden' || frameId === null) return;
+        if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frameId);
+        frameId = null;
+        check();
       };
 
       const scheduleCheck = () => {
@@ -170,13 +178,15 @@
             frameId = null;
             check();
           };
-          if (typeof requestAnimationFrame === 'function') {
-            frameId = requestAnimationFrame(run);
-          } else {
+          if (document.visibilityState === 'hidden' || typeof requestAnimationFrame !== 'function') {
             run();
+          } else {
+            frameId = requestAnimationFrame(run);
           }
         }, delay);
       };
+
+      document.addEventListener('visibilitychange', rescueHiddenFrame, true);
 
       const root = conversationObserverRoot();
       if (root && typeof MutationObserver === 'function') {
