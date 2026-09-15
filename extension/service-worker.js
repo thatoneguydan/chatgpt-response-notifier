@@ -601,6 +601,7 @@ async function handleContinuationClaim(record, status, tabId, senderDocumentId) 
     conversationUrl: status.conversationUrl,
     documentId: status.documentId,
     promptKey: status.promptKey,
+    promptRevision: status.promptRevision,
     assistantKey: status.assistantKey,
     revision: status.revision,
     statusCode: status.statusCode
@@ -689,7 +690,8 @@ async function showCompletionFromUpstream(message, sender) {
   const record = claim.record;
   activeTurnKeys.add(record.turnKey);
   try {
-    if (statusCode !== 'INCOMPLETE_LIMIT') {
+    const shouldContinue = globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(statusCode) === true;
+    if (!shouldContinue) {
       return await queueDurableNotification(record, 'coded-completion');
     }
 
