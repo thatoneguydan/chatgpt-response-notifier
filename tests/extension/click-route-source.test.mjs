@@ -13,7 +13,7 @@ test('production click route contains no outgoing native foreground request', ()
   assert.doesNotMatch(worker, /function\s+requestNativeChromeForeground\s*\(/);
   assert.match(worker, /chrome\.tabs\.update\(/);
   assert.match(worker, /chrome\.windows\.update\(/);
-  assert.match(worker, /emitClickDiagnostic\(['"]click-handler-started['"]/);
+  assert.match(worker, /emitClickDiagnostic\(['"]worker-click-received['"]/);
   assert.match(worker, /emitClickDiagnostic\(['"]click-navigation-complete['"]/);
 
   assert.match(background, /Retired native foreground path is present in production runtime/);
