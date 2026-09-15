@@ -7,8 +7,10 @@ import test from 'node:test';
 const root = new URL('../../', import.meta.url);
 const policySource = readFileSync(new URL('extension/status-policy.js', root), 'utf8');
 const statusCodeSource = readFileSync(new URL('extension/status-code.js', root), 'utf8');
-const contractFixture = JSON.parse(readFileSync(new URL('extension/github-work-status-contract.v1.json', root), 'utf8'));
-const evaluationFixture = JSON.parse(readFileSync(new URL('tests/fixtures/github-work-status-evaluation.v1.json', root), 'utf8'));
+const contractV1Fixture = JSON.parse(readFileSync(new URL('extension/github-work-status-contract.v1.json', root), 'utf8'));
+const contractV2Fixture = JSON.parse(readFileSync(new URL('extension/github-work-status-contract.v2.json', root), 'utf8'));
+const evaluationV1Fixture = JSON.parse(readFileSync(new URL('tests/fixtures/github-work-status-evaluation.v1.json', root), 'utf8'));
+const evaluationV2Fixture = JSON.parse(readFileSync(new URL('tests/fixtures/github-work-status-evaluation.v2.json', root), 'utf8'));
 
 function loadPolicy() {
   const context = vm.createContext({ Date, Number, String });
@@ -29,6 +31,25 @@ function canonicalize(value) {
     return `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalize(value[key])}`).join(',')}}`;
   }
   return JSON.stringify(value);
+}
+
+function semanticFixture(contractFixture) {
+  return {
+    contractId: contractFixture.contractId,
+    statusLinePattern: contractFixture.statusLinePattern,
+    finalSyntax: contractFixture.finalSyntax,
+    workStartSignal: contractFixture.workStartSignal,
+    workStartLinePattern: contractFixture.workStartLinePattern,
+    workStartTerminal: contractFixture.workStartTerminal,
+    validCodes: contractFixture.validCodes,
+    autoContinuationCodes: contractFixture.autoContinuationCodes,
+    formatRepairPrompt: contractFixture.formatRepairPrompt,
+    capsuleRequiredFields: contractFixture.capsuleRequiredFields
+  };
+}
+
+function semanticDigest(contractFixture) {
+  return createHash('sha256').update(canonicalize(semanticFixture(contractFixture)), 'utf8').digest('hex');
 }
 
 const expected = {
@@ -92,27 +113,18 @@ test('continuation acceptance requires both page-turn and request evidence in th
   assert.equal(policy.continuationOutcome({ pageTurnConfirmed: true, requestAccepted: true, sameConversation: false }).accepted, false);
 });
 
-test('bundled grammar fixture is self-consistent and runtime taxonomy plus START signal match it exactly', () => {
-  const semantic = {
-    contractId: contractFixture.contractId,
-    statusLinePattern: contractFixture.statusLinePattern,
-    finalSyntax: contractFixture.finalSyntax,
-    workStartSignal: contractFixture.workStartSignal,
-    workStartLinePattern: contractFixture.workStartLinePattern,
-    workStartTerminal: contractFixture.workStartTerminal,
-    validCodes: contractFixture.validCodes,
-    autoContinuationCodes: contractFixture.autoContinuationCodes,
-    formatRepairPrompt: contractFixture.formatRepairPrompt,
-    capsuleRequiredFields: contractFixture.capsuleRequiredFields
-  };
-  const digest = createHash('sha256').update(canonicalize(semantic), 'utf8').digest('hex');
-  assert.equal(digest, contractFixture.canonicalSemanticSha256);
+test('v1 and v2 grammar fixtures are self-consistent and runtime advertises additive v2 compatibility', () => {
+  assert.equal(semanticDigest(contractV1Fixture), contractV1Fixture.canonicalSemanticSha256);
+  assert.equal(semanticDigest(contractV2Fixture), contractV2Fixture.canonicalSemanticSha256);
 
   const api = loadStatusCode();
-  assert.equal(api.contractId, contractFixture.contractId);
-  assert.equal(api.contractSemanticSha256, contractFixture.canonicalSemanticSha256);
-  assert.equal(api.workStartSignal, contractFixture.workStartSignal);
-  assert.equal(api.isWorkStartSignal(contractFixture.workStartSignal), true);
+  assert.equal(api.contractId, contractV2Fixture.contractId);
+  assert.equal(api.contractSemanticSha256, contractV2Fixture.canonicalSemanticSha256);
+  assert.equal(api.supportsContract(contractV1Fixture.contractId, contractV1Fixture.canonicalSemanticSha256), true);
+  assert.equal(api.supportsContract(contractV2Fixture.contractId, contractV2Fixture.canonicalSemanticSha256), true);
+  assert.equal(api.supportsContract(contractV2Fixture.contractId, contractV1Fixture.canonicalSemanticSha256), false);
+  assert.equal(api.workStartSignal, contractV2Fixture.workStartSignal);
+  assert.equal(api.isWorkStartSignal(contractV2Fixture.workStartSignal), true);
   for (const nonExact of [
     ' [GITHUB_WORK: START]',
     '[GITHUB_WORK: START] ',
@@ -121,15 +133,21 @@ test('bundled grammar fixture is self-consistent and runtime taxonomy plus START
     '[GITHUB_WORK: STARTED]',
     '[GITHUB_STATUS: START]'
   ]) assert.equal(api.isWorkStartSignal(nonExact), false, nonExact);
-  assert.equal(contractFixture.workStartTerminal, false);
-  assert.deepEqual(Array.from(api.validStatusCodes), contractFixture.validCodes);
-  assert.deepEqual(contractFixture.autoContinuationCodes, ['INCOMPLETE_LIMIT']);
-  assert.equal(contractFixture.validCodes.includes('START'), false);
+  assert.equal(contractV2Fixture.workStartTerminal, false);
+  assert.deepEqual(Array.from(api.validStatusCodes), contractV2Fixture.validCodes);
+  assert.deepEqual(contractV2Fixture.autoContinuationCodes, [
+    'INCOMPLETE_LIMIT',
+    'INCOMPLETE_TOOL_FAILURE',
+    'INCOMPLETE_CONTINUE'
+  ]);
+  assert.deepEqual(contractV1Fixture.validCodes, contractV2Fixture.validCodes.filter((code) => code !== 'INCOMPLETE_CONTINUE'));
+  assert.equal(contractV2Fixture.validCodes.includes('START'), false);
 });
 
 test('terminal grammar accepts one exact outside-fence final line and rejects ambiguous status-looking text', () => {
   const api = loadStatusCode();
   assert.equal(api.parseTerminalStatus('Done.\n[GITHUB_STATUS: COMPLETE_APPLIED]').statusCode, 'COMPLETE_APPLIED');
+  assert.equal(api.parseTerminalStatus('Work remains.\n[GITHUB_STATUS: INCOMPLETE_CONTINUE]').statusCode, 'INCOMPLETE_CONTINUE');
   assert.equal(api.parseTerminalStatus('Done.\n[GITHUB_STATUS: COMPLETE_APPLIED]\n\n').statusCode, 'COMPLETE_APPLIED');
   assert.equal(api.parseTerminalStatus('Example:\n```text\n[GITHUB_STATUS: BLOCKED_HUMAN]\n```\nDone.\n[GITHUB_STATUS: COMPLETE_APPLIED]').statusCode, 'COMPLETE_APPLIED');
 
@@ -147,12 +165,9 @@ test('terminal grammar accepts one exact outside-fence final line and rejects am
   }
 });
 
-test('long-chat evaluation keeps omission, wrong classification, and format failures distinct', () => {
-  const api = loadStatusCode();
-  assert.equal(evaluationFixture.contractId, contractFixture.contractId);
-
+function evaluateFixture(api, fixture) {
   const observedKinds = new Map();
-  for (const item of evaluationFixture.cases) {
+  for (const item of fixture.cases) {
     const observed = api.parseTerminalStatus(item.response).statusCode;
     let failureKind = 'none';
     if (item.applicable) {
@@ -164,11 +179,25 @@ test('long-chat evaluation keeps omission, wrong classification, and format fail
     observedKinds.set(item.id, failureKind);
     assert.equal(failureKind, item.expectedFailureKind, item.id);
   }
+  return observedKinds;
+}
 
-  assert.equal(observedKinds.get('compaction-omitted-footer'), 'omission');
-  assert.equal(observedKinds.get('wrong-valid-classification'), 'wrong-classification');
-  assert.equal(observedKinds.get('duplicate-footer-rejected'), 'format');
-  assert.equal(observedKinds.get('ordinary-progress-no-footer'), 'none');
+test('long-chat evaluation keeps v1 compatibility and v2 continuation classification distinct', () => {
+  const api = loadStatusCode();
+  assert.equal(evaluationV1Fixture.contractId, contractV1Fixture.contractId);
+  assert.equal(evaluationV2Fixture.contractId, contractV2Fixture.contractId);
+
+  const v1Kinds = evaluateFixture(api, evaluationV1Fixture);
+  assert.equal(v1Kinds.get('compaction-omitted-footer'), 'omission');
+  assert.equal(v1Kinds.get('wrong-valid-classification'), 'wrong-classification');
+  assert.equal(v1Kinds.get('duplicate-footer-rejected'), 'format');
+  assert.equal(v1Kinds.get('ordinary-progress-no-footer'), 'none');
+
+  const v2Kinds = evaluateFixture(api, evaluationV2Fixture);
+  assert.equal(v2Kinds.get('resumable-same-chat-continue'), 'none');
+  assert.equal(v2Kinds.get('explicit-transfer-remains-handoff'), 'none');
+  assert.equal(v2Kinds.get('compaction-omitted-footer'), 'omission');
+  assert.equal(v2Kinds.get('wrong-valid-classification'), 'wrong-classification');
 });
 
 test('observation classifier distinguishes active work, passive missing status, silent stop, blockers and coded results', () => {
@@ -176,6 +205,9 @@ test('observation classifier distinguishes active work, passive missing status, 
   assert.equal(policy.classifyObservation({ statusCode: 'COMPLETE_APPLIED' }).state, 'coded-terminal');
   assert.equal(policy.classifyObservation({ statusCode: 'COMPLETE_APPLIED' }).automaticActionAllowed, false);
   assert.equal(policy.classifyObservation({ statusCode: 'INCOMPLETE_LIMIT' }).automaticActionAllowed, true);
+  assert.equal(policy.classifyObservation({ statusCode: 'INCOMPLETE_TOOL_FAILURE' }).automaticActionAllowed, true);
+  assert.equal(policy.classifyObservation({ statusCode: 'INCOMPLETE_CONTINUE' }).automaticActionAllowed, true);
+  assert.equal(policy.classifyObservation({ statusCode: 'INCOMPLETE_HANDOFF' }).automaticActionAllowed, false);
   assert.equal(policy.classifyObservation({ stopGenerating: true }).state, 'working');
   assert.equal(policy.classifyObservation({ toolActivity: true }).reason, 'tool-activity');
   const missing = policy.classifyObservation({ assistantKey: 'a1', stableTerminal: true });
