@@ -63,6 +63,8 @@ function recoveryObservation(overrides = {}) {
     silentIdleConfirmations: 0,
     explicitInterruption: false,
     interruptionKind: '',
+    interruptionAttribution: '',
+    applicationStateIdentityMatched: true,
     ...overrides
   };
 }
@@ -110,7 +112,7 @@ test('both incomplete limit and tool failure are recoverable continuation codes'
 test('explicit interruption outranks passive missing-footer classification on the same document', () => {
   const context = loadRecoveryPolicyAndModel();
   const policy = context.ChatGPTNotifierContinuationPolicy;
-  assert.equal(policy.classifyObservation(recoveryObservation({ explicitInterruption: true, interruptionKind: 'timed-out' })).reason, 'timed-out');
+  assert.equal(policy.classifyObservation(recoveryObservation({ explicitInterruption: true, interruptionKind: 'timed-out', interruptionAttribution: 'current-request-global' })).reason, 'timed-out');
   assert.equal(policy.classifyObservation(recoveryObservation()).reason, 'timed-out');
   assert.equal(policy.classifyObservation(recoveryObservation({ documentId: 'document-2' })).reason, 'status-missing-passive');
 });
@@ -127,23 +129,35 @@ test('missing footer stays passive after the ChatGPT request settles', () => {
   assert.equal(done.formatRepairCandidate, false);
 });
 
-test('explicit transport failures reload once, then continue once if the same failure survives reload', () => {
+test('explicit transport failures reload five times with five-minute surviving spacing, then continue once', () => {
   const context = loadRecoveryPolicyAndModel();
   const model = context.ChatGPTNotifierRecoveryModel;
+  const policy = context.ChatGPTNotifierContinuationPolicy;
   const classification = { state: 'attention', reason: 'timed-out' };
-  const broken = recoveryObservation({ explicitInterruption: true, interruptionKind: 'timed-out' });
+  const broken = recoveryObservation({
+    explicitInterruption: true,
+    interruptionKind: 'timed-out',
+    interruptionAttribution: 'current-request-global'
+  });
 
-  assert.equal(model.recoveryCandidate(classification, broken, { budget: { reloads: 0, continuations: 0 } }).kind, 'reload');
-  assert.equal(model.firstEligibleAt('timed-out', 1234, 1), 31_234);
-  assert.equal(model.recoveryCandidate(classification, broken, { budget: { reloads: 1, continuations: 0 } }).kind, 'continue');
-  assert.equal(model.recoveryCandidate(classification, broken, { budget: { reloads: 1, continuations: 1 } }).kind, '');
+  assert.equal(policy.thresholds.explicitInterruptionReloadCap, 5);
+  assert.equal(policy.thresholds.explicitInterruptionRetryMs, 300_000);
+  assert.equal(policy.thresholds.silentStopReloadCap, 3);
+  assert.equal(model.firstEligibleAt('timed-out', 1234, 1), 1234);
+  for (let reloads = 0; reloads < 5; reloads += 1) {
+    assert.equal(model.recoveryCandidate(classification, broken, { reason: reloads ? model.postReloadExplicitReason : 'timed-out', budget: { reloads, continuations: 0 } }).kind, 'reload', `reload budget ${reloads}`);
+  }
+  assert.equal(model.recoveryCandidate(classification, broken, { reason: model.postReloadExplicitReason, budget: { reloads: 5, continuations: 0 } }).kind, 'continue');
+  assert.equal(model.recoveryCandidate(classification, broken, { reason: model.postReloadExplicitReason, budget: { reloads: 5, continuations: 1 } }).kind, '');
+  assert.equal(model.postReloadScheduleDelay(model.postReloadExplicitReason, { reason: model.postReloadExplicitReason, budget: { reloads: 1 } }), 300_000);
+  assert.equal(model.postReloadScheduleDelay(model.postReloadExplicitReason, { reason: model.postReloadExplicitReason, budget: { reloads: 5 } }), 30_000);
 
   const postReload = model.postReloadDecision(
-    recoveryObservation({ documentId: 'document-2', explicitInterruption: true, interruptionKind: 'timed-out' }),
+    recoveryObservation({ documentId: 'document-2', explicitInterruption: true, interruptionKind: 'timed-out', interruptionAttribution: 'current-request-global' }),
     { conversationId: 'conversation-1', promptKey: 'conversation-1|user-1', documentId: 'document-1' }
   );
   assert.equal(postReload.state, 'scheduled');
-  assert.equal(postReload.kind, 'continue');
+  assert.equal(postReload.kind, 'reload');
   assert.equal(postReload.reason, 'post-reload-explicit-interruption');
 });
 
@@ -198,7 +212,7 @@ test('tool failure coded completion is routed through the existing continuation 
   assert.equal(queued.length, 1);
 });
 
-test('compatibility repair delegates current-request UI attribution to the primary monitor', () => {
+test('compatibility repair keeps primary attribution and adds bounded global interruption fallback', () => {
   const background = readText('extension/recovery-live-fix-background.js');
   const content = readText('extension/recovery-live-fix-content.js');
   const monitor = readText('extension/monitor-script.js');
@@ -216,7 +230,11 @@ test('compatibility repair delegates current-request UI attribution to the prima
   assert.match(background, /isAutoContinueStatusCode/);
   assert.match(background, /coded-completion-status-observer/);
   assert.match(content, /inspectCurrentRequestUi/);
-  assert.doesNotMatch(content, /message delivery timed out/);
+  assert.match(content, /fallbackApplicationState/);
+  assert.match(content, /MAX_FALLBACK_NODES/);
+  assert.match(content, /current-request-global/);
+  assert.match(content, /our systems\?/);
+  assert.match(content, /EXCLUDED_FALLBACK_SELECTOR/);
   assert.match(monitor, /SEMANTIC_UI_SELECTOR/);
   assert.match(monitor, /message delivery timed out/);
   assert.match(monitor, /current-request-global/);
@@ -225,7 +243,7 @@ test('compatibility repair delegates current-request UI attribution to the prima
   assert.match(control, /recovery-live-fix-background\.js/);
 });
 
-test('quick prompt toolbar is timestamped, insert-only, runtime-attached, and isolated from recovery commands', () => {
+test('quick prompt toolbar tracks the full composer, sits below native popups, and previews the real timestamp', () => {
   const quickPrompts = readText('extension/quick-prompts-script.js');
   const attachment = readText('extension/quick-prompts-attachment-background.js');
   const background = readText('extension/background.js');
@@ -238,6 +256,14 @@ test('quick prompt toolbar is timestamped, insert-only, runtime-attached, and is
   }
   assert.match(quickPrompts, /Intl\.DateTimeFormat/);
   assert.match(quickPrompts, /timestampedPrompt/);
+  assert.match(quickPrompts, /presetTitle/);
+  assert.match(quickPrompts, /function composerAnchor\(composer\)/);
+  assert.match(quickPrompts, /composer\.closest\?\.\('form'\)/);
+  assert.match(quickPrompts, /ResizeObserver/);
+  assert.match(quickPrompts, /TOOLBAR_Z_INDEX = '40'/);
+  assert.doesNotMatch(quickPrompts, /2147483646/);
+  assert.doesNotMatch(quickPrompts, /Adds the current local timestamp/);
+  assert.match(quickPrompts, /rect\.top - height - 8/);
   assert.match(quickPrompts, /if \(!composer \|\| composerText\(composer\)\) return;/);
   assert.match(quickPrompts, /button\.type = 'button'/);
   assert.doesNotMatch(quickPrompts, /sendButton\.click\s*\(/);
@@ -258,6 +284,6 @@ test('native toast renders persisted completion time in local time and release v
   assert.match(toast, /FormatCompletedAt\(record\.CompletedAt\)/);
   assert.match(toast, /value\.ToLocalTime\(\)/);
   assert.match(toast, /local\.ToString\("t"\)/);
-  assert.equal(version, '0.9.20');
+  assert.equal(version, '0.9.21');
   assert.equal(manifest.version, version);
 });

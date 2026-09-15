@@ -1,17 +1,20 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 7;
+  const RUNTIME_VERSION = 8;
   if (globalThis.ChatGPTNotifierContinuationPolicy?.runtimeVersion === RUNTIME_VERSION) return;
 
-  const MONITOR_POLICY_VERSION = 5;
+  const MONITOR_POLICY_VERSION = 6;
   const MISSING_FOOTER_GRACE_MS = 30_000;
   const SILENT_IDLE_FIRST_MS = 90_000;
   const SILENT_IDLE_CONFIRM_MS = 30_000;
   const LONG_THINKING_DIAGNOSTIC_MS = 15 * 60_000;
   const RUN_GENERATION_ACTION_CAP = 12;
   const PROFILE_ACTION_SPACING_MS = 30_000;
-  const INCIDENT_RELOAD_CAP = 3;
+  const INCIDENT_RELOAD_HARD_CAP = 5;
+  const SILENT_STOP_RELOAD_CAP = 3;
+  const EXPLICIT_INTERRUPTION_RELOAD_CAP = 5;
+  const EXPLICIT_INTERRUPTION_RETRY_MS = 5 * 60_000;
   const AUTO_CONTINUE_STATUS_CODES = Object.freeze([
     'INCOMPLETE_LIMIT',
     'INCOMPLETE_TOOL_FAILURE',
@@ -185,7 +188,7 @@
     if (budget.breakerOpen) return { allowed: false, reason: 'profile-breaker-open', budget };
     if (budget.runGenerationActions >= RUN_GENERATION_ACTION_CAP) return { allowed: false, reason: 'run-action-cap-reached', budget };
     if (now < budget.nextProfileActionAt) return { allowed: false, reason: 'profile-action-spacing', budget };
-    if (kind === 'reload' && budget.reloads >= INCIDENT_RELOAD_CAP) return { allowed: false, reason: 'incident-reload-cap-reached', budget };
+    if (kind === 'reload' && budget.reloads >= INCIDENT_RELOAD_HARD_CAP) return { allowed: false, reason: 'incident-reload-cap-reached', budget };
     if (kind === 'continue' && budget.continuations >= 1) return { allowed: false, reason: 'incident-continuation-cap-reached', budget };
     if (kind === 'continue' && budget.automaticMessages >= 2) return { allowed: false, reason: 'incident-message-cap-reached', budget };
     if (!['reload', 'continue'].includes(kind)) return { allowed: false, reason: 'unknown-recovery-action', budget };
@@ -220,7 +223,10 @@
       longThinkingDiagnosticMs: LONG_THINKING_DIAGNOSTIC_MS,
       runGenerationActionCap: RUN_GENERATION_ACTION_CAP,
       profileActionSpacingMs: PROFILE_ACTION_SPACING_MS,
-      incidentReloadCap: INCIDENT_RELOAD_CAP
+      incidentReloadCap: INCIDENT_RELOAD_HARD_CAP,
+      silentStopReloadCap: SILENT_STOP_RELOAD_CAP,
+      explicitInterruptionReloadCap: EXPLICIT_INTERRUPTION_RELOAD_CAP,
+      explicitInterruptionRetryMs: EXPLICIT_INTERRUPTION_RETRY_MS
     }),
     identityMatches,
     userInteractionBlockReason,
