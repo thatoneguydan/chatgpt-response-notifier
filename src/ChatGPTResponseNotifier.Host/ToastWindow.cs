@@ -69,13 +69,24 @@ internal sealed class ToastWindow : Window
             TextWrapping = TextWrapping.Wrap,
             VerticalAlignment = VerticalAlignment.Center
         };
+        var completedAt = new TextBlock
+        {
+            Text = FormatCompletedAt(record.CompletedAt),
+            Margin = new Thickness(8, 0, 0, 0),
+            Foreground = new SolidColorBrush(Color.FromRgb(92, 92, 92)),
+            FontSize = 10.5,
+            VerticalAlignment = VerticalAlignment.Center
+        };
         Grid.SetColumn(title, 0);
-        Grid.SetColumn(close, 1);
+        Grid.SetColumn(completedAt, 1);
+        Grid.SetColumn(close, 2);
 
         var header = new Grid();
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
         header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+        header.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
         header.Children.Add(title);
+        header.Children.Add(completedAt);
         header.Children.Add(close);
 
         var stack = new StackPanel();
@@ -94,8 +105,8 @@ internal sealed class ToastWindow : Window
             });
         }
 
-        // Preview and completion time remain persisted in NotificationRecord for
-        // popup history and a possible future toast layout, but are not rendered.
+        // Preview remains persisted in NotificationRecord for popup history and
+        // future toast layouts, but is intentionally not rendered here.
         var border = new Border
         {
             Margin = new Thickness(6),
@@ -121,6 +132,14 @@ internal sealed class ToastWindow : Window
             ToastClicked?.Invoke(this, EventArgs.Empty);
         };
         return border;
+    }
+
+    private static string FormatCompletedAt(DateTimeOffset value)
+    {
+        var local = value.ToLocalTime();
+        return local.Date == DateTimeOffset.Now.Date
+            ? local.ToString("t")
+            : local.ToString("MMM d, t");
     }
 
     private static T? FindAncestor<T>(DependencyObject? node) where T : DependencyObject

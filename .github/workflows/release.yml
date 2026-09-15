@@ -32,6 +32,7 @@ jobs:
             '.\extension\coordinator-background.js',
             '.\extension\service-worker.js',
             '.\extension\content-script.js',
+            '.\extension\quick-prompts-script.js',
             '.\extension\persistence-script.js',
             '.\extension\status-code.js',
             '.\extension\status-policy.js',
@@ -46,6 +47,7 @@ jobs:
             '.\extension\recovery-control-background.js',
             '.\extension\bounded-recovery-background.js',
             '.\extension\bounded-recovery-attachment-background.js',
+            '.\extension\quick-prompts-attachment-background.js',
             '.\extension\bounded-recovery-script.js',
             '.\extension\normal-continuation-budget-hook.js',
             '.\extension\popup.js'
@@ -59,7 +61,8 @@ jobs:
             .\tests\extension\coordinator.behavior.test.mjs `
             .\tests\extension\status-policy.behavior.test.mjs `
             .\tests\extension\automation-control.behavior.test.mjs `
-            .\tests\extension\bounded-recovery.behavior.test.mjs
+            .\tests\extension\bounded-recovery.behavior.test.mjs `
+            .\tests\extension\version-sync.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Extension architecture/behavior tests failed.' }
 
           $manifest = Get-Content -LiteralPath .\extension\manifest.json -Raw | ConvertFrom-Json
@@ -160,7 +163,7 @@ jobs:
             gh release create $tag $managedZip $setupExe `
               --target $sourceCommit `
               --title "ChatGPT Response Notifier $version" `
-              --notes "Adds unified build automation for recognized GitHub work chats: monitoring and bounded recovery enable together, explicit persistent Pause/Resume, early build-scope recognition, quiet tab closure, durable incident/run budgets, one exact-tab background reload, guarded continuation or footer-format repair, a whole-run 12-generation fuse, and rate-limit/uncertainty circuit breakers. Existing coded completion history and INCOMPLETE_LIMIT continuation remain supported. No ChatGPT API polling or authentication access is added."
+              --notes "Adds local completion timestamps to native notifier toasts and an isolated timestamped quick-prompt toolbar beside the ChatGPT composer. Quick prompts insert Continue, Status, Checkpoint, or Handoff text without auto-sending, overwriting drafts, or entering recovery/action-budget paths. Existing notification delivery, coded history, monitoring, and bounded recovery behavior remain unchanged."
             if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
           }
           else {
