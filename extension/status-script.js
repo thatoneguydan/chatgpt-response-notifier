@@ -1,9 +1,9 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 5;
+  const RUNTIME_VERSION = 6;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
-  const AUTO_CONTINUE_TEXT = 'continue until you finish or need something from me';
+  const AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me.';
   const DEFAULT_WAIT_MS = 30000;
   const READY_WAIT_MS = 5000;
   const USER_TURN_WAIT_MS = 3500;
@@ -16,6 +16,23 @@
 
   const inline = (value) => String(value || '').replace(/\s+/g, ' ').trim();
   const cleanComposer = (value) => inline(String(value || '').replace(/[\u200B-\u200D\uFEFF]/g, ''));
+
+  function formatPromptTimestamp(date = new Date()) {
+    try {
+      return new Intl.DateTimeFormat(undefined, {
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit'
+      }).format(date);
+    } catch {
+      return date.toLocaleString();
+    }
+  }
+
+  function timestampedContinueText(date = new Date()) {
+    return `[${formatPromptTimestamp(date)}] ${AUTO_CONTINUE_PROMPT}`;
+  }
 
   function conversationIdentity() {
     try {
@@ -256,12 +273,12 @@
     }
     return '';
   }
-  function matchingContinuationUserTurn(previousKey) {
+  function matchingContinuationUserTurn(previousKey, expectedText) {
     const user = latestUserSnapshot();
-    return user && user.key !== previousKey && user.conversationId === conversationIdentity()?.id && cleanComposer(user.text) === AUTO_CONTINUE_TEXT ? user : null;
+    return user && user.key !== previousKey && user.conversationId === conversationIdentity()?.id && cleanComposer(user.text) === cleanComposer(expectedText) ? user : null;
   }
-  async function waitForContinuationUserTurn(previousKey) {
-    const result = await waitUntil(() => visibleSendError() || matchingContinuationUserTurn(previousKey), observerRoot(), USER_TURN_WAIT_MS);
+  async function waitForContinuationUserTurn(previousKey, expectedText) {
+    const result = await waitUntil(() => visibleSendError() || matchingContinuationUserTurn(previousKey, expectedText), observerRoot(), USER_TURN_WAIT_MS);
     if (typeof result === 'string') return { userTurn: null, errorText: result };
     return { userTurn: result || null, errorText: visibleSendError() };
   }
@@ -273,16 +290,17 @@
     const initialBlock = activeUserBlockReason(composer);
     if (initialBlock) return { ok: false, clicked: false, reason: initialBlock, documentId };
     if (stopPresent()) return { ok: false, clicked: false, reason: 'response-still-generating', documentId };
+    const text = timestampedContinueText();
     const previousUserKey = latestUserSnapshot()?.key || '';
-    if (!writeComposer(composer, AUTO_CONTINUE_TEXT)) return { ok: false, clicked: false, reason: 'composer-write-failed', documentId };
+    if (!writeComposer(composer, text)) return { ok: false, clicked: false, reason: 'composer-write-failed', documentId };
     const sendButton = await waitForSendButton(composer);
-    if (!sendButton) { if (composerText(composer) === AUTO_CONTINUE_TEXT) writeComposer(composer, ''); return { ok: false, clicked: false, reason: 'send-button-not-ready', documentId }; }
-    if (!matchesExpected(latestAssistantSnapshot(), expected) || stopPresent()) { if (composerText(composer) === AUTO_CONTINUE_TEXT) writeComposer(composer, ''); return { ok: false, clicked: false, reason: 'response-changed-before-send', documentId }; }
-    if (composerText(composer) !== AUTO_CONTINUE_TEXT) return { ok: false, clicked: false, reason: 'composer-changed-before-send', documentId };
+    if (!sendButton) { if (composerText(composer) === cleanComposer(text)) writeComposer(composer, ''); return { ok: false, clicked: false, reason: 'send-button-not-ready', documentId }; }
+    if (!matchesExpected(latestAssistantSnapshot(), expected) || stopPresent()) { if (composerText(composer) === cleanComposer(text)) writeComposer(composer, ''); return { ok: false, clicked: false, reason: 'response-changed-before-send', documentId }; }
+    if (composerText(composer) !== cleanComposer(text)) return { ok: false, clicked: false, reason: 'composer-changed-before-send', documentId };
     const beforeSendBlock = activeUserBlockReason(composer);
     if (beforeSendBlock && beforeSendBlock !== 'composer-not-empty') { writeComposer(composer, ''); return { ok: false, clicked: false, reason: `${beforeSendBlock}-before-send`, documentId }; }
-    try { sendButton.click(); } catch { if (composerText(composer) === AUTO_CONTINUE_TEXT) writeComposer(composer, ''); return { ok: false, clicked: false, reason: 'send-click-failed', documentId }; }
-    const observed = await waitForContinuationUserTurn(previousUserKey);
+    try { sendButton.click(); } catch { if (composerText(composer) === cleanComposer(text)) writeComposer(composer, ''); return { ok: false, clicked: false, reason: 'send-click-failed', documentId }; }
+    const observed = await waitForContinuationUserTurn(previousUserKey, text);
     if (observed.errorText) return { ok: false, clicked: true, reason: 'page-send-error', pageError: observed.errorText, documentId };
     if (!observed.userTurn) return { ok: false, clicked: true, reason: 'continuation-user-turn-not-confirmed', documentId };
     return { ok: true, clicked: true, reason: 'continuation-user-turn-confirmed', documentId, continuationUserKey: observed.userTurn.key };
@@ -326,7 +344,12 @@
 
   chrome.runtime.onMessage.addListener(messageListener);
   const runtime = {
-    version: RUNTIME_VERSION, documentId, latestAssistantSnapshot, waitForTerminalStatus, performContinuation,
+    version: RUNTIME_VERSION,
+    documentId,
+    latestAssistantSnapshot,
+    waitForTerminalStatus,
+    performContinuation,
+    timestampedContinueText,
     dispose() {
       try { abortController.abort(); } catch {}
       try { chrome.runtime.onMessage.removeListener(messageListener); } catch {}
@@ -334,6 +357,6 @@
     }
   };
   globalThis.__chatgptNotifierStatusRuntime = runtime;
-  globalThis.__chatgptNotifierStatusDom = Object.freeze({ latestAssistantSnapshot, waitForTerminalStatus, performContinuation });
+  globalThis.__chatgptNotifierStatusDom = Object.freeze({ latestAssistantSnapshot, waitForTerminalStatus, performContinuation, timestampedContinueText });
   globalThis.__chatgptNotifierStatusDomInstalled = true;
 })();
