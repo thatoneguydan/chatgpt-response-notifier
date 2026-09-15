@@ -1,9 +1,9 @@
 'use strict';
 
 (() => {
-  if (globalThis.ChatGPTNotifierRecoveryModel?.version === 2) return;
+  if (globalThis.ChatGPTNotifierRecoveryModel?.version === 3) return;
 
-  const VERSION = 2;
+  const VERSION = 3;
   const ACTION_KINDS = Object.freeze(['reload', 'continue', 'normal-continue']);
   const ACTION_KIND_SET = new Set(ACTION_KINDS);
   const FIRST_INCIDENT_BACKOFF_MS = 30_000;
@@ -68,8 +68,9 @@
     if (observation.rateLimited === true) return 'rate-limited';
     if (observation.hasDraft === true) return 'draft-present';
     if (observation.hasUpload === true) return 'upload-present';
-    if (observation.stopGenerating === true) return 'generation-active';
-    if (observation.toolActivity === true) return 'tool-activity';
+    const verifiedInterruption = globalThis.ChatGPTNotifierContinuationPolicy?.isCurrentExplicitInterruption?.(observation) === true;
+    if (!verifiedInterruption && observation.stopGenerating === true) return 'generation-active';
+    if (!verifiedInterruption && observation.toolActivity === true) return 'tool-activity';
     return '';
   }
 
