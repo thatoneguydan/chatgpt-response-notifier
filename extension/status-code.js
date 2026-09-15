@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
 
   // Existing ChatGPT tabs can keep this isolated-world global across an
   // extension runtime reload. A versioned parser lets reinjection replace a
@@ -15,11 +15,16 @@
     globalThis.__chatgptNotifierStatusDomInstalled = false;
   }
 
-  // This list and the START signal are checked against the generated grammar
-  // fixture bundled with the extension. Canonical meanings remain in
-  // DevelopmentInfrastructure.
-  const CONTRACT_ID = 'github-work-status/v1';
-  const CONTRACT_SEMANTIC_SHA256 = '9c60a07bc26b639c15a6456b08707c2e92fa06fe98baa21b6b731b3f9dda4cd1';
+  // These values are checked against the generated grammar fixtures bundled
+  // with the extension. Canonical meanings remain in DevelopmentInfrastructure.
+  // v2 is a strict additive superset of v1 so a v2 consumer remains compatible
+  // with v1 producers during the consumer-first rollout.
+  const CONTRACT_ID = 'github-work-status/v2';
+  const CONTRACT_SEMANTIC_SHA256 = 'a2570315b911add3c57231f08b84214daa56750f9c93fd76c5d8b459d28c3efb';
+  const SUPPORTED_CONTRACTS = Object.freeze({
+    'github-work-status/v1': '9c60a07bc26b639c15a6456b08707c2e92fa06fe98baa21b6b731b3f9dda4cd1',
+    'github-work-status/v2': CONTRACT_SEMANTIC_SHA256
+  });
   const WORK_START_SIGNAL = '[GITHUB_WORK: START]';
   const VALID_STATUS_CODES = Object.freeze([
     'PLANNING_ACTIVE',
@@ -28,6 +33,7 @@
     'BLOCKED_HUMAN',
     'INCOMPLETE_LIMIT',
     'INCOMPLETE_TOOL_FAILURE',
+    'INCOMPLETE_CONTINUE',
     'INCOMPLETE_HANDOFF'
   ]);
   const VALID_STATUS_CODE_SET = new Set(VALID_STATUS_CODES);
@@ -45,6 +51,11 @@
 
   function isWorkStartSignal(value) {
     return WORK_START_LINE_PATTERN.test(String(value || ''));
+  }
+
+  function supportsContract(contractId, semanticSha256 = '') {
+    const expected = SUPPORTED_CONTRACTS[String(contractId || '')];
+    return Boolean(expected && (!semanticSha256 || expected === String(semanticSha256 || '')));
   }
 
   function outsideFenceFlags(lines) {
@@ -102,10 +113,12 @@
     runtimeVersion: RUNTIME_VERSION,
     contractId: CONTRACT_ID,
     contractSemanticSha256: CONTRACT_SEMANTIC_SHA256,
+    supportedContracts: SUPPORTED_CONTRACTS,
     workStartSignal: WORK_START_SIGNAL,
     validStatusCodes: VALID_STATUS_CODES,
     isStatusCode,
     isWorkStartSignal,
+    supportsContract,
     parseTerminalStatus
   });
 })();
