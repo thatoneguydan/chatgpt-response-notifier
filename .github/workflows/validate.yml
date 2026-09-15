@@ -68,6 +68,9 @@ jobs:
             '.\extension\bounded-recovery-attachment-background.js',
             '.\extension\bounded-recovery-script.js',
             '.\extension\normal-continuation-budget-hook.js',
+            '.\extension\response-stream-status-main.js',
+            '.\extension\response-stream-status-bridge.js',
+            '.\extension\response-stream-status-background.js',
             '.\extension\popup.js'
           )) {
             node --check $script

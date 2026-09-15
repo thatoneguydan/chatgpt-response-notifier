@@ -52,6 +52,9 @@ jobs:
             '.\extension\quick-prompts-attachment-background.js',
             '.\extension\bounded-recovery-script.js',
             '.\extension\normal-continuation-budget-hook.js',
+            '.\extension\response-stream-status-main.js',
+            '.\extension\response-stream-status-bridge.js',
+            '.\extension\response-stream-status-background.js',
             '.\extension\popup.js'
           )) {
             node --check $script
@@ -92,14 +95,14 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'VERSION.txt is empty.' }
           $tag = "v$version"
           $releaseNotes = @(
-            'Fixes coded notifier delivery when a ChatGPT Chrome window is occluded on another Windows virtual desktop.',
+            'Fixes coded notifications when ChatGPT defers final DOM rendering in an occluded Chrome window.',
             '',
-            '- Live diagnostics proved the response request completed while the tab was neither frozen nor discarded, but coded delivery waited until the Chrome window became visible again.',
-            '- Successful conversation-request completion now directly probes the exact Chrome document for its terminal status instead of waiting for the page-side 200 ms monitor publish timer.',
-            '- The probe reuses the existing status MutationObserver and exact conversation/document/turn identity checks, then hands the result to the existing durable delivery and bounded-continuation pipeline.',
-            '- Missing Chrome document identity, frozen/discarded tabs, incomplete terminal identity, and unavailable runtimes all fail safe to the existing observer path.',
-            '- Adds deterministic regression coverage for exact-document routing and the unavailable-page guards.',
-            '- Adds no ChatGPT API/session polling, response replay, foregrounding, Regenerate action, or new browser permission.'
+            '- Live v0.9.25 evidence proved the extension and exact-document probe remained runnable on another Windows virtual desktop, while ChatGPT did not paint the terminal status into the DOM until the window became visible.',
+            '- A document-start MAIN-world observer now passively tees the conversation response stream ChatGPT already initiated and retains only a short rolling tail while looking for the existing terminal status grammar.',
+            '- Only the validated status token crosses into the isolated extension world; raw prompt/assistant response content is not persisted or included in diagnostics.',
+            '- Exact tab/document/request context plus existing build enrollment gates the early durable notification, and later DOM delivery for the same prompt is suppressed as a duplicate.',
+            '- Automatic Continue remains on the existing DOM-verified identity and safety path; stream evidence cannot authorize a continuation.',
+            '- Existing open ChatGPT tabs receive the observer on extension startup/update without refresh. No ChatGPT API/session polling, replay, debugger attachment, new permission, Regenerate action, refresh loop, or automatic foregrounding is added.'
           ) -join [Environment]::NewLine
           $artifactRoot = Join-Path $env:RUNNER_TEMP "chatgpt-response-notifier-release-$version"
           Remove-Item -LiteralPath $artifactRoot -Recurse -Force -ErrorAction SilentlyContinue
