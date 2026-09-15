@@ -6,6 +6,7 @@
 
   const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
   const FINAL_TURN_WAIT_MS = 30000;
+  const ANSWER_CHECK_THROTTLE_MS = 150;
   let watchToken = 0;
   let lastSentFingerprint = '';
   let suppressUntilEpoch = 0;
@@ -128,29 +129,79 @@
       let settled = false;
       let observer = null;
       let timeoutId = null;
+      let throttleId = null;
+      let frameId = null;
+      let lastCheckAt = 0;
+
+      const cleanupScheduledCheck = () => {
+        if (throttleId !== null) {
+          clearTimeout(throttleId);
+          throttleId = null;
+        }
+        if (frameId !== null && typeof cancelAnimationFrame === 'function') {
+          cancelAnimationFrame(frameId);
+          frameId = null;
+        }
+      };
 
       const finish = (text) => {
         if (settled) return;
         settled = true;
         if (observer) observer.disconnect();
         if (timeoutId !== null) clearTimeout(timeoutId);
+        cleanupScheduledCheck();
+        document.removeEventListener('visibilitychange', rescueHiddenCheck, true);
         resolve(text);
       };
 
       const check = () => {
         if (settled) return;
+        lastCheckAt = performance.now();
         const text = answerBoundToLatestPrompt();
         if (text) finish(text);
       };
 
+      const rescueHiddenCheck = () => {
+        if (settled || document.visibilityState !== 'hidden') return;
+        if (throttleId !== null) {
+          clearTimeout(throttleId);
+          throttleId = null;
+        }
+        if (frameId !== null) {
+          if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frameId);
+          frameId = null;
+        }
+        check();
+      };
+
+      const scheduleCheck = () => {
+        if (settled) return;
+        if (document.visibilityState === 'hidden') {
+          rescueHiddenCheck();
+          return;
+        }
+        if (throttleId !== null || frameId !== null) return;
+        const elapsed = performance.now() - lastCheckAt;
+        const delay = Math.max(0, ANSWER_CHECK_THROTTLE_MS - elapsed);
+        throttleId = setTimeout(() => {
+          throttleId = null;
+          const run = () => {
+            frameId = null;
+            check();
+          };
+          if (document.visibilityState === 'hidden' || typeof requestAnimationFrame !== 'function') {
+            run();
+          } else {
+            frameId = requestAnimationFrame(run);
+          }
+        }, delay);
+      };
+
+      document.addEventListener('visibilitychange', rescueHiddenCheck, true);
+
       const root = conversationObserverRoot();
       if (root && typeof MutationObserver === 'function') {
-        // Completion is data observation, not visual work. Run directly from
-        // MutationObserver instead of gating on timers or animation frames.
-        // Chrome marks windows on other Windows virtual desktops as occluded;
-        // requestAnimationFrame can then wait until that desktop is shown even
-        // though the conversation request and DOM mutation already completed.
-        observer = new MutationObserver(check);
+        observer = new MutationObserver(scheduleCheck);
         observer.observe(root, { childList: true, subtree: true, characterData: true });
       }
 
