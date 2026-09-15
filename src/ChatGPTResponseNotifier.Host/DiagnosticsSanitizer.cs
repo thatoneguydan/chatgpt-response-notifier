@@ -67,6 +67,90 @@ internal static class DiagnosticsSanitizer
         };
     }
 
+    private static object SafeIncidentTransition(JsonElement transition)
+    {
+        return new
+        {
+            sequence = IntegerValue(transition, "sequence"),
+            stage = StringValue(transition, "stage", 64),
+            observedAt = IntegerValue(transition, "observedAt"),
+            originObservedAt = IntegerValue(transition, "originObservedAt"),
+            workerReceivedAt = IntegerValue(transition, "workerReceivedAt"),
+            elapsedMs = IntegerValue(transition, "elapsedMs"),
+            snapshotAgeMs = IntegerValue(transition, "snapshotAgeMs"),
+            contextAgeMs = IntegerValue(transition, "contextAgeMs"),
+            reason = StringValue(transition, "reason", 64),
+            transport = StringValue(transition, "transport", 16),
+            streamNonceSuffix = StringValue(transition, "streamNonceSuffix", 8),
+            mappingConfidence = StringValue(transition, "mappingConfidence", 48),
+            httpStatus = IntegerValue(transition, "httpStatus"),
+            mediaTypeClass = StringValue(transition, "mediaTypeClass", 24),
+            protocolShape = StringValue(transition, "protocolShape", 24),
+            byteCount = IntegerValue(transition, "byteCount"),
+            chunkCount = IntegerValue(transition, "chunkCount"),
+            frameCount = IntegerValue(transition, "frameCount"),
+            dataFrameCount = IntegerValue(transition, "dataFrameCount"),
+            jsonFrameCount = IntegerValue(transition, "jsonFrameCount"),
+            doneFrameCount = IntegerValue(transition, "doneFrameCount"),
+            oversizedFrameCount = IntegerValue(transition, "oversizedFrameCount"),
+            rawTokenCount = IntegerValue(transition, "rawTokenCount"),
+            decodedCandidateCount = IntegerValue(transition, "decodedCandidateCount"),
+            responseStartMs = IntegerValue(transition, "responseStartMs"),
+            firstByteMs = IntegerValue(transition, "firstByteMs"),
+            eofMs = IntegerValue(transition, "eofMs"),
+            semanticFinalEligible = BooleanValue(transition, "semanticFinalEligible"),
+            semanticRejectionReason = StringValue(transition, "semanticRejectionReason", 48),
+            visibility = StringValue(transition, "visibility", 16),
+            pageHasFocus = BooleanValue(transition, "pageHasFocus"),
+            pageFrozen = BooleanValue(transition, "pageFrozen"),
+            tabActive = BooleanValue(transition, "tabActive"),
+            tabFrozen = BooleanValue(transition, "tabFrozen"),
+            tabDiscarded = BooleanValue(transition, "tabDiscarded"),
+            windowFocused = BooleanValue(transition, "windowFocused"),
+            windowState = StringValue(transition, "windowState", 16),
+            count = IntegerValue(transition, "count")
+        };
+    }
+
+    private static object? HiddenWindowIncident(JsonElement root)
+    {
+        if (!root.TryGetProperty("incident", out var incident) || incident.ValueKind != JsonValueKind.Object) return null;
+        var transitions = new List<object>();
+        if (incident.TryGetProperty("transitions", out var nodes) && nodes.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var transition in nodes.EnumerateArray().TakeLast(48))
+            {
+                if (transition.ValueKind == JsonValueKind.Object) transitions.Add(SafeIncidentTransition(transition));
+            }
+        }
+
+        return new
+        {
+            schemaVersion = IntegerValue(incident, "schemaVersion"),
+            incidentId = StringValue(incident, "incidentId", 80),
+            kind = StringValue(incident, "kind", 32),
+            workerInstanceSuffix = StringValue(incident, "workerInstanceSuffix", 8),
+            tabId = IntegerValue(incident, "tabId"),
+            chromeDocumentSuffix = StringValue(incident, "chromeDocumentSuffix", 8),
+            requestSuffix = StringValue(incident, "requestSuffix", 8),
+            startedAt = IntegerValue(incident, "startedAt"),
+            settledAt = IntegerValue(incident, "settledAt"),
+            streamFinalAt = IntegerValue(incident, "streamFinalAt"),
+            routeClass = StringValue(incident, "routeClass", 24),
+            httpStatus = IntegerValue(incident, "httpStatus"),
+            requestOutcome = StringValue(incident, "requestOutcome", 24),
+            captureResult = StringValue(incident, "captureResult", 48),
+            mappingConfidence = StringValue(incident, "mappingConfidence", 48),
+            mappingCandidateCount = IntegerValue(incident, "mappingCandidateCount"),
+            traceState = StringValue(incident, "traceState", 32),
+            firstUnresolvedBoundary = StringValue(incident, "firstUnresolvedBoundary", 64),
+            droppedTransitions = IntegerValue(incident, "droppedTransitions"),
+            coalescedTransitions = IntegerValue(incident, "coalescedTransitions"),
+            retentionEvictedIncidents = IntegerValue(incident, "retentionEvictedIncidents"),
+            transitions
+        };
+    }
+
     public static JsonElement Event(JsonElement input)
     {
         var safe = new
@@ -83,6 +167,7 @@ internal static class DiagnosticsSanitizer
             queuedMessages = IntegerValue(input, "queuedMessages"),
             watchCount = IntegerValue(input, "watchCount"),
             requestContextCount = IntegerValue(input, "requestContextCount"),
+            eventSequence = IntegerValue(input, "eventSequence"),
             frozen = BooleanValue(input, "frozen"),
             discarded = BooleanValue(input, "discarded"),
             deliveredNow = BooleanValue(input, "deliveredNow"),
@@ -95,11 +180,14 @@ internal static class DiagnosticsSanitizer
             conversationSuffix = StringValue(input, "conversationSuffix", 8),
             notificationSuffix = StringValue(input, "notificationSuffix", 8),
             chromeDocumentSuffix = StringValue(input, "chromeDocumentSuffix", 8),
+            requestSuffix = StringValue(input, "requestSuffix", 8),
+            workerInstanceSuffix = StringValue(input, "workerInstanceSuffix", 8),
             statusRuntimeSuffix = StringValue(input, "statusRuntimeSuffix", 8),
             monitorRuntimeSuffix = StringValue(input, "monitorRuntimeSuffix", 8),
             workStatusContractId = StringValue(input, "workStatusContractId", 64),
             workStatusContractSemanticSha256 = StringValue(input, "workStatusContractSemanticSha256", 64),
             workStatusCompatibility = StringValue(input, "workStatusCompatibility", 320),
+            incident = HiddenWindowIncident(input),
             terminalState = TerminalState(input)
         };
         return JsonSerializer.SerializeToElement(safe, JsonOptions.Default);
