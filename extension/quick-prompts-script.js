@@ -1,8 +1,9 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   const TOOLBAR_ID = 'chatgpt-notifier-quick-prompts';
+  const TOOLBAR_Z_INDEX = '40';
   const PRESETS = Object.freeze([
     Object.freeze({
       id: 'continue',
@@ -32,6 +33,9 @@
   let toolbar = null;
   let clock = null;
   let observer = null;
+  let resizeObserver = null;
+  let observedComposer = null;
+  let observedAnchor = null;
   let frameId = null;
   let frameUsesAnimation = false;
   let clockTimer = null;
@@ -50,6 +54,19 @@
       if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement || node.isContentEditable) return node;
     }
     return null;
+  }
+
+  function composerAnchor(composer) {
+    if (!composer) return null;
+    try {
+      return composer.closest?.('form') ||
+        composer.closest?.('[data-type="unified-composer"]') ||
+        composer.closest?.('[data-testid*="composer" i]') ||
+        composer.parentElement ||
+        composer;
+    } catch {
+      return composer;
+    }
   }
 
   function composerText(node) {
@@ -94,16 +111,6 @@
     }
   }
 
-  function sendButtonFor(composer) {
-    const root = composer?.closest?.('form') || document;
-    for (const selector of ['button[data-testid="send-button"]', 'button[aria-label="Send prompt"]', 'button[aria-label="Send message"]', 'button[aria-label="Send"]']) {
-      let button = null;
-      try { button = root.querySelector(selector) || (root !== document ? document.querySelector(selector) : null); } catch {}
-      if (button) return button;
-    }
-    return null;
-  }
-
   function formatPromptTimestamp(date = new Date()) {
     try {
       return new Intl.DateTimeFormat(undefined, {
@@ -128,8 +135,12 @@
     }
   }
 
-  function timestampedPrompt(prompt) {
-    return `[${formatPromptTimestamp()}] ${String(prompt || '').trim()}`;
+  function timestampedPrompt(prompt, date = new Date()) {
+    return `[${formatPromptTimestamp(date)}] ${String(prompt || '').trim()}`;
+  }
+
+  function presetTitle(preset, date = new Date()) {
+    return timestampedPrompt(preset?.prompt || 'Preset prompt', date);
   }
 
   function visible(node) {
@@ -146,6 +157,7 @@
     const root = document.createElement('div');
     root.id = TOOLBAR_ID;
     root.dataset.chatgptNotifierOwned = 'quick-prompts';
+    root.dataset.notifierLayer = 'composer-adjacent';
     root.setAttribute('role', 'toolbar');
     root.setAttribute('aria-label', 'Notifier quick prompts');
     Object.assign(root.style, {
@@ -159,7 +171,7 @@
       background: 'var(--main-surface-primary, #fff)',
       color: 'var(--text-primary, #111)',
       boxShadow: '0 4px 18px rgba(0,0,0,.14)',
-      zIndex: '2147483646',
+      zIndex: TOOLBAR_Z_INDEX,
       fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif',
       fontSize: '11px',
       lineHeight: '1',
@@ -171,7 +183,7 @@
       button.type = 'button';
       button.dataset.notifierPreset = preset.id;
       button.textContent = preset.label;
-      button.title = `${preset.prompt} Adds the current local timestamp.`;
+      button.title = presetTitle(preset);
       Object.assign(button.style, {
         border: '1px solid var(--border-light, rgba(127,127,127,.25))',
         borderRadius: '6px',
@@ -196,7 +208,7 @@
 
     const time = document.createElement('span');
     time.dataset.notifierPromptClock = 'true';
-    time.title = 'Local time used by quick prompts';
+    time.title = 'Current local time';
     Object.assign(time.style, {
       marginLeft: '2px',
       padding: '0 3px',
@@ -211,7 +223,7 @@
     return root;
   }
 
-  function updateAvailability(composer) {
+  function updateAvailability(composer, now = new Date()) {
     const hasDraft = Boolean(composer && composerText(composer));
     for (const button of buttons) {
       button.disabled = !composer || hasDraft;
@@ -220,23 +232,42 @@
       if (hasDraft) button.title = 'Clear the current draft before inserting a preset prompt.';
       else {
         const preset = PRESETS.find((item) => item.id === button.dataset.notifierPreset);
-        button.title = `${preset?.prompt || 'Preset prompt'} Adds the current local timestamp.`;
+        button.title = presetTitle(preset, now);
       }
+    }
+  }
+
+  function observeGeometry(composer, anchor) {
+    if (typeof ResizeObserver !== 'function') return;
+    if (!resizeObserver) resizeObserver = new ResizeObserver(scheduleSync);
+
+    if (observedComposer !== composer) {
+      try { if (observedComposer) resizeObserver.unobserve(observedComposer); } catch {}
+      observedComposer = composer || null;
+      try { if (observedComposer) resizeObserver.observe(observedComposer); } catch {}
+    }
+
+    if (observedAnchor !== anchor) {
+      try { if (observedAnchor && observedAnchor !== observedComposer) resizeObserver.unobserve(observedAnchor); } catch {}
+      observedAnchor = anchor || null;
+      try { if (observedAnchor && observedAnchor !== observedComposer) resizeObserver.observe(observedAnchor); } catch {}
     }
   }
 
   function syncToolbar() {
     frameId = null;
     const composer = composerElement();
-    const anchor = composer ? (sendButtonFor(composer) || composer) : null;
+    const anchor = composerAnchor(composer);
     const root = toolbar || buildToolbar();
+    observeGeometry(composer, anchor);
     if (!composer || !anchor || !visible(anchor)) {
       root.style.display = 'none';
       return;
     }
 
-    updateAvailability(composer);
-    if (clock) clock.textContent = formatClock();
+    const now = new Date();
+    updateAvailability(composer, now);
+    if (clock) clock.textContent = formatClock(now);
 
     root.style.display = 'flex';
     root.style.visibility = 'hidden';
@@ -244,10 +275,9 @@
     const width = root.offsetWidth;
     const height = root.offsetHeight;
     const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width));
-    let top = rect.top - height - 8;
-    if (top < 8) top = Math.min(window.innerHeight - height - 8, rect.bottom + 8);
+    const top = Math.max(8, rect.top - height - 8);
     root.style.left = `${Math.round(left)}px`;
-    root.style.top = `${Math.round(Math.max(8, top))}px`;
+    root.style.top = `${Math.round(top)}px`;
     root.style.visibility = 'visible';
   }
 
@@ -275,6 +305,9 @@
     dispose() {
       try { abortController.abort(); } catch {}
       try { observer?.disconnect(); } catch {}
+      try { resizeObserver?.disconnect(); } catch {}
+      observedComposer = null;
+      observedAnchor = null;
       try {
         if (frameId !== null) {
           if (frameUsesAnimation && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frameId);
