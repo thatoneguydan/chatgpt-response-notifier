@@ -137,6 +137,17 @@
     return policyThreshold('profileActionSpacingMs', PROFILE_ACTION_SPACING_MS);
   }
 
+  function recoveryActionSpacingMs(kind, incidentValue = {}) {
+    const incident = normalizeIncident(incidentValue);
+    const reason = String(incident.reason || '');
+    const explicitReloadCap = Math.max(1, policyThreshold('explicitInterruptionReloadCap', EXPLICIT_INTERRUPTION_RELOAD_CAP));
+    const explicitReload = kind === 'reload' && (EXPLICIT_RELOAD_REASONS.has(reason) || reason === POST_RELOAD_EXPLICIT_REASON);
+    if (explicitReload && Number(incident.budget.reloads || 0) < explicitReloadCap) {
+      return policyThreshold('explicitInterruptionRetryMs', EXPLICIT_INTERRUPTION_RETRY_MS);
+    }
+    return policyThreshold('profileActionSpacingMs', PROFILE_ACTION_SPACING_MS);
+  }
+
   function selectEarliestDeadline(incidents = [], now = Date.now()) {
     const active = incidents
       .map(normalizeIncident)
@@ -210,7 +221,7 @@
 
     humanRun.updatedAt = now;
     profile.activeLease = { leaseId, kind, humanRunId: humanRun.humanRunId, incidentId: incident.incidentId || '', claimedAt: now };
-    profile.nextProfileActionAt = now + PROFILE_ACTION_SPACING_MS;
+    profile.nextProfileActionAt = now + recoveryActionSpacingMs(kind, incident);
     profile.updatedAt = now;
     return { allowed: true, reason: decision.reason, leaseId, humanRun, incident, profile };
   }
@@ -282,6 +293,7 @@
     recoveryCandidate,
     firstEligibleAt,
     postReloadScheduleDelay,
+    recoveryActionSpacingMs,
     selectEarliestDeadline,
     admissionDecision,
     claimAction,
