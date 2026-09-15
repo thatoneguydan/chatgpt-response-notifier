@@ -176,7 +176,7 @@ test('isolated bridge validates status grammar and forwards no response content'
   });
   await settle();
 
-  assert.deepEqual(sent, [{
+  assert.deepEqual(JSON.parse(JSON.stringify(sent)), [{
     type: 'CHATGPT_RESPONSE_STREAM_TERMINAL_STATUS',
     statusCode: 'COMPLETE_NO_CHANGES',
     transport: 'fetch'
