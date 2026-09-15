@@ -21,14 +21,21 @@
           .sort()
           .join(';')
       : '';
+    const v1 = String(api?.supportedContracts?.['github-work-status/v1'] || '');
+    const v2 = String(api?.supportedContracts?.['github-work-status/v2'] || '');
+    const evidenceReason = v1 && v2
+      ? `work-status:active=v2;v1=${v1};v2=${v2}`
+      : 'work-status:capability-unavailable';
     return {
       workStatusContractId: String(api?.contractId || ''),
       workStatusContractSemanticSha256: String(api?.contractSemanticSha256 || ''),
-      workStatusCompatibility: supported
+      workStatusCompatibility: supported,
+      evidenceReason
     };
   }
 
   function publish(status = 'worker-alive') {
+    const capability = workStatusCapability();
     const diagnostic = {
       source: 'extension-runtime',
       status: String(status || 'worker-alive'),
@@ -36,7 +43,10 @@
       extensionVersion,
       correlationId: runtimeId,
       captureSource: CAPABILITY,
-      ...workStatusCapability()
+      reason: capability.evidenceReason,
+      workStatusContractId: capability.workStatusContractId,
+      workStatusContractSemanticSha256: capability.workStatusContractSemanticSha256,
+      workStatusCompatibility: capability.workStatusCompatibility
     };
     try {
       if (typeof sendNative === 'function') return sendNative({ type: 'diagnostics.event', diagnostic });
