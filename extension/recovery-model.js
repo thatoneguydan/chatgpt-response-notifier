@@ -260,6 +260,10 @@
     if (!observation.promptKey || observation.promptKey !== expected.promptKey) return { kind: '', state: 'attention', reason: 'prompt-identity-changed-after-reload' };
     if (expected.documentId && observation.documentId === expected.documentId) return { kind: '', state: 'attention', reason: 'document-did-not-change-after-reload' };
     if (observation.statusCode) return { kind: '', state: 'resolved', reason: `coded:${observation.statusCode}` };
+    const verifiedInterruption = globalThis.ChatGPTNotifierContinuationPolicy?.isCurrentExplicitInterruption?.(observation) === true;
+    if (!verifiedInterruption && (observation.stopGenerating === true || observation.toolActivity === true)) {
+      return { kind: '', state: 'observing', reason: 'work-resumed-after-reload' };
+    }
     const veto = observationVeto(observation);
     if (veto) return { kind: '', state: 'paused', reason: veto };
     const classification = globalThis.ChatGPTNotifierContinuationPolicy?.classifyObservation?.(observation) || {};
@@ -268,7 +272,6 @@
     }
     if (observation.assistantKey && observation.stableTerminal) return { kind: '', state: 'resolved', reason: 'status-missing-passive' };
     if (!observation.assistantKey && Number(observation.silentIdleConfirmations || 0) >= 2) return { kind: 'continue', state: 'scheduled', reason: 'post-reload-silent-stop' };
-    if (observation.stopGenerating || observation.toolActivity) return { kind: '', state: 'observing', reason: 'work-resumed-after-reload' };
     return { kind: '', state: 'attention', reason: 'post-reload-outcome-ambiguous' };
   }
 
