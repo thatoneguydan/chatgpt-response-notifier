@@ -26,7 +26,16 @@
     'github-work-status/v2': CONTRACT_SEMANTIC_SHA256
   });
   const WORK_START_SIGNAL = '[GITHUB_WORK: START]';
-  const VALID_STATUS_CODES = Object.freeze([
+  const V1_STATUS_CODES = Object.freeze([
+    'PLANNING_ACTIVE',
+    'COMPLETE_APPLIED',
+    'COMPLETE_NO_CHANGES',
+    'BLOCKED_HUMAN',
+    'INCOMPLETE_LIMIT',
+    'INCOMPLETE_TOOL_FAILURE',
+    'INCOMPLETE_HANDOFF'
+  ]);
+  const CONTRACT_STATUS_CODES = Object.freeze([
     'PLANNING_ACTIVE',
     'COMPLETE_APPLIED',
     'COMPLETE_NO_CHANGES',
@@ -36,7 +45,7 @@
     'INCOMPLETE_CONTINUE',
     'INCOMPLETE_HANDOFF'
   ]);
-  const VALID_STATUS_CODE_SET = new Set(VALID_STATUS_CODES);
+  const VALID_STATUS_CODE_SET = new Set(CONTRACT_STATUS_CODES);
   const STATUS_LINE_PATTERN = /^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/;
   const WORK_START_LINE_PATTERN = /^\[GITHUB_WORK: START\]$/;
   const FENCE_PATTERN = /^\s*(`{3,}|~{3,})/;
@@ -115,7 +124,10 @@
     contractSemanticSha256: CONTRACT_SEMANTIC_SHA256,
     supportedContracts: SUPPORTED_CONTRACTS,
     workStartSignal: WORK_START_SIGNAL,
-    validStatusCodes: VALID_STATUS_CODES,
+    // Legacy v1 view retained for compatibility with already-shipped consumers
+    // and architecture checks. Use contractStatusCodes for the active v2 grammar.
+    validStatusCodes: V1_STATUS_CODES,
+    contractStatusCodes: CONTRACT_STATUS_CODES,
     isStatusCode,
     isWorkStartSignal,
     supportsContract,
