@@ -3,6 +3,8 @@ using ChatGPTResponseNotifier.Core;
 
 namespace ChatGPTResponseNotifier.Host;
 
+internal readonly record struct ToastShowResult(bool Accepted, bool Presented, string PresentationState);
+
 internal sealed class ToastManager
 {
     private const double MarginRight = 16;
@@ -10,12 +12,14 @@ internal sealed class ToastManager
     private const double Gap = 10;
 
     private readonly NotificationStateStore _store;
+    private readonly AcceptedNotificationStore _acceptedStore;
     private readonly Func<object, Task> _sendEvent;
     private readonly List<ToastWindow> _windows = new();
 
-    public ToastManager(NotificationStateStore store, Func<object, Task> sendEvent)
+    public ToastManager(NotificationStateStore store, AcceptedNotificationStore acceptedStore, Func<object, Task> sendEvent)
     {
         _store = store;
+        _acceptedStore = acceptedStore;
         _sendEvent = sendEvent;
     }
 
@@ -25,18 +29,31 @@ internal sealed class ToastManager
     {
         foreach (var record in _store.Load().OrderBy(item => item.CompletedAt))
         {
+            _acceptedStore.Remember(record.Id);
             AddWindow(record, persist: false);
         }
         Restack();
     }
 
-    public void Show(NotificationRecord record)
+    public ToastShowResult Show(NotificationRecord record)
     {
         record.Validate();
-        if (_windows.Any(window => window.Record.Id == record.Id)) return;
+
+        var existing = _windows.FirstOrDefault(window => window.Record.Id == record.Id);
+        if (existing is not null)
+        {
+            _acceptedStore.Remember(record.Id);
+            return new ToastShowResult(true, false, "already-open");
+        }
+
+        if (_acceptedStore.Contains(record.Id))
+        {
+            return new ToastShowResult(true, false, "dismissed-tombstone");
+        }
+
         AddWindow(record, persist: true);
-        Restack();
         CompletionChime.Play();
+        return new ToastShowResult(true, true, "presented");
     }
 
     public void DismissConversation(string conversationId)
@@ -75,7 +92,8 @@ internal sealed class ToastManager
                 type = "toast.clicked",
                 notificationId = record.Id,
                 conversationId = record.ConversationId,
-                conversationUrl = record.ConversationUrl
+                conversationUrl = record.ConversationUrl,
+                correlationId = Guid.NewGuid().ToString("N")
             });
         };
         window.ToastDismissed += async (_, _) =>
@@ -91,8 +109,14 @@ internal sealed class ToastManager
         };
         window.SizeChanged += (_, _) => Restack();
         _windows.Add(window);
+
+        if (persist)
+        {
+            Persist();
+            _acceptedStore.Remember(record.Id);
+        }
+
         window.Show();
-        if (persist) Persist();
     }
 
     private void RemoveWindow(ToastWindow window, bool persist)

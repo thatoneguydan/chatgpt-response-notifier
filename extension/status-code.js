@@ -1,14 +1,13 @@
 'use strict';
 
 (() => {
+  const RUNTIME_VERSION = 2;
+
   // Existing ChatGPT tabs can keep this isolated-world global across an
-  // extension runtime reload even though the old runtime listener is gone.
-  // v0.7.x's status layer set this guard but did not expose maybeAutoContinue,
-  // which caused the newly installed v0.8.x status-script.js to return early
-  // instead of attaching its auto-continue listener. Clear only that stale
-  // pre-auto-continue guard; the service worker injects status-code.js before
-  // status-script.js, so the current status layer can attach without reloading
-  // or activating the tab.
+  // extension runtime reload. A versioned parser lets reinjection replace a
+  // stale copy while remaining idempotent within the same extension version.
+  if (globalThis.ChatGPTNotifierStatusCode?.runtimeVersion === RUNTIME_VERSION) return;
+
   if (
     globalThis.__chatgptNotifierStatusDomInstalled &&
     typeof globalThis.__chatgptNotifierStatusDom?.maybeAutoContinue !== 'function'
@@ -16,12 +15,12 @@
     globalThis.__chatgptNotifierStatusDomInstalled = false;
   }
 
-  if (globalThis.ChatGPTNotifierStatusCode) return;
-
-  // This list mirrors the canonical GitHub work-session status taxonomy in
-  // DevelopmentInfrastructure/GITHUB-WORK-STATUS-POLICY.md. Unknown tokens do
-  // not qualify for notifications; taxonomy changes require an intentional
-  // notifier update so accidental status-looking text cannot become eligible.
+  // This list and the START signal are checked against the generated grammar
+  // fixture bundled with the extension. Canonical meanings remain in
+  // DevelopmentInfrastructure.
+  const CONTRACT_ID = 'github-work-status/v1';
+  const CONTRACT_SEMANTIC_SHA256 = '9c60a07bc26b639c15a6456b08707c2e92fa06fe98baa21b6b731b3f9dda4cd1';
+  const WORK_START_SIGNAL = '[GITHUB_WORK: START]';
   const VALID_STATUS_CODES = Object.freeze([
     'PLANNING_ACTIVE',
     'COMPLETE_APPLIED',
@@ -33,6 +32,8 @@
   ]);
   const VALID_STATUS_CODE_SET = new Set(VALID_STATUS_CODES);
   const STATUS_LINE_PATTERN = /^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/;
+  const WORK_START_LINE_PATTERN = /^\[GITHUB_WORK: START\]$/;
+  const FENCE_PATTERN = /^\s*(`{3,}|~{3,})/;
 
   function normalizeLineEndings(value) {
     return String(value || '').replace(/\r\n?/g, '\n');
@@ -40,6 +41,24 @@
 
   function isStatusCode(value) {
     return VALID_STATUS_CODE_SET.has(String(value || ''));
+  }
+
+  function isWorkStartSignal(value) {
+    return WORK_START_LINE_PATTERN.test(String(value || ''));
+  }
+
+  function outsideFenceFlags(lines) {
+    let fence = '';
+    return lines.map((line) => {
+      const marker = String(line || '').match(FENCE_PATTERN)?.[1] || '';
+      if (marker) {
+        const family = marker[0];
+        if (!fence) fence = family;
+        else if (fence === family) fence = '';
+        return false;
+      }
+      return !fence;
+    });
   }
 
   function parseTerminalStatus(value) {
@@ -51,9 +70,21 @@
       return { statusCode: '', statusLine: '', body: '' };
     }
 
-    const statusLine = lines[lines.length - 1].trim();
-    const match = statusLine.match(STATUS_LINE_PATTERN);
+    const outsideFence = outsideFenceFlags(lines);
+    const finalIndex = lines.length - 1;
+    const statusLine = lines[finalIndex];
+    const match = outsideFence[finalIndex] ? statusLine.match(STATUS_LINE_PATTERN) : null;
     if (!match || !isStatusCode(match[1])) {
+      return { statusCode: '', statusLine: '', body: text.trim() };
+    }
+
+    let validOutsideStatusCount = 0;
+    for (let index = 0; index < lines.length; index += 1) {
+      if (!outsideFence[index]) continue;
+      const candidate = lines[index].match(STATUS_LINE_PATTERN);
+      if (candidate && isStatusCode(candidate[1])) validOutsideStatusCount += 1;
+    }
+    if (validOutsideStatusCount !== 1) {
       return { statusCode: '', statusLine: '', body: text.trim() };
     }
 
@@ -68,8 +99,13 @@
   }
 
   globalThis.ChatGPTNotifierStatusCode = Object.freeze({
+    runtimeVersion: RUNTIME_VERSION,
+    contractId: CONTRACT_ID,
+    contractSemanticSha256: CONTRACT_SEMANTIC_SHA256,
+    workStartSignal: WORK_START_SIGNAL,
     validStatusCodes: VALID_STATUS_CODES,
     isStatusCode,
+    isWorkStartSignal,
     parseTerminalStatus
   });
 })();

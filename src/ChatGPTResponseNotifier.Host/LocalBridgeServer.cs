@@ -18,18 +18,21 @@ internal sealed class LocalBridgeServer : IAsyncDisposable
     private readonly WebApplication _app;
     private readonly Func<NativeMessage, Task> _onMessage;
     private readonly Func<object> _readyMessageFactory;
+    private readonly Action<int>? _onClientCountChanged;
     private readonly ConcurrentDictionary<Guid, WebSocket> _clients = new();
 
-    private LocalBridgeServer(WebApplication app, Func<NativeMessage, Task> onMessage, Func<object> readyMessageFactory)
+    private LocalBridgeServer(WebApplication app, Func<NativeMessage, Task> onMessage, Func<object> readyMessageFactory, Action<int>? onClientCountChanged)
     {
         _app = app;
         _onMessage = onMessage;
         _readyMessageFactory = readyMessageFactory;
+        _onClientCountChanged = onClientCountChanged;
     }
 
     public static async Task<LocalBridgeServer> StartAsync(
         Func<NativeMessage, Task> onMessage,
         Func<object> readyMessageFactory,
+        Action<int>? onClientCountChanged,
         CancellationToken cancellationToken)
     {
         var builder = WebApplication.CreateSlimBuilder();
@@ -40,7 +43,7 @@ internal sealed class LocalBridgeServer : IAsyncDisposable
         });
 
         var app = builder.Build();
-        var server = new LocalBridgeServer(app, onMessage, readyMessageFactory);
+        var server = new LocalBridgeServer(app, onMessage, readyMessageFactory, onClientCountChanged);
         app.UseWebSockets(new WebSocketOptions
         {
             KeepAliveInterval = TimeSpan.FromSeconds(20)
@@ -50,17 +53,23 @@ internal sealed class LocalBridgeServer : IAsyncDisposable
         return server;
     }
 
+    private void NotifyClientCountChanged()
+    {
+        try { _onClientCountChanged?.Invoke(_clients.Count); } catch { }
+    }
+
     public async Task<int> SendAsync(object message, CancellationToken cancellationToken = default)
     {
         var payload = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(message, JsonOptions.Default));
         var sent = 0;
+        var changed = false;
 
         foreach (var pair in _clients.ToArray())
         {
             var socket = pair.Value;
             if (socket.State != WebSocketState.Open)
             {
-                _clients.TryRemove(pair.Key, out _);
+                changed |= _clients.TryRemove(pair.Key, out _);
                 continue;
             }
 
@@ -71,11 +80,12 @@ internal sealed class LocalBridgeServer : IAsyncDisposable
             }
             catch
             {
-                _clients.TryRemove(pair.Key, out _);
+                changed |= _clients.TryRemove(pair.Key, out _);
                 try { socket.Abort(); } catch { }
             }
         }
 
+        if (changed) NotifyClientCountChanged();
         return sent;
     }
 
@@ -97,6 +107,7 @@ internal sealed class LocalBridgeServer : IAsyncDisposable
         using var socket = await context.WebSockets.AcceptWebSocketAsync().ConfigureAwait(false);
         var clientId = Guid.NewGuid();
         _clients[clientId] = socket;
+        NotifyClientCountChanged();
 
         try
         {
@@ -105,7 +116,7 @@ internal sealed class LocalBridgeServer : IAsyncDisposable
         }
         finally
         {
-            _clients.TryRemove(clientId, out _);
+            if (_clients.TryRemove(clientId, out _)) NotifyClientCountChanged();
             if (socket.State is WebSocketState.Open or WebSocketState.CloseReceived)
             {
                 try
@@ -168,6 +179,7 @@ internal sealed class LocalBridgeServer : IAsyncDisposable
             try { socket.Abort(); } catch { }
         }
         _clients.Clear();
+        NotifyClientCountChanged();
 
         try { await _app.StopAsync(TimeSpan.FromSeconds(2)).ConfigureAwait(false); } catch { }
         await _app.DisposeAsync().ConfigureAwait(false);

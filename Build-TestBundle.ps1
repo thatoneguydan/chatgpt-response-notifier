@@ -13,6 +13,9 @@ if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($repoRoot)) { throw 'Co
 $version = (Get-Content -LiteralPath (Join-Path $root 'VERSION.txt') -Raw).Trim()
 if ([string]::IsNullOrWhiteSpace($version)) { throw 'VERSION.txt is empty.' }
 
+& powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'tools\Test-ExtensionIdentity.ps1')
+if ($LASTEXITCODE -ne 0) { throw 'Extension identity contract validation failed.' }
+
 if ([string]::IsNullOrWhiteSpace($SourceCommit)) {
     $SourceCommit = (& git -C $repoRoot rev-parse HEAD).Trim()
     if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($SourceCommit)) {

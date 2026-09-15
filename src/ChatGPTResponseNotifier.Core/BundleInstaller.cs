@@ -72,9 +72,9 @@ public static class BundleInstaller
         var hostRoot = NativeHostInstaller.HostVersionRoot(manifest.Version);
         Directory.CreateDirectory(hostRoot);
         var installedHost = NativeHostInstaller.HostExecutablePath(manifest.Version);
-        File.Copy(bundledHost, installedHost, overwrite: true);
+        ReplaceHostExecutable(bundledHost, installedHost);
 
-        ReplaceDirectory(bundledExtension, NativeHostInstaller.ExtensionRoot);
+        UpdateDirectoryPreservingRoot(bundledExtension, NativeHostInstaller.ExtensionRoot);
 
         var state = new
         {
@@ -163,33 +163,124 @@ public static class BundleInstaller
         return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
 
-    private static void ReplaceDirectory(string source, string destination)
+    private static void ReplaceHostExecutable(string source, string destination)
+    {
+        if (File.Exists(destination))
+        {
+            try
+            {
+                if (new FileInfo(source).Length == new FileInfo(destination).Length &&
+                    HashFile(source).Equals(HashFile(destination), StringComparison.OrdinalIgnoreCase))
+                {
+                    // Reinstalling the exact same candidate must be idempotent. A running
+                    // helper can keep its image locked briefly after shutdown; rewriting an
+                    // identical binary buys nothing and creates an avoidable race.
+                    return;
+                }
+            }
+            catch (IOException)
+            {
+                // If the existing file cannot be read reliably, fall through to the
+                // bounded replacement path rather than assuming identity.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Same as above: never treat an unverifiable file as identical.
+            }
+        }
+
+        Exception? lastError = null;
+        for (var attempt = 0; attempt < 25; attempt += 1)
+        {
+            try
+            {
+                File.Copy(source, destination, overwrite: true);
+                return;
+            }
+            catch (Exception error) when (error is IOException or UnauthorizedAccessException)
+            {
+                lastError = error;
+                if (attempt == 24) break;
+                Thread.Sleep(100);
+            }
+        }
+
+        throw new IOException("Notifier helper executable could not be replaced after a bounded unlock wait.", lastError);
+    }
+
+    private static void UpdateDirectoryPreservingRoot(string source, string destination)
     {
         var parent = Path.GetDirectoryName(destination) ?? throw new InvalidOperationException("Extension destination has no parent directory.");
         Directory.CreateDirectory(parent);
-        var staging = destination + ".next-" + Guid.NewGuid().ToString("N");
-        var previous = destination + ".previous";
-        CopyDirectory(source, staging);
 
+        var hadExistingRoot = Directory.Exists(destination);
+        var rollback = destination + ".rollback-" + Guid.NewGuid().ToString("N");
         try
         {
-            if (Directory.Exists(previous)) Directory.Delete(previous, recursive: true);
-            if (Directory.Exists(destination)) Directory.Move(destination, previous);
-            Directory.Move(staging, destination);
-            if (Directory.Exists(previous)) Directory.Delete(previous, recursive: true);
+            if (hadExistingRoot)
+            {
+                CopyDirectory(source: destination, destination: rollback);
+            }
+            else
+            {
+                Directory.CreateDirectory(destination);
+            }
+
+            CopyExtensionDirectoryManifestLast(source, destination);
         }
-        catch
+        catch (Exception installError)
         {
-            if (!Directory.Exists(destination) && Directory.Exists(previous)) Directory.Move(previous, destination);
+            if (hadExistingRoot && Directory.Exists(rollback))
+            {
+                try
+                {
+                    CopyExtensionDirectoryManifestLast(rollback, destination);
+                }
+                catch (Exception rollbackError)
+                {
+                    throw new AggregateException("Extension update failed and the in-place rollback also failed.", installError, rollbackError);
+                }
+            }
+            else if (!hadExistingRoot && Directory.Exists(destination))
+            {
+                try { Directory.Delete(destination, recursive: true); } catch { }
+            }
+
             throw;
         }
         finally
         {
-            if (Directory.Exists(staging))
+            if (Directory.Exists(rollback))
             {
-                try { Directory.Delete(staging, recursive: true); } catch { }
+                try { Directory.Delete(rollback, recursive: true); } catch { }
             }
         }
+    }
+
+    private static void CopyExtensionDirectoryManifestLast(string source, string destination)
+    {
+        var manifestSource = Path.Combine(source, "manifest.json");
+        if (!File.Exists(manifestSource)) throw new InvalidDataException("Extension manifest is missing from the staged directory.");
+
+        Directory.CreateDirectory(destination);
+        foreach (var directory in Directory.GetDirectories(source, "*", SearchOption.AllDirectories))
+        {
+            Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
+        }
+
+        foreach (var file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
+        {
+            var relative = Path.GetRelativePath(source, file);
+            if (string.Equals(relative, "manifest.json", StringComparison.OrdinalIgnoreCase)) continue;
+            var target = Path.Combine(destination, relative);
+            Directory.CreateDirectory(Path.GetDirectoryName(target)!);
+            File.Copy(file, target, overwrite: true);
+        }
+
+        // Chrome commonly has this exact directory registered as an unpacked
+        // extension. Keep the root continuously present, make every referenced
+        // asset available first, and publish the new manifest/version last.
+        File.Copy(manifestSource, Path.Combine(destination, "manifest.json"), overwrite: true);
     }
 
     private static void CopyDirectory(string source, string destination)

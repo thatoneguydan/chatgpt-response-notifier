@@ -13,6 +13,7 @@ internal sealed class NativeHostApplication : Application
     private ToastManager? _toastManager;
     private PublicUpdateService? _updateService;
     private DiagnosticsStore? _diagnosticsStore;
+    private RuntimeEvidencePublisher? _runtimeEvidencePublisher;
     private Task? _updateLoop;
 
     public new int Run()
@@ -27,17 +28,21 @@ internal sealed class NativeHostApplication : Application
     {
         try
         {
-            _diagnosticsStore = new DiagnosticsStore(Path.Combine(NativeHostInstaller.DataRoot, "diagnostics.jsonl"));
+            _runtimeEvidencePublisher = new RuntimeEvidencePublisher();
+            _diagnosticsStore = new DiagnosticsStore(
+                Path.Combine(NativeHostInstaller.DataRoot, "diagnostics.jsonl"),
+                _runtimeEvidencePublisher.Append);
             _diagnosticsStore.AppendHost(new
             {
                 source = "host",
                 status = "host-started",
                 observedAt = DateTimeOffset.UtcNow,
-                installedExtensionVersion = BundleInstaller.ReadInstalledExtensionVersion()
+                extensionVersion = BundleInstaller.ReadInstalledExtensionVersion()
             });
 
             var store = new NotificationStateStore(Path.Combine(NativeHostInstaller.DataRoot, "pending.json"));
-            _toastManager = new ToastManager(store, SendEventAsync);
+            var acceptedStore = new AcceptedNotificationStore(Path.Combine(NativeHostInstaller.DataRoot, "accepted-notifications.json"));
+            _toastManager = new ToastManager(store, acceptedStore, SendEventAsync);
 
             try
             {
@@ -57,6 +62,7 @@ internal sealed class NativeHostApplication : Application
             _bridgeServer = await LocalBridgeServer.StartAsync(
                 HandleBridgeMessageAsync,
                 CreateReadyMessage,
+                count => _runtimeEvidencePublisher?.ObserveBridgeClientCount(count),
                 _shutdown.Token);
 
             var processPath = Environment.ProcessPath;
@@ -65,6 +71,7 @@ internal sealed class NativeHostApplication : Application
                 try { StartupRegistration.Register(processPath); } catch (Exception error) { FileLog.Write("Could not refresh per-user startup registration", error); }
             }
 
+            _runtimeEvidencePublisher.Publish();
             _updateLoop = RunUpdateLoopAsync();
         }
         catch (Exception error)
@@ -86,6 +93,7 @@ internal sealed class NativeHostApplication : Application
         _updateService?.Dispose();
         _updateService = null;
         _diagnosticsStore = null;
+        _runtimeEvidencePublisher = null;
         _shutdown.Dispose();
     }
 
@@ -101,6 +109,7 @@ internal sealed class NativeHostApplication : Application
 
     private async Task HandleBridgeMessageAsync(NativeMessage message)
     {
+        _runtimeEvidencePublisher?.ObserveBridgeActivity();
         await Dispatcher.InvokeAsync(() => HandleMessage(message));
     }
 
@@ -109,6 +118,7 @@ internal sealed class NativeHostApplication : Application
         switch (message.Type)
         {
             case "toast.show" when message.Notification is not null:
+            {
                 _diagnosticsStore?.AppendHost(new
                 {
                     source = "host",
@@ -117,16 +127,31 @@ internal sealed class NativeHostApplication : Application
                     conversationSuffix = Suffix(message.Notification.ConversationId),
                     notificationSuffix = Suffix(message.Notification.Id)
                 });
-                _toastManager!.Show(message.Notification);
+
+                var showResult = _toastManager!.Show(message.Notification);
+
                 _diagnosticsStore?.AppendHost(new
                 {
                     source = "host",
-                    status = "toast-shown",
+                    status = showResult.Presented ? "toast-presented" : "toast-idempotent-accepted",
                     observedAt = DateTimeOffset.UtcNow,
                     conversationSuffix = Suffix(message.Notification.ConversationId),
-                    notificationSuffix = Suffix(message.Notification.Id)
+                    notificationSuffix = Suffix(message.Notification.Id),
+                    presented = showResult.Presented,
+                    presentationState = showResult.PresentationState
+                });
+
+                _ = SendEventAsync(new
+                {
+                    type = "toast.accepted",
+                    requestId = message.RequestId,
+                    notificationId = message.Notification.Id,
+                    accepted = showResult.Accepted,
+                    presented = showResult.Presented,
+                    presentationState = showResult.PresentationState
                 });
                 break;
+            }
             case "toast.dismissConversation" when !string.IsNullOrWhiteSpace(message.ConversationId):
                 _toastManager!.DismissConversation(message.ConversationId);
                 break;
@@ -137,17 +162,20 @@ internal sealed class NativeHostApplication : Application
                 _toastManager!.ClearAll();
                 break;
             case "window.foreground":
-                var foregrounded = ChromeWindowForeground.TryForeground(
-                    message.WindowTitle,
-                    message.WindowLeft,
-                    message.WindowTop,
-                    message.WindowWidth,
-                    message.WindowHeight);
+                _diagnosticsStore?.AppendHost(new
+                {
+                    source = "host",
+                    status = "native-foreground-retired",
+                    observedAt = DateTimeOffset.UtcNow,
+                    reason = "chrome-api-only"
+                });
                 _ = SendEventAsync(new
                 {
                     type = "window.foregroundResult",
                     requestId = message.RequestId,
-                    success = foregrounded
+                    success = false,
+                    retired = true,
+                    reason = "native-foreground-retired"
                 });
                 break;
             case "ping":
@@ -309,16 +337,62 @@ internal sealed class NativeHostApplication : Application
 
     private async Task SendEventAsync(object message)
     {
+        JsonDocument? document = null;
+        JsonElement root = default;
+        string type = string.Empty;
+        string correlationId = string.Empty;
+        string conversationSuffix = string.Empty;
+        string notificationSuffix = string.Empty;
+        try
+        {
+            document = JsonDocument.Parse(JsonSerializer.Serialize(message, JsonOptions.Default));
+            root = document.RootElement;
+            type = root.TryGetProperty("type", out var typeNode) ? typeNode.GetString() ?? string.Empty : string.Empty;
+            correlationId = root.TryGetProperty("correlationId", out var correlationNode) && correlationNode.ValueKind == JsonValueKind.String ? correlationNode.GetString() ?? string.Empty : string.Empty;
+            conversationSuffix = root.TryGetProperty("conversationId", out var conversationNode) && conversationNode.ValueKind == JsonValueKind.String ? Suffix(conversationNode.GetString()) : string.Empty;
+            notificationSuffix = root.TryGetProperty("notificationId", out var notificationNode) && notificationNode.ValueKind == JsonValueKind.String ? Suffix(notificationNode.GetString()) : string.Empty;
+        }
+        catch { }
+
+        if (string.Equals(type, "toast.clicked", StringComparison.Ordinal))
+        {
+            _diagnosticsStore?.AppendHost(new
+            {
+                source = "host-click",
+                status = "helper-click-received",
+                observedAt = DateTimeOffset.UtcNow,
+                correlationId,
+                conversationSuffix,
+                notificationSuffix
+            });
+        }
+
         var bridge = _bridgeServer;
         var sent = bridge is null ? 0 : await bridge.SendAsync(message, _shutdown.Token).ConfigureAwait(false);
-        if (sent > 0) return;
+        if (string.Equals(type, "toast.clicked", StringComparison.Ordinal))
+        {
+            _diagnosticsStore?.AppendHost(new
+            {
+                source = "host-click",
+                status = sent > 0 ? "click-bridge-dispatched" : "click-bridge-no-client",
+                observedAt = DateTimeOffset.UtcNow,
+                correlationId,
+                conversationSuffix,
+                notificationSuffix,
+                deliveredNow = sent > 0,
+                reason = sent > 0 ? string.Empty : "no-extension-bridge-client"
+            });
+        }
+        if (sent > 0)
+        {
+            document?.Dispose();
+            return;
+        }
 
         try
         {
-            using var document = JsonDocument.Parse(JsonSerializer.Serialize(message, JsonOptions.Default));
-            var root = document.RootElement;
-            if (root.TryGetProperty("type", out var typeNode)
-                && string.Equals(typeNode.GetString(), "toast.clicked", StringComparison.Ordinal)
+            if (root.ValueKind == JsonValueKind.Object
+                && string.Equals(type, "toast.clicked", StringComparison.Ordinal)
                 && root.TryGetProperty("conversationUrl", out var urlNode)
                 && urlNode.ValueKind == JsonValueKind.String)
             {
@@ -328,12 +402,26 @@ internal sealed class NativeHostApplication : Application
                     && string.Equals(uri.Host, "chatgpt.com", StringComparison.OrdinalIgnoreCase))
                 {
                     Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
+                    _diagnosticsStore?.AppendHost(new
+                    {
+                        source = "host-click",
+                        status = "click-shell-fallback",
+                        observedAt = DateTimeOffset.UtcNow,
+                        correlationId,
+                        conversationSuffix,
+                        notificationSuffix,
+                        reason = "no-extension-bridge-client"
+                    });
                 }
             }
         }
         catch (Exception error)
         {
             FileLog.Write("Local bridge event fallback failed", error);
+        }
+        finally
+        {
+            document?.Dispose();
         }
     }
 }

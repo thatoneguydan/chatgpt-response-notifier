@@ -1,0 +1,176 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
+import test from 'node:test';
+
+const root = new URL('../../', import.meta.url);
+const readText = (relative) => readFileSync(new URL(relative, root), 'utf8');
+
+function loadModel() {
+  const context = vm.createContext({ Date, Number, String, Set, Object, Math });
+  vm.runInContext(readText('extension/status-policy.js'), context);
+  vm.runInContext(readText('extension/recovery-model.js'), context);
+  return { policy: context.ChatGPTNotifierContinuationPolicy, model: context.ChatGPTNotifierRecoveryModel };
+}
+
+function baseObservation(overrides = {}) {
+  return {
+    observable: true, online: true, manualStopped: false, authRequired: false,
+    approvalRequired: false, rateLimited: false, hasDraft: false, hasUpload: false,
+    stopGenerating: false, toolActivity: false, assistantKey: '', silentIdleConfirmations: 2,
+    ...overrides
+  };
+}
+
+function humanRun(overrides = {}) {
+  return { humanRunId: 'human-1', conversationId: 'conversation-1', originPromptKey: 'conversation-1|user-1', generationActions: 0, state: 'active', ...overrides };
+}
+
+function incident(overrides = {}) {
+  return { incidentId: 'incident-1', humanRunId: 'human-1', generationKey: 'conversation-1|conversation-1|user-1', reason: 'silent-stop-confirmed', ordinal: 1, state: 'scheduled', budget: {}, ...overrides };
+}
+
+function profile(overrides = {}) {
+  return { breakerOpen: false, activeLease: null, nextProfileActionAt: 0, ...overrides };
+}
+
+test('recovery remains separately opt-in while normal coded continuation remains independently admissible', () => {
+  const { model } = loadModel();
+  const recovery = model.admissionDecision('reload', humanRun(), incident(), profile(), baseObservation(), { now: 1_000, recoveryEnabled: false });
+  assert.deepEqual({ allowed: recovery.allowed, reason: recovery.reason }, { allowed: false, reason: 'recovery-not-enabled' });
+  assert.equal(model.admissionDecision('normal-continue', humanRun(), null, profile(), baseObservation(), { now: 1_000, recoveryEnabled: false }).allowed, true);
+});
+
+test('all recovery vetoes fail closed before reload or continue', () => {
+  const { model } = loadModel();
+  const vetoes = [
+    ['hasDraft', 'draft-present'], ['hasUpload', 'upload-present'], ['manualStopped', 'manual-stop'],
+    ['authRequired', 'auth-required'], ['approvalRequired', 'approval-required'], ['rateLimited', 'rate-limited'],
+    ['online', 'offline', false], ['observable', 'page-unobservable', false],
+    ['stopGenerating', 'generation-active'], ['toolActivity', 'tool-activity']
+  ];
+  for (const [field, reason, value = true] of vetoes) {
+    const decision = model.admissionDecision('reload', humanRun(), incident(), profile(), baseObservation({ [field]: value }), { now: 1_000, recoveryEnabled: true });
+    assert.equal(decision.allowed, false, field);
+    assert.equal(decision.reason, reason, field);
+  }
+});
+
+test('format repair is not an action kind and is rejected at every primary admission boundary', () => {
+  const { policy, model } = loadModel();
+  assert.equal(Array.from(model.actionKinds).includes('format-repair'), false);
+  const admission = model.admissionDecision('format-repair', humanRun(), incident(), profile(), baseObservation(), { now: 1_000, recoveryEnabled: true });
+  assert.deepEqual({ allowed: admission.allowed, reason: admission.reason }, { allowed: false, reason: 'format-repair-retired' });
+  assert.equal(model.claimAction('format-repair', humanRun(), incident(), profile(), baseObservation(), { now: 1_000, leaseId: 'retired', recoveryEnabled: true }).reason, 'format-repair-retired');
+  assert.equal(policy.recoveryActionDecision('format-repair', {}, { now: 1_000 }).reason, 'format-repair-retired');
+  assert.equal(policy.beginRecoveryAction('format-repair', {}, { now: 1_000 }).reason, 'format-repair-retired');
+});
+
+test('profile-wide lease, spacing and whole-run fuse serialize automatic generation actions', () => {
+  const { model } = loadModel();
+  const first = model.claimAction('normal-continue', humanRun(), null, profile(), baseObservation(), { now: 1_000, leaseId: 'lease-a', recoveryEnabled: false });
+  assert.equal(first.allowed, true);
+  assert.equal(first.profile.activeLease.leaseId, 'lease-a');
+  assert.equal(first.profile.nextProfileActionAt, 31_000);
+  assert.equal(model.admissionDecision('normal-continue', humanRun({ humanRunId: 'human-2' }), null, first.profile, baseObservation(), { now: 1_001, recoveryEnabled: false }).reason, 'profile-action-in-flight');
+  const finished = model.finishAction(first.humanRun, null, first.profile, { leaseId: 'lease-a', state: 'observing' }, { now: 2_000 });
+  assert.equal(model.admissionDecision('normal-continue', finished.humanRun, null, finished.profile, baseObservation(), { now: 30_999, recoveryEnabled: false }).reason, 'profile-action-spacing');
+
+  let run = humanRun();
+  let shared = profile();
+  let accepted = 0;
+  let now = 1_000;
+  for (let transition = 0; transition < 100; transition += 1) {
+    const claim = model.claimAction('normal-continue', run, null, shared, baseObservation(), { now, leaseId: `lease-${transition}`, recoveryEnabled: false });
+    if (!claim.allowed) { assert.equal(claim.reason, 'run-action-cap-reached'); continue; }
+    accepted += 1;
+    const done = model.finishAction(claim.humanRun, null, claim.profile, { leaseId: claim.leaseId, state: 'observing' }, { now: now + 1 });
+    run = done.humanRun;
+    shared = done.profile;
+    now = shared.nextProfileActionAt;
+  }
+  assert.equal(accepted, 12);
+  assert.equal(run.generationActions, 12);
+});
+
+test('incident budget permits at most three reloads and one recovery continuation with no repair message budget', () => {
+  const { policy, model } = loadModel();
+  assert.equal(policy.thresholds.incidentReloadCap, 3);
+  let run = humanRun();
+  let shared = profile();
+  let currentIncident = incident({ reason: 'silent-stop-confirmed' });
+  let now = 1_000;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const reload = model.claimAction('reload', run, currentIncident, shared, baseObservation(), { now, leaseId: `r-${attempt}`, recoveryEnabled: true });
+    assert.equal(reload.allowed, true, `reload ${attempt}`);
+    ({ humanRun: run, incident: currentIncident, profile: shared } = model.finishAction(reload.humanRun, reload.incident, reload.profile, { leaseId: `r-${attempt}`, state: 'scheduled' }, { now: now + 1 }));
+    now = shared.nextProfileActionAt;
+  }
+  assert.equal(currentIncident.budget.reloads, 3);
+  assert.equal(model.admissionDecision('reload', run, currentIncident, shared, baseObservation(), { now, recoveryEnabled: true }).reason, 'incident-reload-cap-reached');
+  currentIncident.reason = 'post-reload-silent-stop';
+  const continuation = model.claimAction('continue', run, currentIncident, shared, baseObservation(), { now, leaseId: 'c', recoveryEnabled: true });
+  assert.equal(continuation.allowed, true);
+  ({ humanRun: run, incident: currentIncident, profile: shared } = model.finishAction(continuation.humanRun, continuation.incident, continuation.profile, { leaseId: 'c', state: 'scheduled' }, { now: now + 1 }));
+  now = shared.nextProfileActionAt;
+  assert.equal(currentIncident.budget.automaticMessages, 1);
+  assert.equal(model.admissionDecision('continue', run, currentIncident, shared, baseObservation(), { now, recoveryEnabled: true }).reason, 'incident-continuation-cap-reached');
+  assert.equal(model.admissionDecision('format-repair', run, currentIncident, shared, baseObservation(), { now, recoveryEnabled: true }).reason, 'format-repair-retired');
+});
+
+test('post-reload stable uncoded assistant is passive; only confirmed silent stop can continue', () => {
+  const { model } = loadModel();
+  const expected = { conversationId: 'conversation-1', promptKey: 'conversation-1|user-1', documentId: 'doc-old' };
+  const base = { ...baseObservation(), conversationId: 'conversation-1', promptKey: 'conversation-1|user-1', documentId: 'doc-new', statusCode: '', stableTerminal: false };
+  assert.equal(model.postReloadDecision({ ...base, conversationId: 'conversation-2' }, expected).reason, 'conversation-changed-after-reload');
+  assert.equal(model.postReloadDecision({ ...base, promptKey: 'conversation-1|user-2' }, expected).reason, 'prompt-identity-changed-after-reload');
+  assert.equal(model.postReloadDecision({ ...base, documentId: 'doc-old' }, expected).reason, 'document-did-not-change-after-reload');
+  assert.deepEqual({ ...model.postReloadDecision({ ...base, statusCode: 'INCOMPLETE_LIMIT' }, expected) }, { kind: '', state: 'resolved', reason: 'coded:INCOMPLETE_LIMIT' });
+  assert.deepEqual({ ...model.postReloadDecision({ ...base, assistantKey: 'assistant-1', stableTerminal: true, silentIdleConfirmations: 0 }, expected) }, { kind: '', state: 'resolved', reason: 'status-missing-passive' });
+  assert.deepEqual({ ...model.postReloadDecision({ ...base, assistantKey: '', silentIdleConfirmations: 2 }, expected) }, { kind: 'continue', state: 'scheduled', reason: 'post-reload-silent-stop' });
+  assert.equal(model.recoveryCandidate({ state: 'attention', reason: 'post-reload-silent-stop' }, base, incident({ reason: 'post-reload-silent-stop', budget: { reloads: 1 } })).kind, 'reload');
+  assert.equal(model.recoveryCandidate({ state: 'attention', reason: 'post-reload-silent-stop' }, base, incident({ reason: 'post-reload-silent-stop', budget: { reloads: 3 } })).kind, 'continue');
+});
+
+test('restart never replays an in-flight side effect and uncertainty remains sticky', () => {
+  const { model } = loadModel();
+  const interrupted = model.restartDisposition(profile({ activeLease: { leaseId: 'x', kind: 'continue' } }), incident({ inFlight: { leaseId: 'x', kind: 'continue' } }));
+  assert.deepEqual({ ...interrupted }, { replayAllowed: false, state: 'attention', reason: 'action-interrupted-uncertain' });
+  const claimed = model.claimAction('continue', humanRun(), incident({ reason: 'post-reload-silent-stop' }), profile(), baseObservation(), { now: 1_000, leaseId: 'uncertain', recoveryEnabled: true });
+  assert.equal(claimed.allowed, true);
+  const done = model.finishAction(claimed.humanRun, claimed.incident, claimed.profile, { leaseId: 'uncertain', uncertain: true }, { now: 1_001 });
+  assert.equal(done.incident.budget.uncertainAction, true);
+  assert.equal(done.incident.state, 'attention');
+});
+
+test('incident timing preserves explicit-failure backoff and immediate confirmed silent-stop recovery', () => {
+  const { model } = loadModel();
+  assert.equal(model.firstEligibleAt('connection-interrupted', 10_000, 1), 40_000);
+  assert.equal(model.firstEligibleAt('connection-interrupted', 10_000, 2), 130_000);
+  assert.equal(model.firstEligibleAt('status-missing-passive', 10_000, 1), 40_000);
+  assert.equal(model.firstEligibleAt('silent-stop-confirmed', 10_000, 3), 10_000);
+});
+
+test('page command exposes continuation only and rejects retired format repair', () => {
+  const page = readText('extension/bounded-recovery-script.js');
+  assert.match(page, /const RUNTIME_VERSION = 2/);
+  assert.match(page, /const AUTO_CONTINUE_TEXT = 'continue until you finish or need something from me'/);
+  assert.match(page, /kind !== 'continue'/);
+  assert.match(page, /format-repair-retired/);
+  assert.doesNotMatch(page, /FORMAT_REPAIR_TEXT/);
+  assert.doesNotMatch(page, /formatRepairText:/);
+  assert.doesNotMatch(page, /\bregenerate\b/i);
+});
+
+test('coded notification delivery remains persistent and targeted', () => {
+  const hook = readText('extension/normal-continuation-budget-hook.js');
+  assert.match(hook, /async function observeCodedCompletion/);
+  assert.match(hook, /resumePendingObservations\(tabId\)/);
+  assert.match(hook, /sender\?\.documentId/);
+  assert.match(hook, /enqueueObservation/);
+  assert.match(hook, /ChatGPTNotifierStatusCode\?\.isStatusCode/);
+  assert.match(hook, /state\.claimTurn\(status, owner\)/);
+  assert.match(hook, /queueDurableNotification\(claimedRecord, 'coded-completion-status-observer'\)/);
+  assert.match(hook, /chrome\.webRequest\.onCompleted\.addListener/);
+  assert.doesNotMatch(hook, /statusBoundToCompletion/);
+});

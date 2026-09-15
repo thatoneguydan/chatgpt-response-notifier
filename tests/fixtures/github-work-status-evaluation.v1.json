@@ -1,0 +1,77 @@
+{
+  "contractId": "github-work-status/v1",
+  "cases": [
+    {
+      "id": "long-handoff-valid-limit",
+      "applicable": true,
+      "expectedCode": "INCOMPLETE_LIMIT",
+      "expectedFailureKind": "none",
+      "assistantSummaryCarriesCapsule": true,
+      "response": "Work remains and another chat can resume from the durable checkpoint.\n[GITHUB_STATUS: INCOMPLETE_LIMIT]"
+    },
+    {
+      "id": "compaction-omitted-footer",
+      "applicable": true,
+      "expectedCode": "INCOMPLETE_LIMIT",
+      "expectedFailureKind": "omission",
+      "assistantSummaryCarriesCapsule": false,
+      "response": "Work remains and another chat can resume from the durable checkpoint."
+    },
+    {
+      "id": "wrong-valid-classification",
+      "applicable": true,
+      "expectedCode": "BLOCKED_HUMAN",
+      "expectedFailureKind": "wrong-classification",
+      "assistantSummaryCarriesCapsule": true,
+      "response": "A protected operator action is required before work can continue.\n[GITHUB_STATUS: INCOMPLETE_LIMIT]"
+    },
+    {
+      "id": "ordinary-progress-no-footer",
+      "applicable": false,
+      "expectedCode": "",
+      "expectedFailureKind": "none",
+      "assistantSummaryCarriesCapsule": false,
+      "response": "I found the parser boundary and am continuing with the fix."
+    },
+    {
+      "id": "quoted-footer-not-terminal",
+      "applicable": true,
+      "expectedCode": "BLOCKED_HUMAN",
+      "expectedFailureKind": "format",
+      "assistantSummaryCarriesCapsule": true,
+      "response": "The policy example is:\n> [GITHUB_STATUS: BLOCKED_HUMAN]"
+    },
+    {
+      "id": "duplicate-footer-rejected",
+      "applicable": true,
+      "expectedCode": "INCOMPLETE_LIMIT",
+      "expectedFailureKind": "format",
+      "assistantSummaryCarriesCapsule": true,
+      "response": "Work remains.\n[GITHUB_STATUS: INCOMPLETE_LIMIT]\n[GITHUB_STATUS: INCOMPLETE_LIMIT]"
+    },
+    {
+      "id": "unclosed-fence-footer-rejected",
+      "applicable": true,
+      "expectedCode": "INCOMPLETE_LIMIT",
+      "expectedFailureKind": "format",
+      "assistantSummaryCarriesCapsule": true,
+      "response": "Example only:\n```text\n[GITHUB_STATUS: INCOMPLETE_LIMIT]"
+    },
+    {
+      "id": "footer-with-trailing-text-rejected",
+      "applicable": true,
+      "expectedCode": "COMPLETE_APPLIED",
+      "expectedFailureKind": "format",
+      "assistantSummaryCarriesCapsule": true,
+      "response": "Applied.\n[GITHUB_STATUS: COMPLETE_APPLIED]\nAnything after the footer invalidates it."
+    },
+    {
+      "id": "malformed-code-rejected",
+      "applicable": true,
+      "expectedCode": "INCOMPLETE_TOOL_FAILURE",
+      "expectedFailureKind": "format",
+      "assistantSummaryCarriesCapsule": true,
+      "response": "A connector failed.\n[GITHUB_STATUS: INCOMPLETE_TOOLFAILURE]"
+    }
+  ]
+}

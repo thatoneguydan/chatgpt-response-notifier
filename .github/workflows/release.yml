@@ -12,10 +12,10 @@ permissions:
 
 jobs:
   release:
-    # This repository is public. Keep release publication isolated on GitHub's
-    # hosted Windows runner rather than exposing Dan's workstation runner to a
-    # public repository trust boundary.
-    runs-on: windows-latest
+    # Release source is trusted same-repository main/workflow_dispatch code and
+    # runs only on the repository-scoped Glass runner. There is no hosted fallback.
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -26,22 +26,47 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          node --check .\extension\service-worker.js
-          node --check .\extension\content-script.js
-          node --check .\extension\persistence-script.js
-          node --check .\extension\status-code.js
-          node --check .\extension\status-script.js
-          node --check .\extension\recovery-background.js
-          node --check .\extension\recovery-script.js
-          node --check .\extension\history-background.js
-          node --check .\extension\popup.js
-          node --test .\tests\extension\architecture.test.mjs
-          if ($LASTEXITCODE -ne 0) { throw 'Extension architecture tests failed.' }
+          foreach ($script in @(
+            '.\extension\background.js',
+            '.\extension\attachment-script.js',
+            '.\extension\coordinator-background.js',
+            '.\extension\service-worker.js',
+            '.\extension\content-script.js',
+            '.\extension\persistence-script.js',
+            '.\extension\status-code.js',
+            '.\extension\status-policy.js',
+            '.\extension\status-script.js',
+            '.\extension\recovery-background.js',
+            '.\extension\recovery-script.js',
+            '.\extension\history-background.js',
+            '.\extension\monitor-background.js',
+            '.\extension\monitor-script.js',
+            '.\extension\recovery-model.js',
+            '.\extension\monitor-query-compat-background.js',
+            '.\extension\recovery-control-background.js',
+            '.\extension\bounded-recovery-background.js',
+            '.\extension\bounded-recovery-attachment-background.js',
+            '.\extension\bounded-recovery-script.js',
+            '.\extension\normal-continuation-budget-hook.js',
+            '.\extension\popup.js'
+          )) {
+            node --check $script
+            if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax validation failed: $script" }
+          }
+
+          node --test `
+            .\tests\extension\architecture.test.mjs `
+            .\tests\extension\coordinator.behavior.test.mjs `
+            .\tests\extension\status-policy.behavior.test.mjs `
+            .\tests\extension\automation-control.behavior.test.mjs `
+            .\tests\extension\bounded-recovery.behavior.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Extension architecture/behavior tests failed.' }
 
           $manifest = Get-Content -LiteralPath .\extension\manifest.json -Raw | ConvertFrom-Json
-          foreach ($forbidden in @('downloads', 'alarms', 'storage', 'nativeMessaging', 'notifications', 'offscreen')) {
+          foreach ($forbidden in @('downloads', 'storage', 'nativeMessaging', 'notifications', 'offscreen')) {
             if ($manifest.permissions -contains $forbidden) { throw "Forbidden extension permission present: $forbidden" }
           }
+          if ($manifest.permissions -notcontains 'alarms') { throw 'Bounded recovery requires the reviewed alarms permission.' }
           if ($manifest.host_permissions -contains 'https://github.com/*') { throw 'Extension must not depend on GitHub browser permissions.' }
           if ($manifest.host_permissions -notcontains 'ws://127.0.0.1/*') { throw 'Loopback WebSocket permission is missing.' }
 
@@ -88,17 +113,46 @@ jobs:
             $setupExe = Join-Path $setupOutput "ChatGPT-Response-Notifier-Setup-$version.exe"
             if (-not (Test-Path -LiteralPath $setupExe -PathType Leaf)) { throw 'Setup.exe output is missing.' }
 
-            # Prove the actual installer can install, launch the helper, and complete its built-in localhost ping/pong.
+            # Prove the actual installer can install, launch the helper, replace the
+            # same semantic version while that helper is running, and complete its
+            # built-in localhost ping/pong both times. Both install root and bridge
+            # port are disposable, so acceptance cannot stop or bind over the live notifier.
             $testInstallRoot = Join-Path $env:RUNNER_TEMP ('chatgpt-response-notifier-install-' + [Guid]::NewGuid().ToString('N'))
-            $env:CHATGPT_RESPONSE_NOTIFIER_INSTALL_ROOT = $testInstallRoot
+            $portProbe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+            $portProbe.Start()
             try {
-              $setupProcess = Start-Process -FilePath $setupExe -ArgumentList '--silent','--skip-startup' -PassThru
-              Wait-Process -Id $setupProcess.Id -Timeout 45
-              $setupProcess.Refresh()
-              if ($setupProcess.ExitCode -ne 0) { throw "Setup.exe acceptance test failed with exit code $($setupProcess.ExitCode)." }
+              $testBridgePort = ([System.Net.IPEndPoint]$portProbe.LocalEndpoint).Port
             }
             finally {
-              Get-Process -Name 'ChatGPTResponseNotifier.Host' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+              $portProbe.Stop()
+            }
+            $env:CHATGPT_RESPONSE_NOTIFIER_INSTALL_ROOT = $testInstallRoot
+            $env:CHATGPT_RESPONSE_NOTIFIER_TEST_BRIDGE_PORT = [string]$testBridgePort
+            try {
+              foreach ($attempt in 1..2) {
+                $setupProcess = Start-Process -FilePath $setupExe -ArgumentList '--silent','--skip-startup' -PassThru
+                Wait-Process -Id $setupProcess.Id -Timeout 45
+                $setupProcess.Refresh()
+                if ($setupProcess.ExitCode -ne 0) { throw "Setup.exe acceptance attempt $attempt failed with exit code $($setupProcess.ExitCode)." }
+              }
+
+              $statePath = Join-Path $testInstallRoot 'Data\install-state.json'
+              if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { throw 'Release acceptance install-state.json is missing after replacement.' }
+              $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+              if ($state.version -ne $version) { throw "Release acceptance version mismatch: $($state.version)" }
+              if ($state.sourceCommit -ne $sourceCommit) { throw "Release acceptance source mismatch: $($state.sourceCommit)" }
+            }
+            finally {
+              $testRootFull = [IO.Path]::GetFullPath($testInstallRoot).TrimEnd('\') + '\'
+              Get-Process -Name 'ChatGPTResponseNotifier.Host' -ErrorAction SilentlyContinue | ForEach-Object {
+                try {
+                  $processPath = [IO.Path]::GetFullPath([string]$_.Path)
+                  if ($processPath.StartsWith($testRootFull, [StringComparison]::OrdinalIgnoreCase)) {
+                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                  }
+                } catch {}
+              }
+              Remove-Item Env:CHATGPT_RESPONSE_NOTIFIER_TEST_BRIDGE_PORT -ErrorAction SilentlyContinue
               Remove-Item Env:CHATGPT_RESPONSE_NOTIFIER_INSTALL_ROOT -ErrorAction SilentlyContinue
               Remove-Item -LiteralPath $testInstallRoot -Recurse -Force -ErrorAction SilentlyContinue
             }
@@ -106,7 +160,7 @@ jobs:
             gh release create $tag $managedZip $setupExe `
               --target $sourceCommit `
               --title "ChatGPT Response Notifier $version" `
-              --notes "Automatically continues INCOMPLETE_LIMIT chats through the local ChatGPT composer when safe, falls back to the normal notification if DOM continuation cannot be confirmed, and expands persistent popup history to the rolling 20 most recent notifications. No ChatGPT API polling or authentication access is added."
+              --notes "Adds unified build automation for recognized GitHub work chats: monitoring and bounded recovery enable together, explicit persistent Pause/Resume, early build-scope recognition, quiet tab closure, durable incident/run budgets, one exact-tab background reload, guarded continuation or footer-format repair, a whole-run 12-generation fuse, and rate-limit/uncertainty circuit breakers. Existing coded completion history and INCOMPLETE_LIMIT continuation remain supported. No ChatGPT API polling or authentication access is added."
             if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
           }
           else {

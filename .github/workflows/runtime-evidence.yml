@@ -1,0 +1,160 @@
+name: Collect notifier runtime evidence
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/Collect-NotifierRuntimeEvidence.ps1'
+      - 'tools/Add-NotifierChromeRegistrationEvidence.ps1'
+      - 'tools/Add-NotifierStartupRegistryEvidence.ps1'
+      - 'tools/Add-NotifierSafeEvidence.ps1'
+      - '.github/workflows/runtime-evidence.yml'
+      - 'extension/**'
+      - 'src/**'
+      - 'VERSION.txt'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.head.repo.owner.login == github.repository_owner) }}
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 5
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact source identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) {
+            throw "Exact-source checkout mismatch: expected $env:SOURCE_SHA, got $actual."
+          }
+          Write-Host "Exact source head: $actual"
+
+      - name: Validate collector syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($script in @(
+            '.\tools\Collect-NotifierRuntimeEvidence.ps1',
+            '.\tools\Add-NotifierChromeRegistrationEvidence.ps1',
+            '.\tools\Add-NotifierStartupRegistryEvidence.ps1',
+            '.\tools\Add-NotifierSafeEvidence.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $script),
+              [ref]$tokens,
+              [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              throw "Runtime evidence script has PowerShell parse errors: $script"
+            }
+          }
+
+      - name: Collect bounded read-only runtime evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = Join-Path $env:RUNNER_TEMP 'notifier-runtime-evidence.json'
+          try {
+            powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Collect-NotifierRuntimeEvidence.ps1 -OutputPath $output -DiagnosticTail 200
+            if ($LASTEXITCODE -ne 0) { throw "collector-exit-$LASTEXITCODE" }
+          }
+          catch {
+            # The self-hosted runner intentionally does not have broad read access to
+            # the interactive user's private notifier root. Treat that boundary as
+            # unavailable evidence, not as a workflow failure, then let the bounded
+            # ACL/registry adapters add whatever they can prove independently.
+            [ordered]@{
+              schemaVersion = 2
+              collector = 'chatgpt-response-notifier-readonly-runtime-evidence'
+              observedAtUtc = [DateTimeOffset]::UtcNow.ToString('o')
+              sourceCommit = $env:SOURCE_SHA
+              readOnly = $true
+              runner = [ordered]@{ principalClass = 'service'; sessionId = [Diagnostics.Process]::GetCurrentProcess().SessionId }
+              installState = [ordered]@{ state = 'unavailable-private-root' }
+              installedManifest = [ordered]@{ state = 'unavailable-private-root' }
+              helper = [ordered]@{
+                processObservationState = 'unavailable-private-root'
+                processCount = 0
+                processes = @()
+                loopbackListener = [ordered]@{ state = 'unavailable-private-root'; port = 38473; listening = $false; owningProcessIds = @() }
+                bridgeProtocolReadAttempted = $false
+                bridgeProtocolReason = 'Private-root collector was access denied under the service identity; bounded adapters remain authoritative where available.'
+              }
+              diagnostics = [ordered]@{ state = 'unavailable-private-root'; requestedTail = 200; acceptedRecords = 0; malformedOrRejectedRecords = 0; records = @() }
+              chrome = [ordered]@{
+                processObservationState = 'unavailable-private-root'
+                processCount = 0
+                loadedExtensionRuntimeIdentitySupported = $false
+                workerErrorCaptureSupported = $false
+                capabilityReason = 'Base private-root collector was unavailable; bounded live-evidence adapter may still establish extension bridge liveness.'
+              }
+              windowsIncidents = [ordered]@{ state = 'not-collected'; records = @() }
+            } | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $output -Encoding UTF8
+          }
+
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Add-NotifierStartupRegistryEvidence.ps1 -EvidencePath $output
+          if ($LASTEXITCODE -ne 0) { throw "Startup registry evidence fallback failed with exit code $LASTEXITCODE." }
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Add-NotifierSafeEvidence.ps1 -EvidencePath $output
+          if ($LASTEXITCODE -ne 0) { throw "Bounded notifier evidence read failed with exit code $LASTEXITCODE." }
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Add-NotifierChromeRegistrationEvidence.ps1 -EvidencePath $output
+          if ($LASTEXITCODE -ne 0) { throw "Chrome registration evidence adapter failed with exit code $LASTEXITCODE." }
+
+          $evidence = Get-Content -LiteralPath $output -Raw -Encoding UTF8 | ConvertFrom-Json
+          $evidence.sourceCommit = $env:SOURCE_SHA
+          $evidence | ConvertTo-Json -Depth 14 | Set-Content -LiteralPath $output -Encoding UTF8
+          $raw = Get-Content -LiteralPath $output -Raw -Encoding UTF8
+
+          if ($evidence.schemaVersion -ne 2 -or $evidence.readOnly -ne $true) {
+            throw 'Runtime evidence schema/read-only marker is invalid.'
+          }
+          if ([string]$evidence.sourceCommit -ne $env:SOURCE_SHA) {
+            throw "Runtime evidence source mismatch: expected $env:SOURCE_SHA, got $($evidence.sourceCommit)."
+          }
+          foreach ($forbidden in @('responseBody','responseText','sessionTitle','promptText','conversationUrl','commandLine','"error":')) {
+            if ($raw -match [regex]::Escape($forbidden)) {
+              throw "Runtime evidence contains forbidden field/content marker: $forbidden"
+            }
+          }
+          if ($raw -match [regex]::Escape('C:\Users\dan')) {
+            throw 'Runtime evidence leaked the interactive profile path.'
+          }
+
+          Write-Host ("Evidence summary: install={0}; manifest={1}; helperProcesses={2}; listener={3}; registration={4}; startupRegistration={5}; safeEvidence={6}; safeInstalled={7}; currentLoaded={8}; historicalLoaded={9}; diagnostics={10}; liveRuntimeIdentity={11}; windowsIncidents={12}" -f `
+            $evidence.installState.state,
+            $evidence.installedManifest.state,
+            $evidence.helper.processCount,
+            $evidence.helper.loopbackListener.listening,
+            $evidence.chrome.registration.state,
+            $evidence.helper.startupRegistration.state,
+            $evidence.safeRuntimeEvidence.state,
+            $evidence.safeRuntimeEvidence.installedVersion,
+            $evidence.safeRuntimeEvidence.currentExtensionVersion,
+            $evidence.safeRuntimeEvidence.historicalExtensionVersion,
+            $evidence.diagnostics.state,
+            $evidence.chrome.loadedExtensionRuntimeIdentitySupported,
+            @($evidence.windowsIncidents.records).Count)
+
+      - name: Upload sanitized runtime evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: notifier-runtime-evidence-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}\notifier-runtime-evidence.json
+          if-no-files-found: error
+          retention-days: 7
