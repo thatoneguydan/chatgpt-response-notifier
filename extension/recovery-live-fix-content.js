@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 3;
+  const RUNTIME_VERSION = 4;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const FALLBACK_SELECTOR = [
     '[role="alert"]',
@@ -23,6 +23,8 @@
   ].join(',');
   const MAX_FALLBACK_NODES = 512;
   const MAX_FALLBACK_TEXT = 420;
+  const STALLED_RESPONSE_KEY = 'chatgpt-notifier-explicit-interruption-baseline-v1';
+  const STALLED_RESPONSE_TTL_MS = 30 * 60_000;
 
   try { globalThis.__chatgptNotifierRecoveryLiveContent?.dispose?.(); } catch {}
 
@@ -54,6 +56,78 @@
       ['generation-error', /failed to (?:generate|respond|complete)|error (?:generating|while generating|during generation)|something went wrong|there was an error|unable to generate|could(?: not|n't) generate/]
     ];
     return patterns.find(([, pattern]) => pattern.test(text)) || null;
+  }
+
+  function readStalledBaseline() {
+    try {
+      const value = JSON.parse(sessionStorage.getItem(STALLED_RESPONSE_KEY) || 'null');
+      if (!value || typeof value !== 'object') return null;
+      if (Date.now() - Number(value.observedAt || 0) > STALLED_RESPONSE_TTL_MS) {
+        sessionStorage.removeItem(STALLED_RESPONSE_KEY);
+        return null;
+      }
+      return value;
+    } catch { return null; }
+  }
+
+  function clearStalledBaseline() {
+    try { sessionStorage.removeItem(STALLED_RESPONSE_KEY); } catch {}
+  }
+
+  function rememberStalledBaseline(base = {}, interruptionKind = '') {
+    if (!base?.conversationId || !base?.documentId || !base?.promptKey || !interruptionKind) return;
+    try {
+      sessionStorage.setItem(STALLED_RESPONSE_KEY, JSON.stringify({
+        conversationId: String(base.conversationId || ''),
+        documentId: String(base.documentId || ''),
+        promptKey: String(base.promptKey || ''),
+        assistantKey: String(base.assistantKey || ''),
+        assistantRevision: String(base.assistantRevision || ''),
+        interruptionKind: String(interruptionKind || ''),
+        observedAt: Date.now()
+      }));
+    } catch {}
+  }
+
+  function stalledResponseAfterReload(base = {}, expected = {}) {
+    const prior = readStalledBaseline();
+    if (!prior) return null;
+    const conversationId = String(base.conversationId || '');
+    const documentId = String(base.documentId || '');
+    const promptKey = String(base.promptKey || '');
+    if (!conversationId || !documentId || !promptKey ||
+        conversationId !== String(prior.conversationId || '') ||
+        promptKey !== String(prior.promptKey || '')) {
+      clearStalledBaseline();
+      return null;
+    }
+    if (expected.conversationId && String(expected.conversationId) !== conversationId) return null;
+    if (expected.documentId && String(expected.documentId) !== documentId) return null;
+    if (expected.promptKey && String(expected.promptKey) !== promptKey) return null;
+    if (String(prior.documentId || '') === documentId) return null;
+    if (base.statusCode || base.stopGenerating === true || base.toolActivity === true) {
+      clearStalledBaseline();
+      return null;
+    }
+    const sameAssistant = String(base.assistantKey || '') === String(prior.assistantKey || '') &&
+      String(base.assistantRevision || '') === String(prior.assistantRevision || '');
+    if (!sameAssistant) {
+      clearStalledBaseline();
+      return null;
+    }
+    return {
+      explicitInterruption: true,
+      interruptionKind: String(prior.interruptionKind || 'generation-error'),
+      interruptionAttribution: 'current-request-global',
+      rateLimited: false,
+      authRequired: false,
+      approvalRequired: false,
+      conversationId,
+      documentId,
+      promptKey,
+      applicationStateIdentityMatched: true,
+      applicationStateReason: 'post-reload-response-unchanged'
+    };
   }
 
   function fallbackApplicationState(base = {}, expected = {}) {
@@ -122,6 +196,8 @@
       if (typeof monitor?.inspectCurrentRequestUi !== 'function') {
         return { explicitInterruption: false, interruptionKind: '', applicationStateIdentityMatched: false, applicationStateReason: 'monitor-classifier-unavailable' };
       }
+      let base = null;
+      try { base = monitor.snapshot?.() || null; } catch {}
       const result = monitor.inspectCurrentRequestUi(expected) || {};
       const primary = {
         explicitInterruption: result.explicitInterruption === true,
@@ -136,12 +212,28 @@
         applicationStateIdentityMatched: result.applicationStateIdentityMatched !== false,
         applicationStateReason: String(result.applicationStateReason || '')
       };
-      if (primary.applicationStateIdentityMatched === false || primary.explicitInterruption || primary.rateLimited || primary.authRequired || primary.approvalRequired) return primary;
+      if (primary.applicationStateIdentityMatched === false) return primary;
+      if (primary.explicitInterruption) {
+        rememberStalledBaseline(base || primary, primary.interruptionKind);
+        return primary;
+      }
+      if (primary.rateLimited || primary.authRequired || primary.approvalRequired) {
+        clearStalledBaseline();
+        return primary;
+      }
 
-      let base = null;
-      try { base = monitor.snapshot?.() || null; } catch {}
       const fallback = fallbackApplicationState(base || primary, expected);
-      return fallback || primary;
+      if (fallback?.explicitInterruption) {
+        rememberStalledBaseline(base || fallback, fallback.interruptionKind);
+        return fallback;
+      }
+      if (fallback?.rateLimited || fallback?.authRequired || fallback?.approvalRequired) {
+        clearStalledBaseline();
+        return fallback;
+      }
+
+      const stalled = stalledResponseAfterReload(base || primary, expected);
+      return stalled || primary;
     } catch {
       return { explicitInterruption: false, interruptionKind: '', applicationStateIdentityMatched: false, applicationStateReason: 'monitor-classifier-failed' };
     }
@@ -209,6 +301,7 @@
     version: RUNTIME_VERSION,
     detectExplicitInterruption,
     fallbackApplicationState,
+    stalledResponseAfterReload,
     augmentedSnapshot,
     publishExplicitState,
     dispose() {
