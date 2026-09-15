@@ -19,7 +19,7 @@ function loadStatusParser() {
 }
 
 test('completion detector matches the reviewed hidden-tab-safe source', () => {
-  assert.equal(normalizedBlobSha('extension/content-script.js'), 'b12f8179d559d53cac460e1cad99c36b3ee1a035');
+  assert.equal(normalizedBlobSha('extension/content-script.js'), '87261e88d79da6b236a224cc21a6a1474cc05277');
 });
 
 test('only the canonical seven exact terminal footer codes qualify', () => {

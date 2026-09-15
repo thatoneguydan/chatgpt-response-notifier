@@ -1,51 +1,55 @@
 # ChatGPT Response Notifier — Roadmap
 
-Program: **ChatGPT Response Notifier**. Source authority: this repository. Historical incident authority: DevelopmentInfrastructure #283. Status-contract v2 authority: #432. Explicit-interruption regression authority: #434. Timestamp/quick-prompt rollout authority: #435. Quick-prompt layout / persistent timeout-recovery authority: #436. Post-refresh continuation regression authority: #437. Hidden-tab completion scheduler hardening authority: #438.
+Program: **ChatGPT Response Notifier**. Source authority: this repository. Historical incident authority: DevelopmentInfrastructure #283. Status-contract v2 authority: #432. Explicit-interruption regression authority: #434. Timestamp/quick-prompt rollout authority: #435. Quick-prompt layout / persistent timeout-recovery authority: #436. Post-refresh continuation regression authority: #437. Hidden-tab rAF hardening authority: #438. Hidden-tab end-to-end stall follow-up authority: #439.
 
-## Current checkpoint — 2026-09-15, v0.9.22 live; #438 active
+## Current checkpoint — 2026-09-15, v0.9.23 live; #439 active
 
-Notifier **v0.9.22** is the installed/live baseline on `GLASS\dan`.
+Notifier **v0.9.23** is the installed/live baseline on `GLASS\dan`.
 
-DevelopmentInfrastructure **#437** remains complete. DevelopmentInfrastructure **#438** is the active bounded follow-up: the normal completion detector still gates throttled DOM checks through `requestAnimationFrame()`, which Chrome may suspend or heavily throttle after the ChatGPT tab becomes hidden. Candidate **v0.9.23** will make hidden-tab completion checks independent of animation frames while preserving the accepted completion, continuation, recovery, identity, updater, rollback, and notification contracts.
+DevelopmentInfrastructure **#438** is complete: hidden completion checks no longer depend on `requestAnimationFrame()`, including the visible-to-hidden pending-frame race. Live testing immediately exposed a remaining background-tab stall: a notification did not appear until the Chrome window and exact ChatGPT tab were activated even though the tab stayed open.
 
-Accepted v0.9.22 implementation source: `2e751e59496b1ea47739f8ab73e4d9f989f915b7`. Notifier PR #50 merged as `98a3aa1dafb768f623b0f24b7e92e5379d183245`. Release `v0.9.22` is published and the update manifest advanced on `main` as `1cb47b08a725e0849a48d3e07d36d0b4136e9ecf`.
+DevelopmentInfrastructure **#439** is the active bounded follow-up. Canonical v0.9.23 source still places the 150 ms answer-check `setTimeout()` in front of the hidden-tab rAF bypass. Chrome can throttle page timers in background tabs, and Chrome can also mark a visibly open tab `frozen`, in which state page event handlers and timers cannot run until activation. Candidate **v0.9.24** removes the remaining hidden-tab timer dependency from the primary completion detector while preserving visible-tab throttling and all accepted continuation/recovery/delivery contracts.
 
-## #438 active hardening contract
+Accepted v0.9.23 candidate source: `a56c5cc3ea2281a3d649489b7aaf3b596c54ef6e`. Notifier PR #52 merged as `72732d2a7322335c8002c192cfdac9005ab3f7ee`; release `v0.9.23` was published and the managed update manifest advanced as `c5236d0a16cfd1dcf21d8b5f42b0c07fccd068bb`. Protected Glass deployment run `35006353430` installed v0.9.23 on `GLASS\dan`; post-install evidence confirmed current loaded extension 0.9.23 with live runtime identity.
 
-- Hidden ChatGPT tabs must not depend on `requestAnimationFrame()` to observe the final assistant turn after a completed request.
-- Keep the existing 150 ms answer-check throttle and 30-second final-turn fallback timeout.
-- Preserve latest-prompt binding, duplicate suppression, manual-stop suppression, and the current completion notification payload.
-- Do not add ChatGPT API/session polling, foregrounding, prompt replay, Regenerate, or a new background retry loop.
-- Keep v0.9.22 bounded recovery/continuation guards unchanged.
-- Add deterministic regression coverage for the hidden-tab scheduler path and update the intentional completion-detector source pin.
-- Promotion requires the normal exact-head validation/release gates and the established non-interactive deployment/runtime-evidence path.
+## #439 active hardening contract
 
-## #437 accepted behavior
+- A hidden ChatGPT tab must not require page `setTimeout()` or `requestAnimationFrame()` scheduling to observe the final assistant DOM mutation after the conversation request has completed.
+- Hidden MutationObserver callbacks run the completion check immediately; visible tabs retain the reviewed 150 ms throttle and frame alignment.
+- If the tab becomes hidden while either the 150 ms throttle timer or an animation frame is pending, cancel the pending scheduler and check immediately.
+- Preserve the 30-second fallback, latest-prompt binding, duplicate suppression, manual-stop suppression, durable status verification, continuation/recovery guards, and no-foregrounding behavior.
+- Do not add ChatGPT API/session polling, debugger attachment, prompt replay, Regenerate, refresh loops, or automatic focus stealing.
+- Keep actual Chrome `frozen` state distinct from ordinary hidden-tab throttling: extension code running inside the page cannot execute while Chrome has frozen the page.
+- Add deterministic regression coverage for hidden-from-start, visible-to-hidden pending-timer, and visible-to-hidden pending-frame paths.
+- Promotion requires the existing exact-head validation, release, protected Glass deployment, and read-only post-install evidence gates.
+- Keep #439 open through a real hidden-tab live test after v0.9.24 is loaded.
+
+## Accepted behavior retained from #437/#438
 
 - Verified timeout/system recovery and silent-stop recovery use separate final eligibility rules.
 - An interrupted response remains attributable across a reload when the same response is still present.
 - Automatic recovery Continue and coded-status Continue are timestamped at send time using the local quick-prompt format.
 - Automatic continuation remains bounded and guarded by exact request identity and the existing user/safety vetoes.
-- The existing explicit-interruption and silent-stop retry budgets remain unchanged.
-- Existing stable extension identity/root, updater, rollback, notification delivery, and localhost bridge behavior are retained.
+- Hidden completion no longer waits on `requestAnimationFrame()` after the answer-check scheduler runs.
+- Existing stable extension identity/root, updater, rollback, notification delivery, localhost bridge, prompt binding, duplicate suppression, and manual-stop behavior are retained.
 
 ## Accepted proof
 
-- **v0.9.21 baseline:** validation run `34995408103`; protected deployment run `34995869795`; post-install evidence run `34995408040` proved loaded/current 0.9.21 with a live bridge.
-- **v0.9.22 exact-head validation:** run `35001614683`; candidate artifact `10409554404`; digest `sha256:554d39626bdaa7498543dcc1b1bd252670afbf8e62feb0d15fa200904f17f4de`. Deterministic post-refresh tests, extension validation, helper/installer build, replacement proof, localhost handshake, and exact candidate packaging passed.
-- **v0.9.22 publication:** release workflow `35001950459`; release ZIP SHA-256 `b614b5a458b66a833ebd21ff59b1ab6e52713b9683af7cde75f49176e607e054`; Setup SHA-256 `5cfd6beda042535a32a43bdb16e4cee481f3345502ab8e439494f86316e889b8`.
-- **v0.9.22 protected deployment:** Glass PR #138 / run `35002405134`; installed source `2e751e59496b1ea47739f8ab73e4d9f989f915b7`; installed version 0.9.22; helper listener owned; rollback available; extension identity retained.
-- **v0.9.22 post-install evidence:** runtime-evidence run `35001614374` attempt 2; artifact `10410970887`; digest `sha256:cd953ef7ed853d299f246f0b9288c1954d4f99134958b1ca42d685a5f0406c48`. Fresh evidence reports installed/current/historical/loaded runtime 0.9.22, one live bridge client, a live extension connection, and repeated v0.9.22 worker heartbeats.
+- **v0.9.22 exact-head validation:** run `35001614683`; candidate artifact `10409554404`; digest `sha256:554d39626bdaa7498543dcc1b1bd252670afbf8e62feb0d15fa200904f17f4de`.
+- **v0.9.23 exact-head validation:** run `35005655994`; candidate artifact `10411761761`; digest `sha256:723079f6bea3ad84db24a6c936550e94e0d706dc5d436c63b9ef4d40d171da89`.
+- **v0.9.23 publication:** release run `35005817595`; release tag `v0.9.23`; update manifest advanced on `main`.
+- **v0.9.23 protected deployment:** Glass PR #139 / run `35006353430`; installed source `a56c5cc3ea2281a3d649489b7aaf3b596c54ef6e`; installed version 0.9.23; helper listener owned; rollback available; extension identity retained.
+- **v0.9.23 post-install evidence:** runtime-evidence run `35005656069` attempt 2 / job `104508585069`; evidence reported installed/current/historical extension 0.9.23 and live runtime identity.
 
 ## Program structure
 
 | Workstream | Scope | Current state |
 | --- | --- | --- |
-| Workstream 1/5 — Foundation and Conversation Identity | Completion sensor, stable chat routing, loopback helper protocol. | Active bounded #438 scheduler hardening; v0.9.22 otherwise accepted. |
-| Workstream 2/5 — Native Toast UX | Persistent notifications, timestamps, quick prompts, click/dismiss routing. | Complete through v0.9.22; retained by #438. |
-| Workstream 3/5 — Installation, Release, and Acceptance | Installer, stable root, updater, rollback, release publication. | Complete through v0.9.22; candidate v0.9.23 must pass existing gates. |
-| Workstream 4/5 — Reliable Background Automation | Durable ownership, guarded continuation, recovery, delivery/outbox. | Complete through #437 / v0.9.22; unchanged by #438. |
-| Workstream 5/5 — Status Contract and Bounded Recovery | Contract retention, current-run recognition, bounded recovery, proof/rollout. | Complete through #437 / v0.9.22; unchanged by #438. |
+| Workstream 1/5 — Foundation and Conversation Identity | Completion sensor, stable chat routing, loopback helper protocol. | Active bounded #439 timer-free hidden completion hardening; v0.9.23 otherwise accepted. |
+| Workstream 2/5 — Native Toast UX | Persistent notifications, timestamps, quick prompts, click/dismiss routing. | Complete through v0.9.23; retained by #439. |
+| Workstream 3/5 — Installation, Release, and Acceptance | Installer, stable root, updater, rollback, release publication. | Complete through v0.9.23; candidate v0.9.24 must pass existing gates. |
+| Workstream 4/5 — Reliable Background Automation | Durable ownership, guarded continuation, recovery, delivery/outbox. | Complete through #438 / v0.9.23; unchanged by #439. |
+| Workstream 5/5 — Status Contract and Bounded Recovery | Contract retention, current-run recognition, bounded recovery, proof/rollout. | Complete through #438 / v0.9.23; unchanged by #439. |
 
 ## Retained recovery defaults
 
@@ -63,4 +67,4 @@ Accepted v0.9.22 implementation source: `2e751e59496b1ea47739f8ab73e4d9f989f915b
 
 ## Continuing work
 
-Implement and validate #438 as candidate v0.9.23 from the accepted v0.9.22 baseline. Keep the change bounded to completion-check scheduling plus regression/version/release metadata. Do not ask the operator to reload, update, or install while the established non-interactive promotion path remains available.
+Implement and validate #439 as candidate v0.9.24 from the accepted v0.9.23 baseline. Keep #439 open until the candidate is installed and a real completion notification is observed while the ChatGPT tab remains hidden. If the page is actually `frozen`, use browser lifecycle evidence/settings rather than introducing focus stealing or unsafe wake behavior.

@@ -54,7 +54,8 @@ try {
     'service-worker.js',
     'runtime-identity-background.js',
     'normal-continuation-budget-hook.js',
-    'delivery-diagnostics-hook.js'
+    'delivery-diagnostics-hook.js',
+    'tab-lifecycle-diagnostics-background.js'
   );
   importsReady = true;
 } catch (error) {

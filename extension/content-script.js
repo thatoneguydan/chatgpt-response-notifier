@@ -150,7 +150,7 @@
         if (observer) observer.disconnect();
         if (timeoutId !== null) clearTimeout(timeoutId);
         cleanupScheduledCheck();
-        document.removeEventListener('visibilitychange', rescueHiddenFrame, true);
+        document.removeEventListener('visibilitychange', rescueHiddenCheck, true);
         resolve(text);
       };
 
@@ -161,15 +161,26 @@
         if (text) finish(text);
       };
 
-      const rescueHiddenFrame = () => {
-        if (settled || document.visibilityState !== 'hidden' || frameId === null) return;
-        if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frameId);
-        frameId = null;
+      const rescueHiddenCheck = () => {
+        if (settled || document.visibilityState !== 'hidden') return;
+        if (throttleId !== null) {
+          clearTimeout(throttleId);
+          throttleId = null;
+        }
+        if (frameId !== null) {
+          if (typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frameId);
+          frameId = null;
+        }
         check();
       };
 
       const scheduleCheck = () => {
-        if (settled || throttleId !== null || frameId !== null) return;
+        if (settled) return;
+        if (document.visibilityState === 'hidden') {
+          rescueHiddenCheck();
+          return;
+        }
+        if (throttleId !== null || frameId !== null) return;
         const elapsed = performance.now() - lastCheckAt;
         const delay = Math.max(0, ANSWER_CHECK_THROTTLE_MS - elapsed);
         throttleId = setTimeout(() => {
@@ -186,7 +197,7 @@
         }, delay);
       };
 
-      document.addEventListener('visibilitychange', rescueHiddenFrame, true);
+      document.addEventListener('visibilitychange', rescueHiddenCheck, true);
 
       const root = conversationObserverRoot();
       if (root && typeof MutationObserver === 'function') {

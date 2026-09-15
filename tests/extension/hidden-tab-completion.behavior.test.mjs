@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import test from 'node:test';
 
 const source = readFileSync(new URL('../../extension/content-script.js', import.meta.url), 'utf8');
+const lifecycleSource = readFileSync(new URL('../../extension/tab-lifecycle-diagnostics-background.js', import.meta.url), 'utf8');
 
 function createRuntime(initialVisibility) {
   let visibilityState = initialVisibility;
@@ -121,6 +122,7 @@ function createRuntime(initialVisibility) {
     observers,
     frames,
     cancelledFrame: () => cancelledFrame,
+    hasTimer(delay) { return [...timers.values()].some((value) => value.delay === delay); },
     arm() { runtimeListeners[0]({ type: 'CHATGPT_CONVERSATION_REQUEST_COMPLETED' }); },
     runTimer(delay) {
       const entry = [...timers.entries()].find(([, value]) => value.delay === delay);
@@ -142,18 +144,35 @@ async function flush() {
   await Promise.resolve();
 }
 
-test('hidden completion check bypasses requestAnimationFrame', async () => {
+test('hidden completion check bypasses both page timer and requestAnimationFrame', async () => {
   const runtime = createRuntime('hidden');
   runtime.turns.push(runtime.turn('user', 'conversation-turn-1'));
   runtime.arm();
   runtime.turns.push(runtime.turn('assistant', 'conversation-turn-2', 'Finished while hidden'));
   runtime.mutate();
-  runtime.runTimer(150);
   await flush();
 
+  assert.equal(runtime.hasTimer(150), false);
   assert.equal(runtime.frames.size, 0);
   assert.equal(runtime.messages.at(-1)?.type, 'CHATGPT_RESPONSE_COMPLETE');
   assert.equal(runtime.messages.at(-1)?.response, 'Finished while hidden');
+});
+
+test('switching hidden rescues a pending throttle timer before it fires', async () => {
+  const runtime = createRuntime('visible');
+  runtime.turns.push(runtime.turn('user', 'conversation-turn-1'));
+  runtime.arm();
+  runtime.turns.push(runtime.turn('assistant', 'conversation-turn-2', 'Finished before timer'));
+  runtime.mutate();
+
+  assert.equal(runtime.hasTimer(150), true);
+  runtime.hide();
+  await flush();
+
+  assert.equal(runtime.hasTimer(150), false);
+  assert.equal(runtime.frames.size, 0);
+  assert.equal(runtime.messages.at(-1)?.type, 'CHATGPT_RESPONSE_COMPLETE');
+  assert.equal(runtime.messages.at(-1)?.response, 'Finished before timer');
 });
 
 test('switching hidden rescues an already scheduled animation frame', async () => {
@@ -172,4 +191,16 @@ test('switching hidden rescues an already scheduled animation frame', async () =
   assert.equal(runtime.frames.size, 0);
   assert.equal(runtime.messages.at(-1)?.type, 'CHATGPT_RESPONSE_COMPLETE');
   assert.equal(runtime.messages.at(-1)?.response, 'Finished before tab switch');
+});
+
+test('tab lifecycle diagnostics are sanitized and observe request completion plus frozen/discarded changes', () => {
+  assert.doesNotThrow(() => new vm.Script(lifecycleSource));
+  assert.match(lifecycleSource, /request-completed-tab-lifecycle/);
+  assert.match(lifecycleSource, /tab-lifecycle-change/);
+  assert.match(lifecycleSource, /tab\?\.frozen === true/);
+  assert.match(lifecycleSource, /tab\?\.discarded === true/);
+  assert.match(lifecycleSource, /tab\?\.active === true/);
+  assert.match(lifecycleSource, /chrome\.webRequest\.onCompleted\.addListener/);
+  assert.match(lifecycleSource, /chrome\.tabs\.onUpdated\.addListener/);
+  assert.doesNotMatch(lifecycleSource, /promptText|assistantText|responseText|responseBody/);
 });
