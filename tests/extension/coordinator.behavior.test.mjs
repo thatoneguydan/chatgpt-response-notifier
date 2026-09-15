@@ -4,6 +4,8 @@ import vm from 'node:vm';
 import test from 'node:test';
 import './delivery-dedupe.behavior.test.mjs';
 import './delivery-reliability.behavior.test.mjs';
+import './runtime-identity.behavior.test.mjs';
+import './click-route-source.test.mjs';
 
 const root = new URL('../../', import.meta.url);
 const source = readFileSync(new URL('extension/coordinator-background.js', root), 'utf8');
