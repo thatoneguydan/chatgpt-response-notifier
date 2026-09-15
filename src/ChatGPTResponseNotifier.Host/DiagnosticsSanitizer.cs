@@ -97,6 +97,9 @@ internal static class DiagnosticsSanitizer
             chromeDocumentSuffix = StringValue(input, "chromeDocumentSuffix", 8),
             statusRuntimeSuffix = StringValue(input, "statusRuntimeSuffix", 8),
             monitorRuntimeSuffix = StringValue(input, "monitorRuntimeSuffix", 8),
+            workStatusContractId = StringValue(input, "workStatusContractId", 64),
+            workStatusContractSemanticSha256 = StringValue(input, "workStatusContractSemanticSha256", 64),
+            workStatusCompatibility = StringValue(input, "workStatusCompatibility", 320),
             terminalState = TerminalState(input)
         };
         return JsonSerializer.SerializeToElement(safe, JsonOptions.Default);
