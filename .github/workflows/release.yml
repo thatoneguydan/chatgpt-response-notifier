@@ -28,6 +28,7 @@ jobs:
           $ErrorActionPreference = 'Stop'
           foreach ($script in @(
             '.\extension\background.js',
+            '.\extension\diagnostics-bootstrap.js',
             '.\extension\attachment-script.js',
             '.\extension\coordinator-background.js',
             '.\extension\service-worker.js',
@@ -55,6 +56,9 @@ jobs:
             '.\extension\response-stream-status-main.js',
             '.\extension\response-stream-status-bridge.js',
             '.\extension\response-stream-status-background.js',
+            '.\extension\hidden-window-diagnostics-main.js',
+            '.\extension\hidden-window-diagnostics-page.js',
+            '.\extension\hidden-window-diagnostics-background.js',
             '.\extension\popup.js'
           )) {
             node --check $script
@@ -95,14 +99,15 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'VERSION.txt is empty.' }
           $tag = "v$version"
           $releaseNotes = @(
-            'Fixes coded notifications when ChatGPT defers final DOM rendering in an occluded Chrome window.',
+            'Adds bounded diagnostics for notifier completions that stall while Chrome is unfocused. This release does not claim the hidden-window stall is fixed.',
             '',
-            '- Live v0.9.25 evidence proved the extension and exact-document probe remained runnable on another Windows virtual desktop, while ChatGPT did not paint the terminal status into the DOM until the window became visible.',
-            '- A document-start MAIN-world observer now passively tees the conversation response stream ChatGPT already initiated and retains only a short rolling tail while looking for the existing terminal status grammar.',
-            '- Only the validated status token crosses into the isolated extension world; raw prompt/assistant response content is not persisted or included in diagnostics.',
-            '- Exact tab/document/request context plus existing build enrollment gates the early durable notification, and later DOM delivery for the same prompt is suppressed as a duplicate.',
-            '- Automatic Continue remains on the existing DOM-verified identity and safety path; stream evidence cannot authorize a continuation.',
-            '- Existing open ChatGPT tabs receive the observer on extension startup/update without refresh. No ChatGPT API/session polling, replay, debugger attachment, new permission, Regenerate action, refresh loop, or automatic foregrounding is added.'
+            '- A passive MAIN-world observer clones only the existing ChatGPT conversation response and records bounded transport/protocol timing and counters; it does not issue another ChatGPT request.',
+            '- Raw-token and decoded-string candidate evidence is separated, and diagnostics are permanently non-authorizing: they cannot trigger a notification or automatic Continue.',
+            '- Chrome request/document identity is correlated with stream nonces. Overlapping candidates fail closed as explicit ambiguous incidents instead of silently choosing the newest request.',
+            '- Page visibility/focus/freeze, tab frozen/discarded state, Chrome window focus/state, page-query deadlines, and post-settlement stream-final deadlines are retained as timestamped transitions.',
+            '- Hidden-window incident evidence is retained separately from the noisy flat event ring with bounds of 20 incidents, 48 transitions per incident, and 128 KiB of projected metadata.',
+            '- Helper and exported evidence contain only sanitized metadata and identifier suffixes; response bodies, prompts, titles, authentication data, and full URLs are not exported.',
+            '- Existing notification and automatic-Continue behavior remains on the previously reviewed production paths. No debugger attachment, foregrounding, refresh loop, request replay, session polling, or new ChatGPT traffic is added.'
           ) -join [Environment]::NewLine
           $artifactRoot = Join-Path $env:RUNNER_TEMP "chatgpt-response-notifier-release-$version"
           Remove-Item -LiteralPath $artifactRoot -Recurse -Force -ErrorAction SilentlyContinue

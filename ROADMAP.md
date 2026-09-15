@@ -2,17 +2,35 @@
 
 Program: **ChatGPT Response Notifier**. Source authority: this repository. Historical incident authority: DevelopmentInfrastructure #283. Status-contract v2 authority: #432. Explicit-interruption regression authority: #434. Timestamp/quick-prompt rollout authority: #435. Quick-prompt layout / persistent timeout-recovery authority: #436. Post-refresh continuation regression authority: #437. Hidden-tab rAF hardening authority: #438. Hidden-tab end-to-end stall follow-up authority: #439.
 
-## Current checkpoint — 2026-09-15, v0.9.25 live; #439 active
+## Current checkpoint — 2026-09-15, v0.9.26 live; hidden-window acceptance failed
 
-Notifier **v0.9.25** is the installed/live baseline on `GLASS\dan`.
+Notifier **v0.9.26** is installed/live on Glass. The operator reports the unfocused-window failure remains. PR #55, release publication, protected deployment and live version identity passed; hidden-window notification acceptance did not.
 
-DevelopmentInfrastructure **#438** removed the hidden-tab `requestAnimationFrame()` dependency. v0.9.24 then removed the remaining hidden-tab 150 ms completion-timer dependency and added lifecycle diagnostics. Its required virtual-desktop live test still stalled until the Chrome window became visible.
+The evidence-led investigation and deterministic diagnostic implementation plan are in [the v0.9.26 handoff](docs/HIDDEN-WINDOW-DIAGNOSTIC-HANDOFF-2026-09-15.md). **Implement that diagnostic plan before another behavior release.** No product behavior or installation changed in this investigation.
 
-v0.9.25 moved the wake into the extension background worker: successful conversation-request completion directly probed the exact Chrome document through the status observer. Exact validation, publication, protected Glass deployment, and post-install runtime evidence all passed. The required live acceptance test still failed.
+Fresh read-only evidence proves the MAIN fetch observer and isolated bridge execute, but the raw stream scanner reports no status. A DOM code is observed 27.557 seconds after request completion; helper presentation follows about 252 ms later. The capture shows one live worker identity and the tab was neither reported frozen nor discarded at completion. It does not record exact focus transitions or enough response shape/request correlation to prove the underlying live cause.
 
-Fresh v0.9.25 evidence isolated the remaining boundary. At `2026-09-15T19:52:13.047Z` the background worker received request completion; at `19:52:13.048Z` Chrome reported `frozen=false;discarded=false;active=true`; the exact-document status probe then ran for its full 30-second budget and ended at `19:52:43.324Z` with `terminal-code-not-observed`. The coded terminal DOM status did not appear until `19:55:26.545Z`, when the Chrome window was made visible again. Therefore Chrome is continuing to run the extension while the virtual-desktop window is occluded, but ChatGPT defers the final rendered assistant DOM in that state.
+Source probes establish two relevant defects: tokens split across logical JSON/SSE deltas are missed despite byte-chunk split tests passing, and request contexts are discarded after five minutes from request start even while active. A nonterminal example is also misclassified by raw regex matching. These are proven limitations, not yet proof of the live incident's transport shape. Do not widen the regex.
 
-DevelopmentInfrastructure **#439** remains active. Candidate **v0.9.26** moves coded-notification evidence ahead of the deferred paint boundary without adding new ChatGPT traffic: a `document_start` MAIN-world observer tees only the page's already-running conversation response stream, keeps only a short rolling tail while scanning for the existing terminal status grammar, and forwards only a validated status code through an isolated-world bridge. Exact tab/document/request context and the existing build enrollment gate the notification. The durable notification/outbox path is unchanged. Automatic Continue remains DOM-verified and is not authorized from stream evidence. When ChatGPT eventually paints the same prompt, the later DOM notification is suppressed as a duplicate.
+Diagnostics are insufficient: 177 of 200 retained entries are repeated terminal observations or heartbeats. The handoff specifies correlated transport/page/delivery timestamps, response-shape counters, explicit reject reasons, bounded page-query outcomes and retained per-incident summaries.
+
+Current source: main `fb207b3e106b1b92608521620a84ff8093138e32`. Installed v0.9.26 candidate: `e303eaff6d4ef1c9e4cc922f316ab8b6d550dd1b`. Fresh collection: run `35018543523` attempt 3 / job `104563425810` / artifact `10417809946`; verified ZIP digest `sha256:40f39e3b36415d3ec397aeb3ad66cf4f5670692f9c33deb7c9b0e9bf7be08a80`.
+
+Earlier v0.9.23–v0.9.25 repairs removed specific rAF/timer barriers and added an exact-document DOM probe. Earlier evidence showed delayed DOM status observation after window restoration; it did not uniquely prove painting caused that delay. v0.9.26's passive stream path remains notification-only; automatic Continue still requires the existing DOM safety checks.
+
+## #439 diagnostic sequence
+
+Parent: **ChatGPT Response Notifier → Workstream 1/5 — Foundation and Conversation Identity → Stage 1/1 — Hidden-window completion evidence and repair**.
+
+| Step | Gate | Tasks |
+| --- | --- | --- |
+| Step 1/3 — Make one incident diagnosable | Gate 1/1 — Complete trace or explicit insufficient-evidence result | Task 1/4 — Correlate transport and recognition; Task 2/4 — Measure page/lifecycle waits; Task 3/4 — Retain useful evidence; Task 4/4 — Prove instrumentation before release. |
+| Step 2/3 — Repair only the evidenced boundary | Gate 1/1 — Reproduced failure corrected without weakening identity/status semantics | Task 1/2 — Choose the measured repair branch; Task 2/2 — Resolve verified delivered duplicates. |
+| Step 3/3 — Prove real unfocused-window behavior | Gate 1/1 — Notification before focus return, complete evidence | Task 1/2 — Capture distinct Windows/tab conditions; Task 2/2 — Verify outcome and close only on proof. |
+
+**Current:** Step 1/3 → Gate 1/1 → Task 1/4. The linked handoff defines exact fields, files, limits, fixtures, conditional repairs and live acceptance.
+
+**Roadmap change:** Workstreams remain 5. The previously unnumbered #439 follow-up under Workstream 1/5 now has one explicit Stage (1/1) with three Steps (1/3–3/3), one real Gate per Step, and 4/2/2 Tasks. No existing Workstream was renumbered.
 
 ## #439 active hardening contract
 
@@ -58,9 +76,9 @@ DevelopmentInfrastructure **#439** remains active. Candidate **v0.9.26** moves c
 
 | Workstream | Scope | Current state |
 | --- | --- | --- |
-| Workstream 1/5 — Foundation and Conversation Identity | Completion sensor, stable chat routing, loopback helper protocol. | Active #439 passive response-stream notification path; v0.9.25 live, v0.9.26 candidate. |
-| Workstream 2/5 — Native Toast UX | Persistent notifications, timestamps, quick prompts, click/dismiss routing. | Complete through v0.9.25; v0.9.26 changes only the notification evidence source for occluded coded completions. |
-| Workstream 3/5 — Installation, Release, and Acceptance | Installer, stable root, updater, rollback, release publication. | Complete through v0.9.25; candidate v0.9.26 must pass existing gates. |
+| Workstream 1/5 — Foundation and Conversation Identity | Completion sensor, stable chat routing, loopback helper protocol. | v0.9.26 live; hidden-window acceptance failed. #439 diagnostic sequence is active. |
+| Workstream 2/5 — Native Toast UX | Persistent notifications, timestamps, quick prompts, click/dismiss routing. | v0.9.26 deployed; helper presentation pipeline observed working after delayed DOM detection. Hidden-window timing unproven. |
+| Workstream 3/5 — Installation, Release, and Acceptance | Installer, stable root, updater, rollback, release publication. | v0.9.26 validation/publication/protected deployment accepted; live acceptance remains open. |
 | Workstream 4/5 — Reliable Background Automation | Durable ownership, guarded continuation, recovery, delivery/outbox. | Durable outbox retained; stream evidence may notify early but cannot authorize Continue. |
 | Workstream 5/5 — Status Contract and Bounded Recovery | Contract retention, current-run recognition, bounded recovery, proof/rollout. | Existing DOM identity and continuation safety remain authoritative; #439 is notification-timing only. |
 
@@ -80,4 +98,4 @@ DevelopmentInfrastructure **#439** remains active. Candidate **v0.9.26** moves c
 
 ## Continuing work
 
-Validate, publish, and protected-deploy candidate v0.9.26 from the accepted v0.9.25 baseline. Keep #439 open until a real coded completion notification arrives while the Chrome window remains on another Windows virtual desktop. If v0.9.26 still fails, use the new sanitized response-stream diagnostics to determine whether ChatGPT's transport bypassed the wrapped fetch/XHR path or whether request/context correlation rejected the observed terminal token before changing architecture again.
+Adopt DevelopmentInfrastructure #439 and the [diagnostic handoff](docs/HIDDEN-WINDOW-DIAGNOSTIC-HANDOFF-2026-09-15.md). Implement the specified bounded diagnostics from current canonical source, validate them through the existing self-hosted workflow and protected deployment path, and capture one complete failure trace before selecting a behavior repair. Keep #439 open through actual unfocused-window acceptance.
