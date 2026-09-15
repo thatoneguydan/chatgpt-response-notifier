@@ -7,6 +7,7 @@
   const DB_VERSION = 1;
   const STORE_NAME = 'deliveries';
   const CONTEXT_TTL_MS = 5 * 60 * 1000;
+  const LATE_DOM_DEDUPE_MS = 10 * 60 * 1000;
   const MAX_RECORD_AGE_MS = 14 * 24 * 60 * 60 * 1000;
   const REQUEST_FILTER = {
     urls: [
@@ -63,14 +64,18 @@
     return `${Number(details?.tabId)}|${String(details?.requestId || '')}`;
   }
 
-  function record(status, fields = {}) {
+  function recordDiagnostic(status, fields = {}) {
     try { delivery()?.record?.(status, fields); } catch {}
   }
 
   async function queryMonitorSnapshot(tabId, documentId) {
     if (!Number.isInteger(tabId) || !documentId) return null;
     try {
-      const response = await chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_MONITOR_QUERY' }, { documentId: String(documentId) });
+      const response = await chrome.tabs.sendMessage(
+        tabId,
+        { type: 'CHATGPT_MONITOR_QUERY' },
+        { documentId: String(documentId) }
+      );
       return response?.snapshot || response || null;
     } catch {
       return null;
@@ -90,7 +95,10 @@
     if (!isAnswerStreamRequest(details)) return;
     const chromeDocumentId = String(details.documentId || '');
     if (!chromeDocumentId) {
-      record('response-stream-request-unroutable', { tabId: details.tabId, reason: 'chrome-document-id-missing' });
+      recordDiagnostic('response-stream-request-unroutable', {
+        tabId: details.tabId,
+        reason: 'chrome-document-id-missing'
+      });
       return;
     }
 
@@ -133,7 +141,9 @@
       const request = indexedDB.open(DB_NAME, DB_VERSION);
       request.onupgradeneeded = () => {
         const database = request.result;
-        if (!database.objectStoreNames.contains(STORE_NAME)) database.createObjectStore(STORE_NAME, { keyPath: 'deliveryKey' });
+        if (!database.objectStoreNames.contains(STORE_NAME)) {
+          database.createObjectStore(STORE_NAME, { keyPath: 'deliveryKey' });
+        }
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error || new Error('Could not open response-stream delivery database.'));
@@ -153,16 +163,42 @@
     return conversation && request ? `${conversation}|${request}` : '';
   }
 
-  async function getDelivery(conversationId, requestId) {
-    const key = deliveryKey(conversationId, requestId);
-    if (!key) return null;
+  async function listDeliveries() {
     const database = await openDatabase();
     return await new Promise((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, 'readonly');
-      const request = transaction.objectStore(STORE_NAME).get(key);
-      request.onsuccess = () => resolve(clone(request.result) || null);
-      request.onerror = () => reject(request.error || new Error('Could not read response-stream delivery.'));
+      const request = transaction.objectStore(STORE_NAME).getAll();
+      request.onsuccess = () => resolve((Array.isArray(request.result) ? request.result : []).map(clone));
+      request.onerror = () => reject(request.error || new Error('Could not list response-stream deliveries.'));
     });
+  }
+
+  async function getEarlyDelivery({ conversationId = '', requestId = '', promptKey = '' } = {}) {
+    const conversation = String(conversationId || '');
+    if (!conversation) return null;
+
+    const exactKey = deliveryKey(conversation, requestId);
+    if (exactKey) {
+      const database = await openDatabase();
+      const exact = await new Promise((resolve, reject) => {
+        const transaction = database.transaction(STORE_NAME, 'readonly');
+        const request = transaction.objectStore(STORE_NAME).get(exactKey);
+        request.onsuccess = () => resolve(clone(request.result) || null);
+        request.onerror = () => reject(request.error || new Error('Could not read response-stream delivery.'));
+      });
+      if (exact?.state === 'queued') return exact;
+    }
+
+    const prompt = String(promptKey || '');
+    if (!prompt) return null;
+    const cutoff = Date.now() - LATE_DOM_DEDUPE_MS;
+    const candidates = (await listDeliveries())
+      .filter((item) => item?.state === 'queued')
+      .filter((item) => String(item?.conversationId || '') === conversation)
+      .filter((item) => String(item?.promptKey || '') === prompt)
+      .filter((item) => Number(item?.createdAt || 0) >= cutoff)
+      .sort((left, right) => Number(right.createdAt || 0) - Number(left.createdAt || 0));
+    return candidates[0] || null;
   }
 
   async function reserveDelivery(identity) {
@@ -180,7 +216,7 @@
           return;
         }
         const now = Date.now();
-        const record = {
+        const deliveryRecord = {
           deliveryKey: key,
           conversationId: String(identity.conversationId || ''),
           requestId: String(identity.requestId || ''),
@@ -191,8 +227,8 @@
           createdAt: now,
           updatedAt: now
         };
-        store.add(record);
-        result = { reserved: true, record: clone(record) };
+        store.add(deliveryRecord);
+        result = { reserved: true, record: clone(deliveryRecord) };
       };
       request.onerror = () => reject(request.error || new Error('Could not inspect response-stream delivery.'));
       transaction.oncomplete = () => resolve(result || { reserved: false, record: null });
@@ -234,15 +270,10 @@
   }
 
   async function pruneDeliveries(now = Date.now()) {
-    const database = await openDatabase();
-    const all = await new Promise((resolve, reject) => {
-      const transaction = database.transaction(STORE_NAME, 'readonly');
-      const request = transaction.objectStore(STORE_NAME).getAll();
-      request.onsuccess = () => resolve(Array.isArray(request.result) ? request.result : []);
-      request.onerror = () => reject(request.error || new Error('Could not list response-stream deliveries.'));
-    });
+    const all = await listDeliveries();
     const stale = all.filter((item) => now - Number(item?.updatedAt || item?.createdAt || 0) > MAX_RECORD_AGE_MS);
     if (!stale.length) return;
+    const database = await openDatabase();
     await new Promise((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, 'readwrite');
       const store = transaction.objectStore(STORE_NAME);
@@ -278,7 +309,8 @@
     const promptRevision = String(first.promptRevision || current?.promptRevision || '');
     const monitorRuntimeId = String(current?.documentId || first.documentId || '');
     const requestId = String(context.requestId || current?.requestId || '');
-    if (!requestId || !promptKey || !promptKey.startsWith(`${conversation.id}|`)) return null;
+    if (!requestId) return null;
+    if (promptKey && !promptKey.startsWith(`${conversation.id}|`)) return null;
 
     return {
       conversationId: conversation.id,
@@ -297,7 +329,7 @@
   async function queueEarlyNotification(identity, sender) {
     const enrollment = await monitor()?.getEnrollment?.(identity.conversationId);
     if (enrollment?.enabled !== true || enrollment?.userPaused === true) {
-      record('response-stream-status-not-enrolled', {
+      recordDiagnostic('response-stream-status-not-enrolled', {
         tabId: identity.tabId,
         reason: 'build-automation-not-enabled',
         conversationId: identity.conversationId,
@@ -309,7 +341,7 @@
 
     const reservation = await reserveDelivery(identity);
     if (!reservation.reserved) {
-      record('response-stream-status-duplicate', {
+      recordDiagnostic('response-stream-status-duplicate', {
         tabId: identity.tabId,
         reason: 'request-already-notified',
         conversationId: identity.conversationId,
@@ -320,15 +352,15 @@
       return reservation.record?.notificationId || null;
     }
 
-    const record = reservation.record;
+    const deliveryRecord = reservation.record;
     const state = coordinatorState();
     if (!state || typeof state.queueNotification !== 'function') {
-      await releaseDelivery(record.deliveryKey).catch(() => {});
+      await releaseDelivery(deliveryRecord.deliveryKey).catch(() => {});
       return null;
     }
 
     const notification = {
-      id: record.notificationId,
+      id: deliveryRecord.notificationId,
       conversationId: identity.conversationId,
       conversationUrl: identity.conversationUrl,
       title: String(sender?.tab?.title || 'ChatGPT').trim() || 'ChatGPT',
@@ -340,10 +372,12 @@
 
     try {
       await state.queueNotification('', notification, fingerprint);
-      if (typeof rememberNotificationHistory === 'function') await rememberNotificationHistory(notification, fingerprint);
+      if (typeof rememberNotificationHistory === 'function') {
+        await rememberNotificationHistory(notification, fingerprint);
+      }
       if (typeof finalizeRecovery === 'function') await finalizeRecovery(identity.conversationId);
-      await updateDelivery(record.deliveryKey, { state: 'queued' });
-      record('response-stream-notification-queued', {
+      await updateDelivery(deliveryRecord.deliveryKey, { state: 'queued' });
+      recordDiagnostic('response-stream-notification-queued', {
         tabId: identity.tabId,
         reason: `status=${identity.statusCode};transport=${identity.transport}`,
         conversationId: identity.conversationId,
@@ -354,8 +388,8 @@
       if (typeof flushNotificationOutbox === 'function') flushNotificationOutbox().catch(() => {});
       return notification.id;
     } catch {
-      await releaseDelivery(record.deliveryKey).catch(() => {});
-      record('response-stream-notification-error', {
+      await releaseDelivery(deliveryRecord.deliveryKey).catch(() => {});
+      recordDiagnostic('response-stream-notification-error', {
         tabId: identity.tabId,
         reason: 'durable-notification-queue-failed',
         conversationId: identity.conversationId,
@@ -371,14 +405,15 @@
     if (!globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode)) return null;
     const identity = await identityForStreamEvent(message, sender);
     if (!identity) {
-      record('response-stream-status-unroutable', {
+      recordDiagnostic('response-stream-status-unroutable', {
         tabId: sender?.tab?.id,
-        reason: 'request-or-prompt-identity-missing',
+        reason: 'request-identity-missing',
         chromeDocumentId: sender?.documentId
       });
       return null;
     }
-    record('response-stream-terminal-status-seen', {
+
+    recordDiagnostic('response-stream-terminal-status-seen', {
       tabId: identity.tabId,
       reason: `status=${identity.statusCode};transport=${identity.transport}`,
       conversationId: identity.conversationId,
@@ -386,6 +421,66 @@
       monitorRuntimeId: identity.monitorRuntimeId
     });
     return await queueEarlyNotification(identity, sender);
+  }
+
+  function installLateDomNotificationDedupe() {
+    const original = globalThis.queueDurableNotification;
+    if (typeof original !== 'function' || original.__responseStreamDedupeWrapped === true) return;
+
+    const wrapped = async function responseStreamAwareQueueDurableNotification(turnRecord, reason = '') {
+      const conversationId = String(turnRecord?.conversationId || '');
+      const promptKey = String(turnRecord?.promptKey || '');
+      if (conversationId && promptKey) {
+        let early = null;
+        try { early = await getEarlyDelivery({ conversationId, promptKey }); } catch {}
+        if (early?.notificationId) {
+          const state = coordinatorState();
+          if (turnRecord?.turnKey && state?.updateTurn) {
+            try {
+              await state.updateTurn(turnRecord.turnKey, {
+                state: 'notification-queued',
+                actionReason: reason
+                  ? `${String(reason)};response-stream-notification-already-present`
+                  : 'response-stream-notification-already-present'
+              });
+            } catch {}
+          }
+          try { if (typeof finalizeRecovery === 'function') await finalizeRecovery(conversationId); } catch {}
+          recordDiagnostic('response-stream-late-dom-notification-suppressed', {
+            tabId: Number.isInteger(turnRecord?.ownerTabId) ? turnRecord.ownerTabId : undefined,
+            reason: 'same-prompt-stream-notification-already-present',
+            conversationId,
+            notificationId: early.notificationId
+          });
+          return early.notificationId;
+        }
+      }
+      return await original.apply(this, arguments);
+    };
+    Object.defineProperty(wrapped, '__responseStreamDedupeWrapped', { value: true });
+    Object.defineProperty(wrapped, '__responseStreamDedupeOriginal', { value: original });
+    globalThis.queueDurableNotification = wrapped;
+  }
+
+  async function attachExistingTabs() {
+    let tabs = [];
+    try { tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] }); } catch { return; }
+    for (const tab of tabs) {
+      if (!Number.isInteger(tab?.id) || tab.discarded === true || tab.frozen === true) continue;
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['response-stream-status-main.js'],
+          world: 'MAIN'
+        });
+      } catch {}
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId: tab.id },
+          files: ['status-code.js', 'response-stream-status-bridge.js']
+        });
+      } catch {}
+    }
   }
 
   chrome.webRequest.onBeforeRequest.addListener((details) => {
@@ -402,7 +497,7 @@
 
   chrome.runtime.onMessage.addListener((message, sender) => {
     if (message?.type === 'CHATGPT_RESPONSE_STREAM_DIAGNOSTIC') {
-      record(`response-stream-${String(message?.state || 'diagnostic')}`, {
+      recordDiagnostic(`response-stream-${String(message?.state || 'diagnostic')}`, {
         tabId: sender?.tab?.id,
         reason: `transport=${String(message?.transport || '')}`,
         chromeDocumentId: sender?.documentId
@@ -423,11 +518,15 @@
     }
   });
 
+  installLateDomNotificationDedupe();
+  attachExistingTabs().catch(() => {});
+
   globalThis.__chatgptNotifierResponseStreamStatus = Object.freeze({
     version: 1,
-    getEarlyDelivery: async ({ conversationId, requestId } = {}) => await getDelivery(conversationId, requestId),
+    getEarlyDelivery,
     handleTerminalStatus,
-    pruneDeliveries
+    pruneDeliveries,
+    attachExistingTabs
   });
 
   pruneDeliveries().catch(() => {});
