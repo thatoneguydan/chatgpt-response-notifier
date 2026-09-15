@@ -284,6 +284,6 @@ test('native toast renders persisted completion time in local time and release v
   assert.match(toast, /FormatCompletedAt\(record\.CompletedAt\)/);
   assert.match(toast, /value\.ToLocalTime\(\)/);
   assert.match(toast, /local\.ToString\("t"\)/);
-  assert.equal(version, '0.9.23');
+  assert.equal(version, '0.9.24');
   assert.equal(manifest.version, version);
 });
