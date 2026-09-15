@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
+import './request-completion-status-probe.behavior.test.mjs';
 
 const source = readFileSync(new URL('../../extension/content-script.js', import.meta.url), 'utf8');
 const lifecycleSource = readFileSync(new URL('../../extension/tab-lifecycle-diagnostics-background.js', import.meta.url), 'utf8');

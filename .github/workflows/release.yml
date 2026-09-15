@@ -92,14 +92,14 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'VERSION.txt is empty.' }
           $tag = "v$version"
           $releaseNotes = @(
-            'Removes the remaining page-timer dependency from hidden-tab completion detection.',
+            'Fixes coded notifier delivery when a ChatGPT Chrome window is occluded on another Windows virtual desktop.',
             '',
-            '- Hidden ChatGPT tabs now run the final assistant-turn check directly from the DOM mutation instead of waiting for the 150 ms page timer or requestAnimationFrame.',
-            '- If the tab becomes hidden while the visible-tab throttle timer is pending, that timer is cancelled and the completion check runs immediately.',
-            '- The existing visible-tab 150 ms throttle and frame alignment remain unchanged.',
-            '- Preserves latest-prompt binding, duplicate/manual-stop suppression, the 30-second fallback, and all accepted v0.9.23 continuation/recovery/delivery guards.',
-            '- Adds deterministic regression coverage for hidden-from-start, pending-timer, and pending-frame visibility races.',
-            '- Does not attempt to foreground or wake a Chrome-frozen tab and adds no ChatGPT API/session polling, prompt replay, Regenerate, or retry loop.'
+            '- Live diagnostics proved the response request completed while the tab was neither frozen nor discarded, but coded delivery waited until the Chrome window became visible again.',
+            '- Successful conversation-request completion now directly probes the exact Chrome document for its terminal status instead of waiting for the page-side 200 ms monitor publish timer.',
+            '- The probe reuses the existing status MutationObserver and exact conversation/document/turn identity checks, then hands the result to the existing durable delivery and bounded-continuation pipeline.',
+            '- Missing Chrome document identity, frozen/discarded tabs, incomplete terminal identity, and unavailable runtimes all fail safe to the existing observer path.',
+            '- Adds deterministic regression coverage for exact-document routing and the unavailable-page guards.',
+            '- Adds no ChatGPT API/session polling, response replay, foregrounding, Regenerate action, or new browser permission.'
           ) -join [Environment]::NewLine
           $artifactRoot = Join-Path $env:RUNNER_TEMP "chatgpt-response-notifier-release-$version"
           Remove-Item -LiteralPath $artifactRoot -Recurse -Force -ErrorAction SilentlyContinue
