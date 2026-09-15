@@ -81,7 +81,9 @@ test('status observation is read-only and continuation is separately authorized'
   assert.match(status, /revisionOf\(responseText\)/);
   assert.match(status, /documentId/);
   assert.match(status, /waitForContinuationUserTurn/);
-  assert.match(status, /AUTO_CONTINUE_TEXT\s*=\s*'continue until you finish or need something from me'/);
+  assert.match(status, /AUTO_CONTINUE_PROMPT\s*=\s*'Continue until you finish or need something from me\.'/);
+  assert.match(status, /function timestampedContinueText/);
+  assert.match(status, /Intl\.DateTimeFormat/);
   assert.doesNotMatch(status, /composerText\([^)]*\)\s*===\s*''[^\n]*return\s*\{[^}]*ok:\s*true/);
   assert.match(worker, /claimTurn\(status, owner\)/);
   assert.match(worker, /continuation-authorized/);
@@ -315,16 +317,19 @@ test('bounded recovery uses one earliest-deadline alarm and never foregrounds a 
   assert.doesNotMatch(bounded, /windows\.update\([^)]*focused:\s*true/);
 });
 
-test('guarded recovery adapter sends only exact continuation or exact format repair after identity checks', () => {
+test('guarded recovery adapter sends only timestamped continuation after class-specific identity checks', () => {
   const page = text('extension/bounded-recovery-script.js');
   const contract = JSON.parse(text('extension/github-work-status-contract.v1.json'));
   assert.ok(page.includes(contract.formatRepairPrompt));
-  assert.match(page, /AUTO_CONTINUE_TEXT = 'continue until you finish or need something from me'/);
+  assert.match(page, /AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me\.'/);
+  assert.match(page, /function timestampedContinueText/);
   assert.match(page, /current\.conversationId !== expected\.conversationId/);
   assert.match(page, /current\.documentId !== expected\.documentId/);
   assert.match(page, /current\.promptKey !== expected\.promptKey/);
-  assert.match(page, /current\.assistantKey === expected\.assistantKey/);
-  assert.match(page, /current\.assistantRevision/);
+  assert.match(page, /current\.promptRevision/);
+  assert.match(page, /recoveryClass === 'explicit-interruption'/);
+  assert.match(page, /currentExplicitInterruption/);
+  assert.match(page, /silentIdleConfirmations/);
   assert.match(page, /recovery-identity-changed-before-send/);
   assert.match(page, /matchingNewUserTurn/);
   assert.doesNotMatch(page, /regenerate/i);
@@ -388,11 +393,12 @@ test('coded delivery and background bootstrap failures persist sanitized helper 
   }
 });
 
-test('continuation acceptance requires matching user turn plus passive accepted request evidence', () => {
+test('continuation acceptance requires matching timestamped user turn plus passive accepted request evidence', () => {
   const status = text('extension/status-script.js');
   const worker = text('extension/service-worker.js');
   assert.match(status, /matchingContinuationUserTurn/);
-  assert.match(status, /cleanComposer\(user\.text\) === AUTO_CONTINUE_TEXT/);
+  assert.match(status, /cleanComposer\(user\.text\) === cleanComposer\(expectedText\)/);
+  assert.match(status, /timestampedContinueText/);
   assert.match(worker, /startContinuationRequestWatch/);
   assert.match(worker, /requestEvidence\?\.accepted === true/);
   assert.match(worker, /continuationOutcome/);
@@ -512,6 +518,7 @@ test('local JavaScript is syntactically valid', () => {
     'extension/delivery-dedupe-hook.js','extension/delivery-reliability-background.js','extension/delivery-diagnostics-hook.js','extension/recovery-background.js','extension/recovery-script.js','extension/history-background.js','extension/status-code.js',
     'extension/status-policy.js','extension/status-script.js','extension/monitor-background.js','extension/monitor-script.js',
     'extension/recovery-model.js','extension/monitor-query-compat-background.js','extension/recovery-control-background.js',
+    'extension/recovery-live-fix-background.js','extension/recovery-live-fix-content.js',
     'extension/bounded-recovery-background.js','extension/bounded-recovery-attachment-background.js','extension/bounded-recovery-script.js',
     'extension/normal-continuation-budget-hook.js','extension/persistence-script.js','extension/popup.js'
   ]) {
