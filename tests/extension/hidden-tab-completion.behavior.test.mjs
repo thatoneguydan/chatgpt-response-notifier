@@ -121,6 +121,7 @@ function createRuntime(initialVisibility) {
     observers,
     frames,
     cancelledFrame: () => cancelledFrame,
+    hasTimer(delay) { return [...timers.values()].some((value) => value.delay === delay); },
     arm() { runtimeListeners[0]({ type: 'CHATGPT_CONVERSATION_REQUEST_COMPLETED' }); },
     runTimer(delay) {
       const entry = [...timers.entries()].find(([, value]) => value.delay === delay);
@@ -142,18 +143,35 @@ async function flush() {
   await Promise.resolve();
 }
 
-test('hidden completion check bypasses requestAnimationFrame', async () => {
+test('hidden completion check bypasses both page timer and requestAnimationFrame', async () => {
   const runtime = createRuntime('hidden');
   runtime.turns.push(runtime.turn('user', 'conversation-turn-1'));
   runtime.arm();
   runtime.turns.push(runtime.turn('assistant', 'conversation-turn-2', 'Finished while hidden'));
   runtime.mutate();
-  runtime.runTimer(150);
   await flush();
 
+  assert.equal(runtime.hasTimer(150), false);
   assert.equal(runtime.frames.size, 0);
   assert.equal(runtime.messages.at(-1)?.type, 'CHATGPT_RESPONSE_COMPLETE');
   assert.equal(runtime.messages.at(-1)?.response, 'Finished while hidden');
+});
+
+test('switching hidden rescues a pending throttle timer before it fires', async () => {
+  const runtime = createRuntime('visible');
+  runtime.turns.push(runtime.turn('user', 'conversation-turn-1'));
+  runtime.arm();
+  runtime.turns.push(runtime.turn('assistant', 'conversation-turn-2', 'Finished before timer'));
+  runtime.mutate();
+
+  assert.equal(runtime.hasTimer(150), true);
+  runtime.hide();
+  await flush();
+
+  assert.equal(runtime.hasTimer(150), false);
+  assert.equal(runtime.frames.size, 0);
+  assert.equal(runtime.messages.at(-1)?.type, 'CHATGPT_RESPONSE_COMPLETE');
+  assert.equal(runtime.messages.at(-1)?.response, 'Finished before timer');
 });
 
 test('switching hidden rescues an already scheduled animation frame', async () => {
