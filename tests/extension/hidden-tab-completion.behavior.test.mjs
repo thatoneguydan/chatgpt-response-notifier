@@ -4,6 +4,7 @@ import vm from 'node:vm';
 import test from 'node:test';
 
 const source = readFileSync(new URL('../../extension/content-script.js', import.meta.url), 'utf8');
+const lifecycleSource = readFileSync(new URL('../../extension/tab-lifecycle-diagnostics-background.js', import.meta.url), 'utf8');
 
 function createRuntime(initialVisibility) {
   let visibilityState = initialVisibility;
@@ -190,4 +191,16 @@ test('switching hidden rescues an already scheduled animation frame', async () =
   assert.equal(runtime.frames.size, 0);
   assert.equal(runtime.messages.at(-1)?.type, 'CHATGPT_RESPONSE_COMPLETE');
   assert.equal(runtime.messages.at(-1)?.response, 'Finished before tab switch');
+});
+
+test('tab lifecycle diagnostics are sanitized and observe request completion plus frozen/discarded changes', () => {
+  assert.doesNotThrow(() => new vm.Script(lifecycleSource));
+  assert.match(lifecycleSource, /request-completed-tab-lifecycle/);
+  assert.match(lifecycleSource, /tab-lifecycle-change/);
+  assert.match(lifecycleSource, /tab\?\.frozen === true/);
+  assert.match(lifecycleSource, /tab\?\.discarded === true/);
+  assert.match(lifecycleSource, /tab\?\.active === true/);
+  assert.match(lifecycleSource, /chrome\.webRequest\.onCompleted\.addListener/);
+  assert.match(lifecycleSource, /chrome\.tabs\.onUpdated\.addListener/);
+  assert.doesNotMatch(lifecycleSource, /promptText|assistantText|responseText|responseBody/);
 });
