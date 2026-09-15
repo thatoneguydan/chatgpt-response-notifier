@@ -30,6 +30,7 @@
       "js": [
         "attachment-script.js",
         "content-script.js",
+        "quick-prompts-script.js",
         "persistence-script.js",
         "status-code.js",
         "status-policy.js",
