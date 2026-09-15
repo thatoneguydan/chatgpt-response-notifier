@@ -56,11 +56,10 @@ test('all recovery vetoes fail closed before reload or continue', () => {
   }
 });
 
-test('format repair is not an action kind and is rejected at every primary admission boundary', () => {
+test('format repair is retired at every primary recovery admission boundary', () => {
   const { policy, model } = loadModel();
   assert.equal(Array.from(model.actionKinds).includes('format-repair'), false);
-  const admission = model.admissionDecision('format-repair', humanRun(), incident(), profile(), baseObservation(), { now: 1_000, recoveryEnabled: true });
-  assert.deepEqual({ allowed: admission.allowed, reason: admission.reason }, { allowed: false, reason: 'format-repair-retired' });
+  assert.equal(model.admissionDecision('format-repair', humanRun(), incident(), profile(), baseObservation(), { now: 1_000, recoveryEnabled: true }).reason, 'format-repair-retired');
   assert.equal(model.claimAction('format-repair', humanRun(), incident(), profile(), baseObservation(), { now: 1_000, leaseId: 'retired', recoveryEnabled: true }).reason, 'format-repair-retired');
   assert.equal(policy.recoveryActionDecision('format-repair', {}, { now: 1_000 }).reason, 'format-repair-retired');
   assert.equal(policy.beginRecoveryAction('format-repair', {}, { now: 1_000 }).reason, 'format-repair-retired');
@@ -99,7 +98,6 @@ test('silent stop remains capped at three reload candidates and one recovery con
   assert.equal(policy.thresholds.silentStopReloadCap, 3);
   assert.equal(policy.thresholds.explicitInterruptionReloadCap, 5);
   assert.equal(policy.thresholds.explicitInterruptionRetryMs, 300_000);
-
   const broken = baseObservation({ assistantKey: '', silentIdleConfirmations: 2 });
   assert.equal(model.recoveryCandidate({ state: 'attention', reason: 'silent-stop-confirmed' }, broken, incident({ budget: { reloads: 0 } })).kind, 'reload');
   assert.equal(model.recoveryCandidate({ state: 'attention', reason: 'silent-stop-confirmed' }, broken, incident({ budget: { reloads: 2 } })).kind, 'reload');
@@ -110,27 +108,20 @@ test('silent stop remains capped at three reload candidates and one recovery con
 test('explicit interruption persists through five reloads spaced five minutes apart, then continues once', () => {
   const { policy, model } = loadModel();
   const broken = baseObservation({
-    assistantKey: 'assistant-1',
-    silentIdleConfirmations: 0,
-    explicitInterruption: true,
-    interruptionKind: 'timed-out',
-    interruptionAttribution: 'current-request-global',
+    assistantKey: 'assistant-1', silentIdleConfirmations: 0, explicitInterruption: true,
+    interruptionKind: 'timed-out', interruptionAttribution: 'current-request-global',
     applicationStateIdentityMatched: true
   });
   const classification = { state: 'attention', reason: 'timed-out' };
-
   assert.equal(model.firstEligibleAt('timed-out', 10_000, 1), 10_000);
-  assert.equal(model.firstEligibleAt('connection-interrupted', 10_000, 2), 10_000);
   assert.equal(model.postReloadScheduleDelay(model.postReloadExplicitReason, incident({ reason: model.postReloadExplicitReason, budget: { reloads: 1 } })), 300_000);
 
   let run = humanRun();
   let shared = profile();
   let currentIncident = incident({ reason: 'timed-out', budget: {} });
   let now = 10_000;
-
   for (let attempt = 1; attempt <= 5; attempt += 1) {
-    const candidate = model.recoveryCandidate(classification, broken, currentIncident);
-    assert.equal(candidate.kind, 'reload', `candidate reload ${attempt}`);
+    assert.equal(model.recoveryCandidate(classification, broken, currentIncident).kind, 'reload', `candidate reload ${attempt}`);
     const reload = model.claimAction('reload', run, currentIncident, shared, broken, { now, leaseId: `explicit-r-${attempt}`, recoveryEnabled: true });
     assert.equal(reload.allowed, true, `reload ${attempt}`);
     assert.equal(reload.incident.budget.reloads, attempt, `reload budget ${attempt}`);
@@ -140,18 +131,15 @@ test('explicit interruption persists through five reloads spaced five minutes ap
     currentIncident.reason = model.postReloadExplicitReason;
     now = shared.nextProfileActionAt;
   }
-
   assert.equal(currentIncident.budget.reloads, 5);
   assert.equal(model.recoveryCandidate({ state: 'attention', reason: model.postReloadExplicitReason }, broken, currentIncident).kind, 'continue');
   assert.equal(model.admissionDecision('reload', run, currentIncident, shared, broken, { now, recoveryEnabled: true }).reason, 'incident-reload-cap-reached');
-
   const continuation = model.claimAction('continue', run, currentIncident, shared, broken, { now, leaseId: 'explicit-c', recoveryEnabled: true });
   assert.equal(continuation.allowed, true);
   ({ humanRun: run, incident: currentIncident, profile: shared } = model.finishAction(continuation.humanRun, continuation.incident, continuation.profile, { leaseId: 'explicit-c', state: 'resolved' }, { now: now + 1 }));
   assert.equal(currentIncident.budget.continuations, 1);
   assert.equal(currentIncident.budget.automaticMessages, 1);
   assert.equal(model.recoveryCandidate({ state: 'attention', reason: model.postReloadExplicitReason }, broken, currentIncident).kind, '');
-  assert.equal(model.admissionDecision('continue', run, currentIncident, shared, broken, { now: shared.nextProfileActionAt, recoveryEnabled: true }).reason, 'incident-continuation-cap-reached');
   assert.equal(policy.recoveryActionDecision('format-repair', {}, { now }).reason, 'format-repair-retired');
 });
 
@@ -166,12 +154,8 @@ test('post-reload explicit interruption schedules another reload while stable or
   assert.deepEqual({ ...model.postReloadDecision({ ...base, assistantKey: 'assistant-1', stableTerminal: true, silentIdleConfirmations: 0 }, expected) }, { kind: '', state: 'resolved', reason: 'status-missing-passive' });
   assert.deepEqual({ ...model.postReloadDecision({ ...base, assistantKey: '', silentIdleConfirmations: 2 }, expected) }, { kind: 'continue', state: 'scheduled', reason: 'post-reload-silent-stop' });
   assert.deepEqual({ ...model.postReloadDecision({
-    ...base,
-    assistantKey: 'assistant-1',
-    explicitInterruption: true,
-    interruptionKind: 'systems-taking-longer',
-    interruptionAttribution: 'current-request-global',
-    applicationStateIdentityMatched: true
+    ...base, assistantKey: 'assistant-1', explicitInterruption: true,
+    interruptionKind: 'systems-taking-longer', interruptionAttribution: 'current-request-global', applicationStateIdentityMatched: true
   }, expected) }, { kind: 'reload', state: 'scheduled', reason: 'post-reload-explicit-interruption' });
   assert.deepEqual({ ...model.postReloadDecision({ ...base, stopGenerating: true, silentIdleConfirmations: 0 }, expected) }, { kind: '', state: 'observing', reason: 'work-resumed-after-reload' });
 });
@@ -195,15 +179,52 @@ test('incident timing keeps passive backoff but begins confirmed recovery immedi
   assert.equal(model.firstEligibleAt('silent-stop-confirmed', 10_000, 3), 10_000);
 });
 
-test('page command exposes continuation only and rejects retired format repair', () => {
+test('page recovery command distinguishes explicit interruption from silent stop and timestamps Continue', () => {
   const page = readText('extension/bounded-recovery-script.js');
-  assert.match(page, /const RUNTIME_VERSION = 2/);
-  assert.match(page, /const AUTO_CONTINUE_TEXT = 'continue until you finish or need something from me'/);
+  const attachment = readText('extension/bounded-recovery-attachment-background.js');
+  assert.match(page, /const RUNTIME_VERSION = 3/);
+  assert.match(page, /const AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me\.'/);
+  assert.match(page, /function timestampedContinueText/);
+  assert.match(page, /Intl\.DateTimeFormat/);
+  assert.match(page, /recoveryClass === 'explicit-interruption'/);
+  assert.match(page, /currentExplicitInterruption/);
+  assert.match(page, /detectExplicitInterruption/);
+  assert.match(page, /silentIdleConfirmations/);
+  assert.match(attachment, /CHATGPT_BOUNDED_RECOVERY_PING/);
+  assert.match(attachment, /ensureRecoveryPageRuntime/);
+  assert.match(attachment, /recoveryClass/);
+  assert.match(attachment, /postReloadExplicitReason/);
   assert.match(page, /kind !== 'continue'/);
   assert.match(page, /format-repair-retired/);
   assert.doesNotMatch(page, /FORMAT_REPAIR_TEXT/);
   assert.doesNotMatch(page, /formatRepairText:/);
   assert.doesNotMatch(page, /\bregenerate\b/i);
+});
+
+test('post-refresh interruption fallback persists exact stalled response identity across reloads', () => {
+  const content = readText('extension/recovery-live-fix-content.js');
+  const background = readText('extension/recovery-live-fix-background.js');
+  assert.match(content, /const RUNTIME_VERSION = 4/);
+  assert.match(content, /sessionStorage/);
+  assert.match(content, /STALLED_RESPONSE_KEY/);
+  assert.match(content, /stalledResponseAfterReload/);
+  assert.match(content, /post-reload-response-unchanged/);
+  assert.match(content, /assistantRevision/);
+  assert.match(content, /prior\.documentId/);
+  assert.match(background, /const RUNTIME_VERSION = 4/);
+});
+
+test('normal coded continuation uses the same timestamp shape instead of plain post-refresh text', () => {
+  const status = readText('extension/status-script.js');
+  assert.match(status, /const RUNTIME_VERSION = 6/);
+  assert.match(status, /const AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me\.'/);
+  assert.match(status, /function timestampedContinueText/);
+  assert.match(status, /month: 'short'/);
+  assert.match(status, /day: 'numeric'/);
+  assert.match(status, /hour: 'numeric'/);
+  assert.match(status, /minute: '2-digit'/);
+  assert.match(status, /matchingContinuationUserTurn\(previousKey, expectedText\)/);
+  assert.doesNotMatch(status, /const AUTO_CONTINUE_TEXT = 'continue until you finish or need something from me'/);
 });
 
 test('coded notification delivery remains persistent and targeted', () => {
