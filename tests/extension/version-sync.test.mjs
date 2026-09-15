@@ -226,11 +226,13 @@ test('compatibility repair delegates current-request UI attribution to the prima
 });
 
 test('quick prompt toolbar is timestamped, insert-only, and isolated from recovery commands', () => {
-  const content = readText('extension/content-script.js');
-  const start = content.indexOf("const TOOLBAR_ID = 'chatgpt-notifier-quick-prompts'");
-  assert.ok(start >= 0, 'quick prompt toolbar source was not found');
-  const quickPrompts = content.slice(start);
+  const quickPrompts = readText('extension/quick-prompts-script.js');
+  const attachment = readText('extension/quick-prompts-attachment-background.js');
+  const background = readText('extension/background.js');
+  const manifest = JSON.parse(readText('extension/manifest.json'));
 
+  assert.doesNotThrow(() => new vm.Script(quickPrompts));
+  assert.doesNotThrow(() => new vm.Script(attachment));
   for (const label of ['Continue', 'Status', 'Checkpoint', 'Handoff']) {
     assert.match(quickPrompts, new RegExp(`label: '${label}'`));
   }
@@ -241,6 +243,9 @@ test('quick prompt toolbar is timestamped, insert-only, and isolated from recove
   assert.doesNotMatch(quickPrompts, /sendButton\.click\s*\(/);
   assert.doesNotMatch(quickPrompts, /chrome\.runtime\.sendMessage/);
   assert.doesNotMatch(quickPrompts, /CHATGPT_BOUNDED_RECOVERY_COMMAND/);
+  assert.match(attachment, /files: \['quick-prompts-script\.js'\]/);
+  assert.match(background, /quick-prompts-attachment-background\.js/);
+  assert.ok(manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-prompts-script.js')));
 });
 
 test('native toast renders persisted completion time in local time and release versions stay aligned', () => {
