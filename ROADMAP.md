@@ -1,16 +1,18 @@
 # ChatGPT Response Notifier — Roadmap
 
-Program: **ChatGPT Response Notifier**. Source authority: this repository. Historical incident authority: [DevelopmentInfrastructure #283](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/283). Status-contract v2 rollout authority: [DevelopmentInfrastructure #432](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/432). Explicit-interruption regression authority: [DevelopmentInfrastructure #434](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/434). Historical implementation/review evidence remains in notifier PRs #33, #38, #39, #40, #41, and #43.
+Program: **ChatGPT Response Notifier**. Source authority: this repository. Historical incident authority: [DevelopmentInfrastructure #283](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/283). Status-contract v2 rollout authority: [DevelopmentInfrastructure #432](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/432). Explicit-interruption regression authority: [DevelopmentInfrastructure #434](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/434). Timestamp/quick-prompt UX rollout authority: [DevelopmentInfrastructure #435](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/435). Historical implementation/review evidence remains in notifier PRs #33, #38, #39, #40, #41, #43, #45, and #46.
 
-## Current checkpoint — 2026-09-15, v0.9.19 explicit-interruption recovery accepted
+## Current checkpoint — 2026-09-15, v0.9.20 timestamp and quick-prompt UX accepted
 
-Notifier **v0.9.19** is merged, released, installed on `GLASS\dan`, and observed live. The accepted live candidate was `8bc17081d9383b9badb055aaf0fca7e43b085332`; notifier PR #43 merged as `44fe89e170cb6b408c0f63f5640206bdd2558dc5`, release **v0.9.19** was published, and the managed-update manifest was refreshed on `main` by `95259f481092b6970bc72950a6dd67d2c3af337c`.
+Notifier **v0.9.20** is merged, released, installed on `GLASS\dan`, and observed live. The accepted live candidate is `c084ed2364491cba3f42af0cb9f798e4377e70e2`; notifier PR #45 merged as `93702bd63c74eab2c5b27ed270ffc4927b30725d`, release **v0.9.20** was published, and the managed-update manifest was refreshed on `main` by `723936b5332c19830192667bf84216ab9f3b6daf`. The exact pre-change fallback remains preserved at `stable/v0.9.19-pre-timestamp-toolbar` (`e67c28f253fc9b3a5b020d96c8d71adfba7e3024`).
 
-v0.9.19 closes a live v0.9.18 recovery regression where ChatGPT could show `Connection interrupted. Waiting for the complete answer` for the current request while retaining a stale Stop-generating/tool affordance. A verified current-request explicit interruption (`current-turn` or `current-request-global`, identity matched, supported interruption kind) now outranks that stale active-generation affordance for classification and bounded recovery. Historical, hidden, detached, quoted, ambiguous, or identity-mismatched interruption evidence still fails closed; manual stop, Pause/user interaction, draft/upload, auth/approval/rate-limit/offline, action-budget, uncertainty, and profile-spacing vetoes remain intact.
+v0.9.20 adds the already-persisted local completion time to native notifier toasts and adds an isolated timestamped quick-prompt toolbar beside the ChatGPT composer with Continue, Status, Checkpoint, and Handoff presets. Presets are insert-only: they do not auto-send, do not overwrite a non-empty draft, do not call recovery commands, and do not consume recovery/action budgets. The pinned upstream completion detector and reviewed manifest content-script list remain unchanged; quick prompts attach at runtime to existing and future/reloaded ChatGPT tabs.
+
+Project policy now explicitly makes operator interaction a last resort. PR #46 merged that policy into `PROJECT.md`: safe non-interactive updater, loopback-helper, protected Glass deployment, and repository-defined automation routes must be exhausted before asking the operator to click Update, run an installer/command, reload Chrome, or perform another manual deployment/recovery step. Ordinary update cadence or the existence of a UI button is not an operator blocker.
 
 The coordinated producer contract remains **`github-work-status/v2`** with semantic SHA-256 `a2570315b911add3c57231f08b84214daa56750f9c93fd76c5d8b459d28c3efb`. `INCOMPLETE_CONTINUE`, `INCOMPLETE_LIMIT`, and `INCOMPLETE_TOOL_FAILURE` use the shared guarded continuation path; `INCOMPLETE_HANDOFF` remains notification-only. Missing-footer format repair remains retired and passive.
 
-The earlier Chrome-click incident also remains closed. A physical v0.9.17 toast click proved helper → bridge → worker → `chrome.tabs.update` → `chrome.windows.update` → navigation without Chrome hang or extension registration loss. The exact historical native cause was never proven and must not be retroactively asserted.
+The v0.9.19 explicit-interruption precedence repair remains accepted: a verified current-request explicit interruption may override a stale Stop-generating/tool affordance for bounded recovery while historical, hidden, detached, quoted, ambiguous, identity-mismatched, manual-stop, Pause/user, draft/upload, auth/approval/rate-limit/offline, budget, uncertainty, and profile-spacing vetoes remain intact. The earlier Chrome-click incident also remains closed; a physical v0.9.17 toast click proved helper → bridge → worker → Chrome API navigation without Chrome hang or extension registration loss.
 
 ## Accepted proof
 
@@ -25,16 +27,21 @@ The earlier Chrome-click incident also remains closed. A physical v0.9.17 toast 
 - v0.9.19 protected Glass deployment: run `34981734591`; installed source `8bc17081d9383b9badb055aaf0fca7e43b085332`, installed version 0.9.19, helper-owned listener, rollback available, Chrome registration preserved.
 - v0.9.19 post-install runtime evidence: run `34981276975`, artifact `10402326647`, digest `sha256:ab1fef0c4cc6d024281521623db5c659f20e75cb5fcf3caf886d01a76fcc85d5`; installed/current extension v0.9.19, bridge connected/live, repeated heartbeat freshness for more than nine minutes after deployment.
 - v0.9.19 publication: notifier PR #43 merge `44fe89e170cb6b408c0f63f5640206bdd2558dc5`; release workflow run `34983818917`; release tag `v0.9.19`; update-manifest commit `95259f481092b6970bc72950a6dd67d2c3af337c`; published ZIP SHA-256 `65573d30b3b4f4fef6d89a4bb1a86338a46c345be783cd7e73554e9fa52775a0`.
+- v0.9.20 exact validation: exact candidate `c084ed2364491cba3f42af0cb9f798e4377e70e2`; validation run `34989700101`; artifact `10405451336`; digest `sha256:a3e266fa27412e1539de64b0e8e4aeef543c6ce8a21b19b95d9533164dbe3691`.
+- v0.9.20 publication: notifier PR #45 merge `93702bd63c74eab2c5b27ed270ffc4927b30725d`; release workflow run `34990096418`; release tag `v0.9.20`; update-manifest commit `723936b5332c19830192667bf84216ab9f3b6daf`; published ZIP SHA-256 `3c314b001cbdb81f216f1b00ebb634097440909cc986c39a09beb213c27371f8`; Setup SHA-256 `ac111deb19b7460966d394a250cef3091ad9fc3fdda888964f8ab69b8b27336f`.
+- v0.9.20 protected Glass deployment: Glass PR #136 / deployment bridge run `34991836269`; user-session `GLASS\dan`, session 1; installed source `c084ed2364491cba3f42af0cb9f798e4377e70e2`; installed version 0.9.20; helper-owned listener; runtime evidence present; rollback available; extension identity not deferred.
+- v0.9.20 post-install runtime evidence: runtime-evidence run `34989699828` latest rerun; artifact `10406127305`, digest `sha256:2d4cef0acf20b45fc37187374d2a36fc22285b735697cf5d4b66c757be447c30`; safe installed/current/historical extension all 0.9.20, live runtime identity true, zero Windows incidents.
+- Operator-interaction-last-resort policy: notifier PR #46 exact head `8bb5857c8732cf554fd6d41290159f30370f452e` passed source validation and merged as `ab434ecebc89e6f1a137c096e688ddb9557caf20`.
 
 ## Program structure
 
 | Workstream | Scope | Current state |
 | --- | --- | --- |
 | Workstream 1/5 — Foundation and Conversation Identity | Completion sensor, stable chat routing, loopback helper protocol. | Complete; retained. |
-| Workstream 2/5 — Native Toast UX | Persistent stacked non-activating notifications and deliberate click/dismiss routing. | Complete; accepted. |
-| Workstream 3/5 — Installation, Release, and Acceptance | Per-user installer, stable unpacked root, managed updater, rollback, release publication. | Complete through v0.9.19. |
-| Workstream 4/5 — Reliable Background Automation | Durable ownership, guarded continuation, recovery, delivery/outbox. | Complete for current contract; v0.9.19 recovery precedence accepted. |
-| Workstream 5/5 — Status Contract and Bounded Recovery | Contract retention, current-run recognition, bounded recovery, proof and rollout. | v2 amendment complete and active; v0.9.19 regression closed. |
+| Workstream 2/5 — Native Toast UX | Persistent stacked non-activating notifications, deliberate click/dismiss routing, timestamps, and manual quick prompts. | Complete through v0.9.20. |
+| Workstream 3/5 — Installation, Release, and Acceptance | Per-user installer, stable unpacked root, managed updater, rollback, release publication. | Complete through v0.9.20. |
+| Workstream 4/5 — Reliable Background Automation | Durable ownership, guarded continuation, recovery, delivery/outbox. | Complete for current contract; v0.9.20 preserves accepted behavior. |
+| Workstream 5/5 — Status Contract and Bounded Recovery | Contract retention, current-run recognition, bounded recovery, proof and rollout. | v2 amendment complete and active; v0.9.20 live identity accepted. |
 
 ## Workstream 1/5 — Foundation and Conversation Identity
 
@@ -56,9 +63,11 @@ The earlier Chrome-click incident also remains closed. A physical v0.9.17 toast 
 
 ##### Gate 1/1 — Deliberate user actions are the only focus authority
 
-- Task 1/3 — Persistent stacked notifications and rolling coded history. **Complete.**
-- Task 2/3 — Dismiss/quiet-close behavior does not create false attention. **Complete.**
-- Task 3/3 — Deliberate toast click uses Chrome APIs only and may focus Chrome only because the user clicked. **Complete and physically accepted.**
+- Task 1/5 — Persistent stacked notifications and rolling coded history. **Complete.**
+- Task 2/5 — Dismiss/quiet-close behavior does not create false attention. **Complete.**
+- Task 3/5 — Deliberate toast click uses Chrome APIs only and may focus Chrome only because the user clicked. **Complete and physically accepted.**
+- Task 4/5 — Native toast renders the persisted completion timestamp in local time without changing notification delivery/dedupe semantics. **Complete in v0.9.20.**
+- Task 5/5 — Composer-adjacent timestamped Continue/Status/Checkpoint/Handoff toolbar is extension-owned, insert-only, draft-safe, runtime-attached, and isolated from automatic recovery/action budgets. **Complete in v0.9.20.**
 
 ## Workstream 3/5 — Installation, Release, and Acceptance
 
@@ -69,8 +78,10 @@ The earlier Chrome-click incident also remains closed. A physical v0.9.17 toast 
 ##### Gate 1/1 — Published and installed identity remain reconcilable
 
 - Task 1/3 — Per-user installer preserves the stable unpacked extension root. **Complete.**
-- Task 2/3 — Managed updater/release workflow publishes exact validated source and handles existing releases idempotently. **Complete through v0.9.19.**
-- Task 3/3 — Protected Glass deployment/rollback reports installed source/version and never mutates Chrome registration/profile automatically. **Complete through v0.9.19.**
+- Task 2/3 — Managed updater/release workflow publishes exact validated source and handles existing releases idempotently. **Complete through v0.9.20.**
+- Task 3/3 — Protected Glass deployment/rollback reports installed source/version and never mutates Chrome registration/profile automatically. **Complete through v0.9.20.**
+
+Operational policy: operator interaction is a last resort. Safe non-interactive managed-update, loopback-helper, protected Glass, and repository-defined automation paths must be exhausted before requesting a manual click/install/reload/command. Manual intervention is reserved for inherently interactive steps or concrete failure/unavailability of applicable automated routes.
 
 ## Workstream 4/5 — Reliable Background Automation
 
@@ -82,7 +93,7 @@ The earlier Chrome-click incident also remains closed. A physical v0.9.17 toast 
 
 - Task 1/3 — Durable transactional turn ownership and dedupe. **Complete.**
 - Task 2/3 — Separate read-only observation from authorized DOM action and preserve document/conversation/prompt/assistant/revision identity. **Complete.**
-- Task 3/3 — One shared continuation predicate covers LIMIT, TOOL_FAILURE, and CONTINUE while HANDOFF remains notification-only. **Complete since v0.9.18; retained in v0.9.19.**
+- Task 3/3 — One shared continuation predicate covers LIMIT, TOOL_FAILURE, and CONTINUE while HANDOFF remains notification-only. **Complete since v0.9.18; retained in v0.9.20.**
 
 ### Stage 2/3 — Reliable Delivery and Recovery
 
@@ -92,7 +103,7 @@ The earlier Chrome-click incident also remains closed. A physical v0.9.17 toast 
 
 - Task 1/3 — Durable outbox, stable notification IDs, helper ACK, dismissal/restart deduplication. **Complete.**
 - Task 2/3 — Unified finalization, version-aware attachment, reconnect/replay and diagnostics. **Complete.**
-- Task 3/3 — Explicit interruption and silent-stop recovery preserve Pause/user guards, identity, action budgets and uncertainty vetoes; a verified current-request interruption may override only a stale Stop-generating/tool affordance. **Complete through v0.9.19.**
+- Task 3/3 — Explicit interruption and silent-stop recovery preserve Pause/user guards, identity, action budgets and uncertainty vetoes; a verified current-request interruption may override only a stale Stop-generating/tool affordance. **Complete through v0.9.20; behavior unchanged by the timestamp/quick-prompt release.**
 
 ### Stage 3/3 — Runtime Acceptance
 
@@ -100,8 +111,8 @@ The earlier Chrome-click incident also remains closed. A physical v0.9.17 toast 
 
 ##### Gate 1/1 — Source, install state, runtime liveness and visible behavior agree
 
-- Task 1/3 — Exact candidate architecture/helper/installer proof. **Complete through v0.9.19.**
-- Task 2/3 — Live bridge/runtime heartbeat and current-version identity proof. **Complete through v0.9.19.**
+- Task 1/3 — Exact candidate architecture/helper/installer proof. **Complete through v0.9.20.**
+- Task 2/3 — Live bridge/runtime heartbeat and current-version identity proof. **Complete through v0.9.20.**
 - Task 3/3 — Physical click and foreground/navigation behavior accepted without native foreground fallback. **Complete.**
 
 ## Workstream 5/5 — Status Contract and Bounded Recovery
@@ -121,7 +132,7 @@ The earlier Chrome-click incident also remains closed. A physical v0.9.17 toast 
 ##### Gate 1/1 — Consumer compatibility precedes producer activation
 
 - Task 1/3 — Define `github-work-status/v2` with `INCOMPLETE_CONTINUE`, narrow HANDOFF to explicit transfer, and retain LIMIT/TOOL_FAILURE meanings. **Complete in DevelopmentInfrastructure PR #433.**
-- Task 2/3 — Implement the v1+v2 consumer with one shared continuation predicate across dispatch, page revalidation, normal observation and recovery paths. **Complete in notifier v0.9.18 / PR #41; retained in v0.9.19.**
+- Task 2/3 — Implement the v1+v2 consumer with one shared continuation predicate across dispatch, page revalidation, normal observation and recovery paths. **Complete in notifier v0.9.18 / PR #41; retained in v0.9.20.**
 - Task 3/3 — Validate, install, prove live v1+v2 capability, then activate producer v2. **Complete.** Protected deployment and fresh runtime evidence preceded producer merge.
 
 Acceptance: one exact terminal footer remains sufficient. Missing/malformed footer is passive; no second action marker, free-text terminal inference, or browser format-repair prompt is permitted. Unsupported contract/digest combinations fail closed.
@@ -143,8 +154,8 @@ Acceptance: one exact terminal footer remains sufficient. Missing/malformed foot
 ##### Gate 1/1 — Recovery cannot loop or replay uncertain side effects
 
 - Task 1/3 — Durable incident/run budget, breaker, earliest alarm, restart reconstruction and user vetoes. **Complete.**
-- Task 2/3 — Explicit interruption: one reload/reinspection then at most one eligible continuation; verified current-request interruption outranks a stale generating/tool affordance but never higher-priority human/safety vetoes. Silent stop: up to three reload/reinspections then at most one eligible continuation. **Complete through v0.9.19.**
-- Task 3/3 — Concurrency, late-response, uncertainty, crash/restart, lifecycle, and explicit-interruption precedence regressions. **Complete through v0.9.19.**
+- Task 2/3 — Explicit interruption: one reload/reinspection then at most one eligible continuation; verified current-request interruption outranks a stale generating/tool affordance but never higher-priority human/safety vetoes. Silent stop: up to three reload/reinspections then at most one eligible continuation. **Complete through v0.9.20.**
+- Task 3/3 — Concurrency, late-response, uncertainty, crash/restart, lifecycle, and explicit-interruption precedence regressions. **Complete through v0.9.20.**
 
 Current defaults: 30-second terminal/error grace; silence requires at least 90 seconds idle and two consistent inspections at least 30 seconds apart; 15-minute ambiguous-thinking diagnostic without forced retry; at most one recovery continuation per incident; zero format-repair prompts; at least 30 seconds profile spacing; persisted 12-generation-producing-action ceiling per human-started run. Reset only by a genuinely new trusted human request or explicit Resume.
 
@@ -157,13 +168,13 @@ Current defaults: 30-second terminal/error grace; silence requires at least 90 s
 - Task 1/5 — Repair and prove source decisions. **Complete.**
 - Task 2/5 — Automatic bounded read-only Glass runtime evidence. **Complete.**
 - Task 3/5 — Guarded Glass-only candidate deployment/rollback with no Chrome registration mutation. **Complete.**
-- Task 4/5 — Real current-build acceptance including bridge/runtime identity and deliberate-click route where applicable. **Complete.** For v0.9.19 the original interruption banner had cleared before deployment, so acceptance uses the exact reproduced-state regression plus sustained live exact-candidate runtime proof rather than fabricated ChatGPT state.
-- Task 5/5 — Merge/release, managed update identity, canonical producer activation and roadmap closeout. **Complete through v0.9.19 and status-contract v2.**
+- Task 4/5 — Real current-build acceptance including bridge/runtime identity and deliberate-click route where applicable. **Complete.** v0.9.20 live acceptance proves installed/current identity and helper/runtime liveness; the UX additions do not broaden focus authority or recovery behavior.
+- Task 5/5 — Merge/release, managed update identity, canonical producer activation and roadmap closeout. **Complete through v0.9.20 and status-contract v2.**
 
 ## Continuing work
 
-The v0.9.17 click/recovery/registration incident, coordinated v0.9.18 status-contract v2 amendment, and v0.9.19 explicit-interruption precedence regression are **complete**. There is no deterministic unfinished work in these scopes.
+The v0.9.17 click/recovery/registration incident, coordinated v0.9.18 status-contract v2 amendment, v0.9.19 explicit-interruption precedence regression, and v0.9.20 timestamp/quick-prompt UX rollout are **complete**. There is no deterministic unfinished work in these scopes.
 
-Future notifier work starts from current `main`, this roadmap, and current DevelopmentInfrastructure policy. Any future Chrome hang/registration loss or naturally recurring interruption failure is a new incident requiring fresh bounded evidence. Any future status-taxonomy change requires a new versioned contract review and consumer-before-producer compatibility proof.
+Future notifier work starts from current `main`, this roadmap, `PROJECT.md`, and current DevelopmentInfrastructure policy. Any future Chrome hang/registration loss or naturally recurring interruption failure is a new incident requiring fresh bounded evidence. Any future status-taxonomy change requires a new versioned contract review and consumer-before-producer compatibility proof. Operator interaction remains a last resort: do not ask for a manual update/install/reload/command until safe applicable automated routes have been exhausted or proven unavailable/failed.
 
-Preserve loopback-only helper transport, rolling coded history, durable ACK/deduplication, unified Monitor/Recover enrollment, sticky Pause/user guards, bounded explicit/silent-stop recovery, current-request interruption attribution, stable extension ID/root, updater/rollback, passive missing-footer behavior, and deliberate-click-only foregrounding. Do not add ChatGPT API/session polling, original-prompt replay, Regenerate, auto-approval, unbounded retries, free-text continuation inference, browser format repair, automatic foregrounding, native foreground fallback, or automatic Chrome registration/profile mutation.
+Preserve loopback-only helper transport, rolling coded history, durable ACK/deduplication, unified Monitor/Recover enrollment, sticky Pause/user guards, bounded explicit/silent-stop recovery, current-request interruption attribution, stable extension ID/root, updater/rollback, passive missing-footer behavior, deliberate-click-only foregrounding, local toast timestamps, and insert-only quick prompts. Do not add ChatGPT API/session polling, original-prompt replay, Regenerate, auto-approval, unbounded retries, free-text continuation inference, browser format repair, automatic foregrounding, native foreground fallback, or automatic Chrome registration/profile mutation.
