@@ -92,13 +92,14 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'VERSION.txt is empty.' }
           $tag = "v$version"
           $releaseNotes = @(
-            'Hardens response completion while ChatGPT tabs are hidden.',
+            'Removes the remaining page-timer dependency from hidden-tab completion detection.',
             '',
-            '- Hidden tabs bypass requestAnimationFrame for the final assistant-turn check after the existing 150 ms throttle.',
-            '- If a frame was queued while visible and the tab becomes hidden before it runs, the pending frame is cancelled and the completion check runs immediately.',
-            '- Preserves latest-prompt binding, duplicate and manual-stop suppression, the 30-second final-turn fallback, and the accepted v0.9.22 continuation/recovery guards.',
-            '- Adds deterministic regression coverage for hidden-from-start and visible-to-hidden scheduling races.',
-            '- Does not add ChatGPT API/session polling, foregrounding, prompt replay, Regenerate, or new retry loops.'
+            '- Hidden ChatGPT tabs now run the final assistant-turn check directly from the DOM mutation instead of waiting for the 150 ms page timer or requestAnimationFrame.',
+            '- If the tab becomes hidden while the visible-tab throttle timer is pending, that timer is cancelled and the completion check runs immediately.',
+            '- The existing visible-tab 150 ms throttle and frame alignment remain unchanged.',
+            '- Preserves latest-prompt binding, duplicate/manual-stop suppression, the 30-second fallback, and all accepted v0.9.23 continuation/recovery/delivery guards.',
+            '- Adds deterministic regression coverage for hidden-from-start, pending-timer, and pending-frame visibility races.',
+            '- Does not attempt to foreground or wake a Chrome-frozen tab and adds no ChatGPT API/session polling, prompt replay, Regenerate, or retry loop.'
           ) -join [Environment]::NewLine
           $artifactRoot = Join-Path $env:RUNNER_TEMP "chatgpt-response-notifier-release-$version"
           Remove-Item -LiteralPath $artifactRoot -Recurse -Force -ErrorAction SilentlyContinue
