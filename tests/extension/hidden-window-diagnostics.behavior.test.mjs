@@ -203,8 +203,14 @@ test('worker diagnostics bound correlation, deadlines, persistence and retention
   assert.match(backgroundSource, /request-stream-mapping-ambiguous/);
   assert.match(backgroundSource, /page-query-deadline/);
   assert.match(backgroundSource, /stream-final-not-observed/);
+  assert.match(backgroundSource, /kind === 'observer-installed'/);
+  assert.match(backgroundSource, /main-observer-installed/);
   assert.match(backgroundSource, /chrome\.alarms\.create/);
   assert.match(backgroundSource, /chrome\.windows\.get/);
+  assert.ok(
+    backgroundSource.indexOf("files: ['hidden-window-diagnostics-page.js']") < backgroundSource.indexOf("files: ['hidden-window-diagnostics-main.js']"),
+    'existing tabs must install the isolated bridge before the MAIN observer'
+  );
   assert.doesNotMatch(backgroundSource, /\bfetch\s*\(/);
   assert.doesNotMatch(backgroundSource, /XMLHttpRequest/);
   assert.doesNotMatch(backgroundSource, /requestContinuation\s*\(/);
