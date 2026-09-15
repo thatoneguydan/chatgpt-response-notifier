@@ -1,14 +1,24 @@
 # ChatGPT Response Notifier — Roadmap
 
-Program: **ChatGPT Response Notifier**. Source authority: this repository. Historical incident authority: DevelopmentInfrastructure #283. Status-contract v2 authority: #432. Explicit-interruption regression authority: #434. Timestamp/quick-prompt rollout authority: #435. Quick-prompt layout / persistent timeout-recovery authority: #436. Post-refresh continuation regression authority: #437.
+Program: **ChatGPT Response Notifier**. Source authority: this repository. Historical incident authority: DevelopmentInfrastructure #283. Status-contract v2 authority: #432. Explicit-interruption regression authority: #434. Timestamp/quick-prompt rollout authority: #435. Quick-prompt layout / persistent timeout-recovery authority: #436. Post-refresh continuation regression authority: #437. Hidden-tab completion scheduler hardening authority: #438.
 
-## Current checkpoint — 2026-09-15, v0.9.22 live; #437 complete
+## Current checkpoint — 2026-09-15, v0.9.22 live; #438 active
 
 Notifier **v0.9.22** is the installed/live baseline on `GLASS\dan`.
 
-DevelopmentInfrastructure **#437** is complete. The accepted release repairs the post-refresh continuation regression, preserves the bounded recovery rules accepted in v0.9.21, and gives automatic Continue messages the same local timestamp format used by manual quick prompts.
+DevelopmentInfrastructure **#437** remains complete. DevelopmentInfrastructure **#438** is the active bounded follow-up: the normal completion detector still gates throttled DOM checks through `requestAnimationFrame()`, which Chrome may suspend or heavily throttle after the ChatGPT tab becomes hidden. Candidate **v0.9.23** will make hidden-tab completion checks independent of animation frames while preserving the accepted completion, continuation, recovery, identity, updater, rollback, and notification contracts.
 
-Accepted implementation source: `2e751e59496b1ea47739f8ab73e4d9f989f915b7`. Notifier PR #50 merged as `98a3aa1dafb768f623b0f24b7e92e5379d183245`. Release `v0.9.22` is published and the update manifest advanced on `main` as `1cb47b08a725e0849a48d3e07d36d0b4136e9ecf`.
+Accepted v0.9.22 implementation source: `2e751e59496b1ea47739f8ab73e4d9f989f915b7`. Notifier PR #50 merged as `98a3aa1dafb768f623b0f24b7e92e5379d183245`. Release `v0.9.22` is published and the update manifest advanced on `main` as `1cb47b08a725e0849a48d3e07d36d0b4136e9ecf`.
+
+## #438 active hardening contract
+
+- Hidden ChatGPT tabs must not depend on `requestAnimationFrame()` to observe the final assistant turn after a completed request.
+- Keep the existing 150 ms answer-check throttle and 30-second final-turn fallback timeout.
+- Preserve latest-prompt binding, duplicate suppression, manual-stop suppression, and the current completion notification payload.
+- Do not add ChatGPT API/session polling, foregrounding, prompt replay, Regenerate, or a new background retry loop.
+- Keep v0.9.22 bounded recovery/continuation guards unchanged.
+- Add deterministic regression coverage for the hidden-tab scheduler path and update the intentional completion-detector source pin.
+- Promotion requires the normal exact-head validation/release gates and the established non-interactive deployment/runtime-evidence path.
 
 ## #437 accepted behavior
 
@@ -31,11 +41,11 @@ Accepted implementation source: `2e751e59496b1ea47739f8ab73e4d9f989f915b7`. Noti
 
 | Workstream | Scope | Current state |
 | --- | --- | --- |
-| Workstream 1/5 — Foundation and Conversation Identity | Completion sensor, stable chat routing, loopback helper protocol. | Complete; retained. |
-| Workstream 2/5 — Native Toast UX | Persistent notifications, timestamps, quick prompts, click/dismiss routing. | Complete through v0.9.22. |
-| Workstream 3/5 — Installation, Release, and Acceptance | Installer, stable root, updater, rollback, release publication. | Complete through v0.9.22. |
-| Workstream 4/5 — Reliable Background Automation | Durable ownership, guarded continuation, recovery, delivery/outbox. | Complete through #437 / v0.9.22. |
-| Workstream 5/5 — Status Contract and Bounded Recovery | Contract retention, current-run recognition, bounded recovery, proof/rollout. | Complete through #437 / v0.9.22. |
+| Workstream 1/5 — Foundation and Conversation Identity | Completion sensor, stable chat routing, loopback helper protocol. | Active bounded #438 scheduler hardening; v0.9.22 otherwise accepted. |
+| Workstream 2/5 — Native Toast UX | Persistent notifications, timestamps, quick prompts, click/dismiss routing. | Complete through v0.9.22; retained by #438. |
+| Workstream 3/5 — Installation, Release, and Acceptance | Installer, stable root, updater, rollback, release publication. | Complete through v0.9.22; candidate v0.9.23 must pass existing gates. |
+| Workstream 4/5 — Reliable Background Automation | Durable ownership, guarded continuation, recovery, delivery/outbox. | Complete through #437 / v0.9.22; unchanged by #438. |
+| Workstream 5/5 — Status Contract and Bounded Recovery | Contract retention, current-run recognition, bounded recovery, proof/rollout. | Complete through #437 / v0.9.22; unchanged by #438. |
 
 ## Retained recovery defaults
 
@@ -53,4 +63,4 @@ Accepted implementation source: `2e751e59496b1ea47739f8ab73e4d9f989f915b7`. Noti
 
 ## Continuing work
 
-No additional operator action is required for #437. v0.9.22 is the canonical live baseline. Preserve the accepted notification, continuation, identity, updater/rollback, timestamp, and bounded-recovery contracts in future changes.
+Implement and validate #438 as candidate v0.9.23 from the accepted v0.9.22 baseline. Keep the change bounded to completion-check scheduling plus regression/version/release metadata. Do not ask the operator to reload, update, or install while the established non-interactive promotion path remains available.
