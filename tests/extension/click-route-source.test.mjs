@@ -22,3 +22,23 @@ test('production click route contains no outgoing native foreground request', ()
   assert.match(background, /Retired native foreground path is present in production runtime/);
   assert.match(safety, /typeof globalThis\.requestNativeChromeForeground !== ['"]function['"]/);
 });
+
+test('status verification preserves prompt revision identity across monitor fallback', () => {
+  const statusScript = readText('extension/status-script.js');
+  const worker = readText('extension/service-worker.js');
+
+  assert.match(statusScript, /const userText = turnText\(nodes\[userIndex\], ['"]user['"]\);/);
+  assert.match(statusScript, /promptRevision:\s*revisionOf\(userText\)/);
+  assert.match(statusScript, /promptRevision:\s*snapshot\?\.promptRevision \|\| ['"]['"]/);
+  assert.match(worker, /promptRevision:\s*status\.promptRevision/);
+});
+
+test('all coded continuation routes use the shared continuation predicate', () => {
+  const worker = readText('extension/service-worker.js');
+  const observer = readText('extension/normal-continuation-budget-hook.js');
+
+  assert.match(worker, /ChatGPTNotifierContinuationPolicy\?\.isAutoContinueStatusCode\?\.\(statusCode\) === true/);
+  assert.match(observer, /ChatGPTNotifierContinuationPolicy\?\.isAutoContinueStatusCode\?\.\(String\(status\.statusCode \|\| ['"]['"]\)\) === true/);
+  assert.doesNotMatch(worker, /statusCode\s*!==\s*['"]INCOMPLETE_LIMIT['"]/);
+  assert.doesNotMatch(observer, /String\(status\.statusCode \|\| ['"]['"]\)\s*!==\s*['"]INCOMPLETE_LIMIT['"]/);
+});
