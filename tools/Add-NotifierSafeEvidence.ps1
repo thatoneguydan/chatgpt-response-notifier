@@ -21,12 +21,76 @@ function Copy-SafeDiagnostic {
     $safe = [ordered]@{}
     foreach ($name in @(
         'source','status','observedAt','extensionVersion','correlationId','tabId','statusCode','attempt','elapsedMs','queuedMessages',
-        'frozen','discarded','deliveredNow','presented','triggerPath','reason','captureSource','presentationState',
-        'conversationSuffix','notificationSuffix','chromeDocumentSuffix','statusRuntimeSuffix','monitorRuntimeSuffix'
+        'eventSequence','frozen','discarded','deliveredNow','presented','triggerPath','reason','captureSource','presentationState',
+        'conversationSuffix','notificationSuffix','chromeDocumentSuffix','requestSuffix','workerInstanceSuffix','statusRuntimeSuffix','monitorRuntimeSuffix'
     )) {
         $value = Get-PropertyValue -InputObject $Record -Name $name
         if ($null -ne $value) { $safe[$name] = $value }
     }
+    return [pscustomobject]$safe
+}
+
+function Copy-SafeIncidentTransition {
+    param([object]$Transition)
+    if ($null -eq $Transition) { return $null }
+    $safe = [ordered]@{}
+    foreach ($name in @(
+        'sequence','stage','observedAt','originObservedAt','workerReceivedAt','elapsedMs','snapshotAgeMs','contextAgeMs','reason','transport',
+        'streamNonceSuffix','mappingConfidence','httpStatus','mediaTypeClass','protocolShape','byteCount','chunkCount','frameCount','dataFrameCount',
+        'jsonFrameCount','doneFrameCount','oversizedFrameCount','rawTokenCount','decodedCandidateCount','responseStartMs','firstByteMs','eofMs',
+        'semanticFinalEligible','semanticRejectionReason','visibility','pageHasFocus','pageFrozen','tabActive','tabFrozen','tabDiscarded',
+        'windowFocused','windowState','count'
+    )) {
+        $value = Get-PropertyValue -InputObject $Transition -Name $name
+        if ($null -ne $value) { $safe[$name] = $value }
+    }
+    return [pscustomobject]$safe
+}
+
+function Copy-SafeIncident {
+    param([object]$Incident)
+    if ($null -eq $Incident) { return $null }
+    $safe = [ordered]@{}
+    foreach ($name in @(
+        'schemaVersion','incidentId','kind','workerInstanceSuffix','tabId','chromeDocumentSuffix','requestSuffix','startedAt','settledAt','streamFinalAt',
+        'routeClass','httpStatus','requestOutcome','captureResult','mappingConfidence','mappingCandidateCount','traceState','firstUnresolvedBoundary',
+        'droppedTransitions','coalescedTransitions','retentionEvictedIncidents'
+    )) {
+        $value = Get-PropertyValue -InputObject $Incident -Name $name
+        if ($null -ne $value) { $safe[$name] = $value }
+    }
+    $transitions = @()
+    foreach ($transition in @(Get-PropertyValue -InputObject $Incident -Name 'transitions') | Select-Object -Last 48) {
+        $copy = Copy-SafeIncidentTransition -Transition $transition
+        if ($null -ne $copy) { $transitions += $copy }
+    }
+    $safe.transitions = $transitions
+    return [pscustomobject]$safe
+}
+
+function Copy-SafeHiddenWindowDiagnostics {
+    param([object]$InputObject)
+    $safe = [ordered]@{
+        schemaVersion = $null
+        maxIncidents = $null
+        maxTransitionsPerIncident = $null
+        maxMetadataBytes = $null
+        incidentCount = 0
+        metadataBytes = 0
+        hostEvictions = 0
+        incidents = @()
+    }
+    if ($null -eq $InputObject) { return [pscustomobject]$safe }
+    foreach ($name in @('schemaVersion','maxIncidents','maxTransitionsPerIncident','maxMetadataBytes','incidentCount','metadataBytes','hostEvictions')) {
+        $value = Get-PropertyValue -InputObject $InputObject -Name $name
+        if ($null -ne $value) { $safe[$name] = $value }
+    }
+    $incidents = @()
+    foreach ($incident in @(Get-PropertyValue -InputObject $InputObject -Name 'incidents') | Select-Object -Last 20) {
+        $copy = Copy-SafeIncident -Incident $incident
+        if ($null -ne $copy) { $incidents += $copy }
+    }
+    $safe.incidents = $incidents
     return [pscustomobject]$safe
 }
 
@@ -55,6 +119,7 @@ $result = [ordered]@{
     historicalExtensionObservedAtUtc = $null
     loadedExtensionVersion = $null
     extensionRuntimeSuffix = $null
+    hiddenWindowDiagnostics = (Copy-SafeHiddenWindowDiagnostics -InputObject $null)
     diagnostics = @()
 }
 
@@ -72,6 +137,7 @@ try {
         $value = Get-PropertyValue -InputObject $runtime -Name $name
         if ($null -ne $value) { $result[$name] = $value }
     }
+    $result.hiddenWindowDiagnostics = Copy-SafeHiddenWindowDiagnostics -InputObject (Get-PropertyValue -InputObject $runtime -Name 'hiddenWindowDiagnostics')
     $safeDiagnostics = @()
     foreach ($record in @(Get-PropertyValue -InputObject $runtime -Name 'diagnostics') | Select-Object -Last 200) {
         $safe = Copy-SafeDiagnostic -Record $record
@@ -116,13 +182,14 @@ $evidence.chrome | Add-Member -NotePropertyName loadedRuntimeIdentitySource -Not
 $evidence.chrome | Add-Member -NotePropertyName historicalExtensionVersion -NotePropertyValue $result.historicalExtensionVersion -Force
 $evidence.chrome | Add-Member -NotePropertyName currentExtensionVersion -NotePropertyValue $result.currentExtensionVersion -Force
 $evidence.chrome | Add-Member -NotePropertyName extensionConnectionLive -NotePropertyValue $runtimeFresh -Force
-$evidence | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $EvidencePath -Encoding UTF8
+$evidence | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $EvidencePath -Encoding UTF8
 
-Write-Host ('Notifier safe evidence: state={0}; installed={1}; source={2}; currentExtension={3}; historicalExtension={4}; live={5}; diagnostics={6}' -f `
+Write-Host ('Notifier safe evidence: state={0}; installed={1}; source={2}; currentExtension={3}; historicalExtension={4}; live={5}; diagnostics={6}; incidents={7}' -f `
     $result.state,
     $result.installedVersion,
     $result.sourceCommit,
     $result.currentExtensionVersion,
     $result.historicalExtensionVersion,
     $runtimeFresh,
-    @($result.diagnostics).Count)
+    @($result.diagnostics).Count,
+    @($result.hiddenWindowDiagnostics.incidents).Count)

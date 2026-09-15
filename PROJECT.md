@@ -1,8 +1,8 @@
 # ChatGPT Response Notifier
 
-Canonical source: **thatoneguydan/chatgpt-response-notifier**, main plus the active PR named in [DevelopmentInfrastructure #283](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/283).
+Canonical source: **thatoneguydan/chatgpt-response-notifier**, main plus the active PR named in [DevelopmentInfrastructure #439](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/439). [#283](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/283) retains the historical incident work.
 
-Read [ROADMAP.md](ROADMAP.md) for current scope, acceptance gates, and continuation. Read [README.md](README.md) for released behavior. [Review #32](https://github.com/thatoneguydan/chatgpt-response-notifier/issues/32) records the v0.8.1 reliability findings and offline proof.
+Read [ROADMAP.md](ROADMAP.md) for current scope, acceptance gates, and continuation. For the current v0.9.26 unfocused-window failure, read [the diagnostic handoff](docs/HIDDEN-WINDOW-DIAGNOSTIC-HANDOFF-2026-09-15.md) before proposing another behavior change. Read [README.md](README.md) for released behavior. [Review #32](https://github.com/thatoneguydan/chatgpt-response-notifier/issues/32) records the v0.8.1 reliability findings and offline proof.
 
 The older Glass project documents are historical and do not establish the current release, installed state, or active branch. The stable known-good/v0.6.0 branch remains the pre-status-gating rollback.
 
