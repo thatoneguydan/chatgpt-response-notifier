@@ -3,7 +3,6 @@ using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using System.Threading;
 using ChatGPTResponseNotifier.Core;
 
 namespace ChatGPTResponseNotifier.Host;
@@ -17,6 +16,7 @@ internal static class ChromeRegistrationEvidencePublisher
 {
     private const int MaxProfiles = 32;
     private const int MaxDisableReasons = 16;
+    private const int MaxReferencedFiles = 128;
     private const long MaxJsonBytes = 32L * 1024L * 1024L;
     private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(8);
     private static readonly TimeSpan RefreshInterval = TimeSpan.FromMinutes(1);
@@ -63,7 +63,8 @@ internal static class ChromeRegistrationEvidencePublisher
         var localAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
         var userDataRoot = Path.Combine(localAppData, "Google", "Chrome", "User Data");
         var extensionRoot = NativeHostInstaller.ExtensionRoot;
-        var extensionId = ReadExtensionId(extensionRoot);
+        var extensionIdentity = ReadExtensionIdentity(extensionRoot);
+        var extensionId = extensionIdentity.ExtensionId;
         var lastUsedProfile = ReadLastUsedProfile(userDataRoot);
         var registrations = new List<object>();
         var profileStates = new List<object>();
@@ -79,7 +80,6 @@ internal static class ChromeRegistrationEvidencePublisher
 
         if (!string.IsNullOrWhiteSpace(extensionId) && Directory.Exists(userDataRoot))
         {
-            var stableExtensionId = extensionId!;
             IEnumerable<DirectoryInfo> profiles;
             try
             {
@@ -100,7 +100,6 @@ internal static class ChromeRegistrationEvidencePublisher
                 profilesDiscovered++;
                 var preferencesReadable = false;
                 var securePreferencesReadable = false;
-                bool? developerModeEnabled = null;
 
                 foreach (var fileName in new[] { "Secure Preferences", "Preferences" })
                 {
@@ -110,23 +109,15 @@ internal static class ChromeRegistrationEvidencePublisher
                     {
                         using var document = ReadJsonShared(preferencePath);
                         inspected++;
-                        if (fileName == "Preferences")
-                        {
-                            preferencesReadable = true;
-                            developerModeEnabled = ReadDeveloperMode(document.RootElement);
-                        }
-                        else
-                        {
-                            securePreferencesReadable = true;
-                        }
+                        if (fileName == "Preferences") preferencesReadable = true;
+                        else securePreferencesReadable = true;
 
-                        if (!TryReadRegistration(document.RootElement, stableExtensionId, extensionRoot, out var registration)) continue;
+                        if (!TryReadRegistration(document.RootElement, extensionId, extensionRoot, out var registration)) continue;
                         registrations.Add(new
                         {
                             profile = profile.Name,
                             source = fileName,
                             present = true,
-                            stateValue = registration.StateValue,
                             locationValue = registration.LocationValue,
                             disableReasonCount = registration.DisableReasonCodes.Count,
                             disableReasonCodes = registration.DisableReasonCodes,
@@ -144,8 +135,7 @@ internal static class ChromeRegistrationEvidencePublisher
                 {
                     profile = profile.Name,
                     preferencesReadable,
-                    securePreferencesReadable,
-                    developerModeEnabled
+                    securePreferencesReadable
                 });
             }
         }
@@ -160,12 +150,6 @@ internal static class ChromeRegistrationEvidencePublisher
                     : "unavailable";
         }
 
-        var lastUsedState = profileStates
-            .Select(item => JsonSerializer.SerializeToElement(item, JsonOptions.Default))
-            .FirstOrDefault(item => string.Equals(StringValue(item, "profile"), lastUsedProfile, StringComparison.Ordinal));
-        bool? lastUsedDeveloperMode = lastUsedState.ValueKind == JsonValueKind.Object
-            ? BooleanValue(lastUsedState, "developerModeEnabled")
-            : null;
         var lastUsedRegistrationPresent = registrations
             .Select(item => JsonSerializer.SerializeToElement(item, JsonOptions.Default))
             .Any(item => string.Equals(StringValue(item, "profile"), lastUsedProfile, StringComparison.Ordinal));
@@ -177,14 +161,26 @@ internal static class ChromeRegistrationEvidencePublisher
 
         return new
         {
-            schemaVersion = 1,
-            capability = "chrome-registration-readonly-helper-v1",
+            schemaVersion = 2,
+            capability = "chrome-registration-readonly-helper-v2",
             observedAtUtc = now,
             state,
             extensionId,
+            expectedExtensionRoot = new
+            {
+                exists = Directory.Exists(extensionRoot),
+                manifestExists = extensionIdentity.ManifestExists,
+                manifestReadable = extensionIdentity.ManifestReadable,
+                manifestJsonValid = extensionIdentity.ManifestJsonValid,
+                manifestVersion = extensionIdentity.ManifestVersion,
+                manifestKeyPresent = extensionIdentity.ManifestKeyPresent,
+                calculatedExtensionId = extensionIdentity.ExtensionId,
+                referencedFileCount = extensionIdentity.ReferencedFileCount,
+                referencedFilesMissing = extensionIdentity.ReferencedFilesMissing,
+                referencedFilesUnreadable = extensionIdentity.ReferencedFilesUnreadable
+            },
             lastUsedProfile,
-            lastUsedProfileDeveloperModeEnabled = lastUsedDeveloperMode,
-            lastUsedProfileRegistrationPresent = lastUsedRegistrationPresent,
+            lastUsedProfileRegistrationPresent,
             lastUsedProfilePathMatchesExpectedExtensionRoot = lastUsedRegistrationPresent ? lastUsedPathMatches : (bool?)null,
             profilesDiscovered,
             profileFilesInspected = inspected,
@@ -194,30 +190,136 @@ internal static class ChromeRegistrationEvidencePublisher
         };
     }
 
-    private static string? ReadExtensionId(string extensionRoot)
+    private static ExtensionIdentityEvidence ReadExtensionIdentity(string extensionRoot)
+    {
+        var manifestPath = Path.Combine(extensionRoot, "manifest.json");
+        if (!File.Exists(manifestPath))
+            return new(false, false, false, null, false, null, 0, Array.Empty<string>(), Array.Empty<string>());
+
+        try
+        {
+            using var document = ReadJsonShared(manifestPath);
+            var root = document.RootElement;
+            string? extensionId = null;
+            var keyPresent = root.TryGetProperty("key", out var keyNode) && keyNode.ValueKind == JsonValueKind.String;
+            if (keyPresent)
+            {
+                var key = keyNode.GetString();
+                if (!string.IsNullOrWhiteSpace(key)) extensionId = ExtensionIdFromPublicKey(key);
+            }
+
+            string? manifestVersion = root.TryGetProperty("version", out var versionNode) && versionNode.ValueKind == JsonValueKind.String
+                ? BoundedText(versionNode.GetString(), 32)
+                : null;
+
+            var referenced = CollectReferencedFiles(root)
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .Take(MaxReferencedFiles)
+                .ToArray();
+            var missing = new List<string>();
+            var unreadable = new List<string>();
+            foreach (var relative in referenced)
+            {
+                var path = SafeChildPath(extensionRoot, relative);
+                if (path is null || !File.Exists(path))
+                {
+                    missing.Add(relative);
+                    continue;
+                }
+                try
+                {
+                    using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                    if (stream.Length >= 0) { }
+                }
+                catch
+                {
+                    unreadable.Add(relative);
+                }
+            }
+
+            return new(true, true, true, manifestVersion, keyPresent, extensionId, referenced.Length, missing, unreadable);
+        }
+        catch (JsonException)
+        {
+            return new(true, true, false, null, false, null, 0, Array.Empty<string>(), Array.Empty<string>());
+        }
+        catch
+        {
+            return new(true, false, false, null, false, null, 0, Array.Empty<string>(), Array.Empty<string>());
+        }
+    }
+
+    private static IEnumerable<string> CollectReferencedFiles(JsonElement manifest)
+    {
+        if (manifest.TryGetProperty("background", out var background) && background.ValueKind == JsonValueKind.Object &&
+            background.TryGetProperty("service_worker", out var worker) && worker.ValueKind == JsonValueKind.String)
+        {
+            var value = BoundedRelativePath(worker.GetString());
+            if (value is not null) yield return value;
+        }
+
+        if (manifest.TryGetProperty("action", out var action) && action.ValueKind == JsonValueKind.Object &&
+            action.TryGetProperty("default_popup", out var popup) && popup.ValueKind == JsonValueKind.String)
+        {
+            var value = BoundedRelativePath(popup.GetString());
+            if (value is not null) yield return value;
+        }
+
+        if (manifest.TryGetProperty("content_scripts", out var contentScripts) && contentScripts.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var script in contentScripts.EnumerateArray())
+            {
+                if (script.ValueKind != JsonValueKind.Object || !script.TryGetProperty("js", out var js) || js.ValueKind != JsonValueKind.Array) continue;
+                foreach (var file in js.EnumerateArray())
+                {
+                    if (file.ValueKind != JsonValueKind.String) continue;
+                    var value = BoundedRelativePath(file.GetString());
+                    if (value is not null) yield return value;
+                }
+            }
+        }
+    }
+
+    private static string? SafeChildPath(string root, string relative)
     {
         try
         {
-            var manifestPath = Path.Combine(extensionRoot, "manifest.json");
-            using var document = ReadJsonShared(manifestPath);
-            if (!document.RootElement.TryGetProperty("key", out var keyNode) || keyNode.ValueKind != JsonValueKind.String) return null;
-            var key = keyNode.GetString();
-            if (string.IsNullOrWhiteSpace(key)) return null;
-            var bytes = Convert.FromBase64String(key);
-            var hash = SHA256.HashData(bytes);
-            const string alphabet = "abcdefghijklmnop";
-            var builder = new StringBuilder(32);
-            for (var index = 0; index < 16; index++)
-            {
-                builder.Append(alphabet[hash[index] >> 4]);
-                builder.Append(alphabet[hash[index] & 0x0f]);
-            }
-            return builder.ToString();
+            var rootFull = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            var child = Path.GetFullPath(Path.Combine(root, relative.Replace('/', Path.DirectorySeparatorChar)));
+            return child.StartsWith(rootFull, StringComparison.OrdinalIgnoreCase) ? child : null;
         }
         catch
         {
             return null;
         }
+    }
+
+    private static string? BoundedRelativePath(string? value)
+    {
+        var text = (value ?? string.Empty).Trim();
+        if (text.Length is 0 or > 160 || Path.IsPathRooted(text) || text.Contains("..", StringComparison.Ordinal)) return null;
+        return text.Replace('\\', '/');
+    }
+
+    private static string? BoundedText(string? value, int maxLength)
+    {
+        var text = (value ?? string.Empty).Trim();
+        if (text.Length == 0) return null;
+        return text.Length <= maxLength ? text : text[..maxLength];
+    }
+
+    private static string ExtensionIdFromPublicKey(string key)
+    {
+        var bytes = Convert.FromBase64String(key);
+        var hash = SHA256.HashData(bytes);
+        const string alphabet = "abcdefghijklmnop";
+        var builder = new StringBuilder(32);
+        for (var index = 0; index < 16; index++)
+        {
+            builder.Append(alphabet[hash[index] >> 4]);
+            builder.Append(alphabet[hash[index] & 0x0f]);
+        }
+        return builder.ToString();
     }
 
     private static string? ReadLastUsedProfile(string userDataRoot)
@@ -234,19 +336,6 @@ internal static class ChromeRegistrationEvidencePublisher
         {
             return null;
         }
-    }
-
-    private static bool? ReadDeveloperMode(JsonElement root)
-    {
-        if (!root.TryGetProperty("extensions", out var extensions) || extensions.ValueKind != JsonValueKind.Object) return null;
-        if (!extensions.TryGetProperty("ui", out var ui) || ui.ValueKind != JsonValueKind.Object) return null;
-        if (!ui.TryGetProperty("developer_mode", out var developerMode)) return null;
-        return developerMode.ValueKind switch
-        {
-            JsonValueKind.True => true,
-            JsonValueKind.False => false,
-            _ => null
-        };
     }
 
     private static bool TryReadRegistration(
@@ -273,7 +362,6 @@ internal static class ChromeRegistrationEvidencePublisher
         }
 
         registration = new Registration(
-            IntegerValue(entry, "state"),
             IntegerValue(entry, "location"),
             disableReasons,
             !string.IsNullOrWhiteSpace(rawPath),
@@ -340,9 +428,19 @@ internal static class ChromeRegistrationEvidencePublisher
     }
 
     private readonly record struct Registration(
-        int? StateValue,
         int? LocationValue,
         IReadOnlyList<int> DisableReasonCodes,
         bool PathAvailable,
         bool PathMatchesExpectedExtensionRoot);
+
+    private readonly record struct ExtensionIdentityEvidence(
+        bool ManifestExists,
+        bool ManifestReadable,
+        bool ManifestJsonValid,
+        string? ManifestVersion,
+        bool ManifestKeyPresent,
+        string? ExtensionId,
+        int ReferencedFileCount,
+        IReadOnlyList<string> ReferencedFilesMissing,
+        IReadOnlyList<string> ReferencedFilesUnreadable);
 }
