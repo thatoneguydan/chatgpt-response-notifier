@@ -1,0 +1,94 @@
+name: Probe Chrome fresh-load persistence
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/chrome-fresh-load-probe.yml'
+      - 'tools/chrome-fresh-load-persistence.mjs'
+      - 'extension/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.head.repo.owner.login == github.repository_owner) }}
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact source identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) {
+            throw "Exact-source checkout mismatch: expected $env:SOURCE_SHA, got $actual."
+          }
+          Write-Host "Exact source head: $actual"
+          node --version
+          if ($LASTEXITCODE -ne 0) { throw 'Node.js is unavailable on the Glass builder.' }
+          npm --version
+          if ($LASTEXITCODE -ne 0) { throw 'npm is unavailable on the Glass builder.' }
+
+      - name: Install isolated Puppeteer and Chrome for Testing 153
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $probeRoot = Join-Path $env:RUNNER_TEMP "notifier-chrome153-probe-$env:GITHUB_RUN_ID"
+          Remove-Item -LiteralPath $probeRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $probeRoot -Force | Out-Null
+          Copy-Item -LiteralPath '.\tools\chrome-fresh-load-persistence.mjs' -Destination (Join-Path $probeRoot 'probe.mjs')
+
+          Push-Location $probeRoot
+          try {
+            npm init -y | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'npm init failed.' }
+            $env:PUPPETEER_SKIP_DOWNLOAD = 'true'
+            $env:PUPPETEER_CACHE_DIR = Join-Path $probeRoot 'browser-cache'
+            npm install puppeteer@25.11.0 --no-fund --no-audit
+            if ($LASTEXITCODE -ne 0) { throw 'Puppeteer install failed.' }
+            Remove-Item Env:PUPPETEER_SKIP_DOWNLOAD -ErrorAction SilentlyContinue
+            npx puppeteer browsers install chrome@153.0.8010.36
+            if ($LASTEXITCODE -ne 0) { throw 'Chrome for Testing 153 install failed.' }
+          }
+          finally {
+            Pop-Location
+          }
+
+          "PROBE_ROOT=$probeRoot" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Fresh install then clean profile restart
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $extension = (Resolve-Path '.\extension').Path
+          $profile = Join-Path $env:PROBE_ROOT 'profile'
+          Push-Location $env:PROBE_ROOT
+          try {
+            node .\probe.mjs $extension $profile
+            if ($LASTEXITCODE -ne 0) { throw "Chrome fresh-load persistence probe failed with exit code $LASTEXITCODE." }
+          }
+          finally {
+            Pop-Location
+          }
+
+      - name: Cleanup isolated probe files
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:PROBE_ROOT) {
+            Remove-Item -LiteralPath $env:PROBE_ROOT -Recurse -Force -ErrorAction SilentlyContinue
+          }
