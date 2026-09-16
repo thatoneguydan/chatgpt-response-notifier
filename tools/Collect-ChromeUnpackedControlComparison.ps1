@@ -160,7 +160,7 @@ $result = [ordered]@{
 if ([string]::IsNullOrWhiteSpace($targetExtensionId)) {
     $result.state = 'target-id-unavailable'
 }
-elif (-not (Test-Path -LiteralPath $chromeUserDataRoot -PathType Container)) {
+elseif (-not (Test-Path -LiteralPath $chromeUserDataRoot -PathType Container)) {
     $result.state = 'chrome-user-data-missing'
 }
 else {
