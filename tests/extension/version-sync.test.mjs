@@ -286,7 +286,7 @@ test('native toast renders persisted completion time in local time and release v
   assert.match(toast, /FormatCompletedAt\(record\.CompletedAt\)/);
   assert.match(toast, /value\.ToLocalTime\(\)/);
   assert.match(toast, /local\.ToString\("t"\)/);
-  assert.equal(version, '0.9.28');
+  assert.equal(version, '0.9.29');
   assert.equal(manifest.version, version);
 });
 
@@ -300,4 +300,17 @@ test('Chrome registration diagnostics v2 remain bounded and read-only', () => {
   assert.match(helperSource, /calculatedExtensionId/);
   assert.match(adapterSource, /chrome-registration-readonly-helper-v2/);
   assert.doesNotMatch(helperSource, /Registry\.SetValue|Process\.Start|chrome\.exe/i);
+});
+
+test('unpacked control comparison stays bounded, read-only, and path-sanitized', () => {
+  const helperSource = readText('src/ChatGPTResponseNotifier.Host/ChromeUnpackedControlComparisonEvidencePublisher.cs');
+  const adapterSource = readText('tools/Collect-ChromeUnpackedControlComparison.ps1');
+
+  assert.match(helperSource, /chrome-unpacked-control-comparison-readonly-helper-v1/);
+  assert.match(helperSource, /SafePathCategory/);
+  assert.match(helperSource, /calculatedIdMatchesRegistration/);
+  assert.match(adapterSource, /chrome-unpacked-control-comparison-readonly-helper-v1/);
+  assert.match(adapterSource, /helper-snapshot-unavailable/);
+  assert.doesNotMatch(helperSource, /Registry\.SetValue|Process\.Start|chrome\.exe/i);
+  assert.doesNotMatch(adapterSource, /Set-Content.*Preferences|Set-Content.*Secure Preferences/i);
 });
