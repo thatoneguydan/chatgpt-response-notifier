@@ -1,0 +1,101 @@
+name: Collect Chrome preference integrity evidence
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/ChatGPTResponseNotifier.Host/ChromePreferenceIntegrityEvidencePublisher.cs'
+      - 'tools/Add-NotifierChromePreferenceIntegrityEvidence.ps1'
+      - '.github/workflows/chrome-pref-integrity-evidence.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.head.repo.owner.login == github.repository_owner) }}
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 4
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact source identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) {
+            throw "Exact-source checkout mismatch: expected $env:SOURCE_SHA, got $actual."
+          }
+
+      - name: Validate adapter syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path '.\tools\Add-NotifierChromePreferenceIntegrityEvidence.ps1'),
+            [ref]$tokens,
+            [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'Chrome preference integrity adapter has PowerShell parse errors.'
+          }
+
+      - name: Collect bounded helper evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = Join-Path $env:RUNNER_TEMP 'chrome-pref-integrity-evidence.json'
+          [ordered]@{
+            schemaVersion = 1
+            sourceCommit = $env:SOURCE_SHA
+            readOnly = $true
+            chrome = [ordered]@{}
+          } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $output -Encoding UTF8
+
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Add-NotifierChromePreferenceIntegrityEvidence.ps1 -EvidencePath $output
+          if ($LASTEXITCODE -ne 0) { throw "Chrome preference integrity adapter failed with exit code $LASTEXITCODE." }
+
+          $evidence = Get-Content -LiteralPath $output -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+          $raw = Get-Content -LiteralPath $output -Raw -Encoding UTF8
+          if ($evidence.schemaVersion -ne 1 -or $evidence.readOnly -ne $true) {
+            throw 'Chrome preference integrity evidence schema/read-only marker is invalid.'
+          }
+          if ([string]$evidence.sourceCommit -ne $env:SOURCE_SHA) {
+            throw 'Chrome preference integrity evidence source mismatch.'
+          }
+          foreach ($forbidden in @('super_mac":"','super_encrypted_hash":"','C:\Users\dan','responseBody','responseText','conversationUrl')) {
+            if ($raw -match [regex]::Escape($forbidden)) {
+              throw "Chrome preference integrity evidence leaked forbidden detail: $forbidden"
+            }
+          }
+          Write-Host ("Preference integrity: state={0}; registered={1}; hmac={2}; encrypted={3}; authenticator={4}; superHmac={5}; superEncrypted={6}; hmacCount={7}; encryptedCount={8}" -f `
+            $evidence.chrome.preferenceIntegrity.state,
+            $evidence.chrome.preferenceIntegrity.registrationPresent,
+            $evidence.chrome.preferenceIntegrity.legacyHmacPresent,
+            $evidence.chrome.preferenceIntegrity.encryptedHashPresent,
+            $evidence.chrome.preferenceIntegrity.notifierAuthenticatorPresent,
+            $evidence.chrome.preferenceIntegrity.superMacPresent,
+            $evidence.chrome.preferenceIntegrity.superEncryptedHashPresent,
+            $evidence.chrome.preferenceIntegrity.legacyHmacEntryCount,
+            $evidence.chrome.preferenceIntegrity.encryptedHashEntryCount)
+
+      - name: Upload sanitized evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-pref-integrity-evidence-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}\chrome-pref-integrity-evidence.json
+          if-no-files-found: error
+          retention-days: 7
