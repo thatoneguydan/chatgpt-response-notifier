@@ -4,6 +4,7 @@ on:
   pull_request:
     branches: [main]
     paths:
+      - 'src/ChatGPTResponseNotifier.Host/ChromeUnpackedControlComparisonEvidencePublisher.cs'
       - 'tools/Collect-ChromeUnpackedControlComparison.ps1'
       - '.github/workflows/chrome-unpacked-control-comparison.yml'
   workflow_dispatch:
@@ -68,7 +69,11 @@ jobs:
           if ([int]$evidence.schemaVersion -ne 1) { throw 'Unexpected comparison evidence schema.' }
           if ([string]$evidence.capability -cne 'chrome-unpacked-control-comparison-readonly-v1') { throw 'Unexpected comparison evidence capability.' }
           if ($evidence.readOnly -ne $true) { throw 'Comparison evidence is not marked read-only.' }
-          if ([string]::IsNullOrWhiteSpace([string]$evidence.targetExtensionId)) { throw 'Target extension ID was not resolved.' }
+
+          $preDeployment = [string]$evidence.state -ceq 'helper-snapshot-unavailable'
+          if (-not $preDeployment -and [string]::IsNullOrWhiteSpace([string]$evidence.targetExtensionId)) {
+            throw 'Target extension ID was not resolved by the deployed helper.'
+          }
 
           foreach ($forbidden in @(
             'C:\Users\dan',
@@ -94,14 +99,15 @@ jobs:
             }
           }
 
-          Write-Host ("Unpacked comparison: state={0}; target={1}; targetRegs={2}; controlCandidates={3}; profiles={4}; inspected={5}; unavailable={6}" -f `
+          Write-Host ("Unpacked comparison: state={0}; target={1}; targetRegs={2}; controlCandidates={3}; profiles={4}; inspected={5}; unavailable={6}; preDeployment={7}" -f `
             $evidence.state,
             $evidence.targetExtensionId,
             $evidence.targetRegistrationCount,
             $evidence.controlCandidateCount,
             $evidence.profilesDiscovered,
             $evidence.profileFilesInspected,
-            $evidence.profileFilesUnavailable)
+            $evidence.profileFilesUnavailable,
+            $preDeployment)
 
           foreach ($record in @($evidence.records)) {
             Write-Host ("  role={0}; id={1}; profile={2}; source={3}; state={4}; location={5}; disabled={6}; category={7}; exists={8}; manifest={9}; key={10}; idMatch={11}; version={12}; name={13}" -f `
