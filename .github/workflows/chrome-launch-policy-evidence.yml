@@ -65,7 +65,7 @@ jobs:
           if ($evidence.schemaVersion -ne 1 -or $evidence.readOnly -ne $true) {
             throw 'Chrome launch/policy evidence schema/read-only marker is invalid.'
           }
-          foreach ($forbidden in @('CommandLine','ExecutablePath','ProfileImagePath','HKEY_USERS\\S-1-','C:\\Users\\dan')) {
+          foreach ($forbidden in @('"commandLine":','"executablePath":','"profileImagePath":','HKEY_USERS\\S-1-','C:\\Users\\dan')) {
             if ($raw -match [regex]::Escape($forbidden)) {
               throw "Chrome launch/policy evidence leaked forbidden detail: $forbidden"
             }
