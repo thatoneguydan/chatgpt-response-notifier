@@ -289,3 +289,15 @@ test('native toast renders persisted completion time in local time and release v
   assert.equal(version, '0.9.28');
   assert.equal(manifest.version, version);
 });
+
+test('Chrome registration diagnostics v2 remain bounded and read-only', () => {
+  const helperSource = readText('src/ChatGPTResponseNotifier.Host/ChromeRegistrationEvidencePublisher.cs');
+  const adapterSource = readText('tools/Add-NotifierChromeRegistrationEvidence.ps1');
+
+  assert.match(helperSource, /chrome-registration-readonly-helper-v2/);
+  assert.match(helperSource, /referencedFilesMissing/);
+  assert.match(helperSource, /referencedFilesUnreadable/);
+  assert.match(helperSource, /calculatedExtensionId/);
+  assert.match(adapterSource, /chrome-registration-readonly-helper-v2/);
+  assert.doesNotMatch(helperSource, /Registry\.SetValue|Process\.Start|chrome\.exe/i);
+});
