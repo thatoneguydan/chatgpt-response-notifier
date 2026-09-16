@@ -10,9 +10,8 @@ namespace ChatGPTResponseNotifier.Host;
 
 /// <summary>
 /// Replays only Chrome's minimum preference files in a disposable local profile,
-/// then asks the installed Chrome binary which unpacked extensions it actually
-/// accepted into its extension registry. The real Chrome profile is read-only.
-/// Raw copied preferences never leave the temporary directory and are deleted.
+/// then asks the installed Chrome binary which unpacked extensions it accepted.
+/// The real Chrome profile is read-only and raw copied preferences are deleted.
 /// </summary>
 internal static class ChromeMinimalProfileCloneProbePublisher
 {
@@ -32,10 +31,7 @@ internal static class ChromeMinimalProfileCloneProbePublisher
                 InitialDelay,
                 Timeout.InfiniteTimeSpan);
         }
-        catch
-        {
-            // Diagnostic-only evidence must never affect helper startup.
-        }
+        catch { }
     }
 
     private static async Task CaptureAndPublishAsync()
@@ -45,15 +41,11 @@ internal static class ChromeMinimalProfileCloneProbePublisher
             var evidenceRoot = Path.Combine(NativeHostInstaller.InstallRoot, "Evidence");
             Directory.CreateDirectory(evidenceRoot);
             var path = Path.Combine(evidenceRoot, "chrome-minimal-profile-clone-evidence.json");
-            var payload = await CaptureAsync();
             var temp = path + ".next";
-            File.WriteAllText(temp, JsonSerializer.Serialize(payload, new JsonSerializerOptions(JsonOptions.Default) { WriteIndented = true }));
+            File.WriteAllText(temp, JsonSerializer.Serialize(await CaptureAsync(), new JsonSerializerOptions(JsonOptions.Default) { WriteIndented = true }));
             File.Move(temp, path, overwrite: true);
         }
-        catch
-        {
-            // Diagnostic-only evidence must never affect helper lifetime.
-        }
+        catch { }
     }
 
     private static async Task<object> CaptureAsync()
@@ -67,19 +59,20 @@ internal static class ChromeMinimalProfileCloneProbePublisher
         var chromeVersion = ReadProductVersion(chromePath);
 
         if (sourceProfilePath is null)
-            return Result("source-profile-unavailable", observedAtUtc, lastUsedProfile, chromeVersion);
+            return InitialResult("source-profile-unavailable", observedAtUtc, lastUsedProfile, chromeVersion);
         if (chromePath is null)
-            return Result("chrome-executable-unavailable", observedAtUtc, lastUsedProfile, chromeVersion);
+            return InitialResult("chrome-executable-unavailable", observedAtUtc, lastUsedProfile, chromeVersion);
 
         var localStatePath = Path.Combine(sourceUserDataRoot, "Local State");
         var preferencesPath = Path.Combine(sourceProfilePath, "Preferences");
         var securePreferencesPath = Path.Combine(sourceProfilePath, "Secure Preferences");
         if (!File.Exists(localStatePath) || !File.Exists(preferencesPath) || !File.Exists(securePreferencesPath))
-            return Result("source-preferences-incomplete", observedAtUtc, lastUsedProfile, chromeVersion);
+            return InitialResult("source-preferences-incomplete", observedAtUtc, lastUsedProfile, chromeVersion);
 
         var cloneRoot = Path.Combine(Path.GetTempPath(), $"notifier-chrome-profile-clone-{Guid.NewGuid():N}");
         var cloneProfile = Path.Combine(cloneRoot, "Default");
         Process? chrome = null;
+        var cleanupRecorded = false;
 
         try
         {
@@ -88,9 +81,10 @@ internal static class ChromeMinimalProfileCloneProbePublisher
             CopyShared(preferencesPath, Path.Combine(cloneProfile, "Preferences"));
             CopyShared(securePreferencesPath, Path.Combine(cloneProfile, "Secure Preferences"));
 
-            var before = ReadRegistrationSnapshot(Path.Combine(cloneProfile, "Secure Preferences"));
+            var cloneSecurePreferences = Path.Combine(cloneProfile, "Secure Preferences");
+            var before = ReadRegistrationSnapshot(cloneSecurePreferences);
             if (!before.RegistrationPresent)
-                return Result("clone-registration-missing-before-launch", observedAtUtc, lastUsedProfile, chromeVersion, before);
+                throw new ProbeException("clone-registration-missing-before-launch");
 
             var startInfo = new ProcessStartInfo
             {
@@ -99,50 +93,47 @@ internal static class ChromeMinimalProfileCloneProbePublisher
                 CreateNoWindow = true,
                 WorkingDirectory = cloneRoot
             };
-            startInfo.ArgumentList.Add($"--user-data-dir={cloneRoot}");
-            startInfo.ArgumentList.Add("--profile-directory=Default");
-            startInfo.ArgumentList.Add("--remote-debugging-port=0");
-            startInfo.ArgumentList.Add("--headless=new");
-            startInfo.ArgumentList.Add("--no-first-run");
-            startInfo.ArgumentList.Add("--no-default-browser-check");
-            startInfo.ArgumentList.Add("--disable-background-networking");
-            startInfo.ArgumentList.Add("--disable-component-update");
-            startInfo.ArgumentList.Add("--disable-sync");
-            startInfo.ArgumentList.Add("--disable-default-apps");
-            startInfo.ArgumentList.Add("--metrics-recording-only");
-            startInfo.ArgumentList.Add("--no-pings");
-            startInfo.ArgumentList.Add("about:blank");
+            foreach (var argument in new[]
+            {
+                $"--user-data-dir={cloneRoot}",
+                "--profile-directory=Default",
+                "--remote-debugging-port=0",
+                "--headless=new",
+                "--no-first-run",
+                "--no-default-browser-check",
+                "--disable-background-networking",
+                "--disable-component-update",
+                "--disable-sync",
+                "--disable-default-apps",
+                "--metrics-recording-only",
+                "--no-pings",
+                "about:blank"
+            }) startInfo.ArgumentList.Add(argument);
 
-            chrome = Process.Start(startInfo);
-            if (chrome is null)
-                return Result("clone-chrome-start-failed", observedAtUtc, lastUsedProfile, chromeVersion, before);
-
-            var endpoint = await WaitForDevToolsEndpointAsync(cloneRoot, chrome, TimeSpan.FromSeconds(15));
-            if (endpoint is null)
-                return Result("clone-devtools-unavailable", observedAtUtc, lastUsedProfile, chromeVersion, before);
+            chrome = Process.Start(startInfo) ?? throw new ProbeException("clone-chrome-start-failed");
+            var endpoint = await WaitForDevToolsEndpointAsync(cloneRoot, chrome, TimeSpan.FromSeconds(15))
+                ?? throw new ProbeException("clone-devtools-unavailable");
 
             using var socket = new ClientWebSocket();
-            using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
-            await socket.ConnectAsync(endpoint, connectCts.Token);
+            using (var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(10)))
+                await socket.ConnectAsync(endpoint, connectCts.Token);
 
-            var firstQuery = await SendCommandAsync(socket, 1, "Extensions.getExtensions", null, TimeSpan.FromSeconds(10));
+            using var firstQuery = await SendCommandAsync(socket, 1, "Extensions.getExtensions", null, TimeSpan.FromSeconds(10));
             var firstExtensions = ParseExtensions(firstQuery);
             var beforeListed = firstExtensions.FirstOrDefault(static extension => extension.Id == NativeHostConstants.ExtensionId);
 
-            bool repairLoadAttempted = false;
-            bool repairLoadSucceeded = false;
+            var repairLoadAttempted = false;
+            var repairLoadSucceeded = false;
             bool? listedAfterRepair = null;
             bool? enabledAfterRepair = null;
             string? versionAfterRepair = null;
-            string[] recordKeysAddedByRepair = Array.Empty<string>();
-            string[] recordKeysRemovedByRepair = Array.Empty<string>();
 
             if (beforeListed is null)
             {
                 repairLoadAttempted = true;
                 try
                 {
-                    var loadResponse = await SendCommandAsync(
+                    using var loadResponse = await SendCommandAsync(
                         socket,
                         2,
                         "Extensions.loadUnpacked",
@@ -150,42 +141,31 @@ internal static class ChromeMinimalProfileCloneProbePublisher
                         TimeSpan.FromSeconds(10));
                     repairLoadSucceeded = ReadResultString(loadResponse, "id") == NativeHostConstants.ExtensionId;
 
-                    var secondQuery = await SendCommandAsync(socket, 3, "Extensions.getExtensions", null, TimeSpan.FromSeconds(10));
-                    var secondExtensions = ParseExtensions(secondQuery);
-                    var repaired = secondExtensions.FirstOrDefault(static extension => extension.Id == NativeHostConstants.ExtensionId);
+                    using var secondQuery = await SendCommandAsync(socket, 3, "Extensions.getExtensions", null, TimeSpan.FromSeconds(10));
+                    var repaired = ParseExtensions(secondQuery).FirstOrDefault(static extension => extension.Id == NativeHostConstants.ExtensionId);
                     listedAfterRepair = repaired is not null;
                     enabledAfterRepair = repaired?.Enabled;
                     versionAfterRepair = repaired?.Version;
                 }
-                catch
-                {
-                    repairLoadSucceeded = false;
-                }
+                catch { repairLoadSucceeded = false; }
             }
 
-            try
-            {
-                _ = await SendCommandAsync(socket, 99, "Browser.close", null, TimeSpan.FromSeconds(3));
-            }
-            catch
-            {
-                // Process cleanup below is authoritative.
-            }
+            try { using var _ = await SendCommandAsync(socket, 99, "Browser.close", null, TimeSpan.FromSeconds(3)); }
+            catch { }
 
             await WaitForExitAsync(chrome, TimeSpan.FromSeconds(5));
-            if (!chrome.HasExited)
-            {
-                try { chrome.Kill(entireProcessTree: true); } catch { }
-                await WaitForExitAsync(chrome, TimeSpan.FromSeconds(3));
-            }
+            EnsureStopped(chrome);
 
-            var after = ReadRegistrationSnapshot(Path.Combine(cloneProfile, "Secure Preferences"));
-            if (repairLoadAttempted)
-            {
-                recordKeysAddedByRepair = after.RecordKeys.Except(before.RecordKeys, StringComparer.Ordinal).OrderBy(static key => key, StringComparer.Ordinal).Take(MaxRecordKeys).ToArray();
-                recordKeysRemovedByRepair = before.RecordKeys.Except(after.RecordKeys, StringComparer.Ordinal).OrderBy(static key => key, StringComparer.Ordinal).Take(MaxRecordKeys).ToArray();
-            }
+            var after = ReadRegistrationSnapshot(cloneSecurePreferences);
+            var addedKeys = repairLoadAttempted
+                ? after.RecordKeys.Except(before.RecordKeys, StringComparer.Ordinal).OrderBy(static key => key, StringComparer.Ordinal).Take(MaxRecordKeys).ToArray()
+                : Array.Empty<string>();
+            var removedKeys = repairLoadAttempted
+                ? before.RecordKeys.Except(after.RecordKeys, StringComparer.Ordinal).OrderBy(static key => key, StringComparer.Ordinal).Take(MaxRecordKeys).ToArray()
+                : Array.Empty<string>();
 
+            var deleted = TryDeleteDirectory(cloneRoot);
+            cleanupRecorded = true;
             return new
             {
                 schemaVersion = 1,
@@ -214,13 +194,16 @@ internal static class ChromeMinimalProfileCloneProbePublisher
                 cloneRegistrationPresentAfter = after.RegistrationPresent,
                 cloneNotifierAuthenticatorPresentAfter = after.NotifierAuthenticatorPresent,
                 rawUnpackedRegistrationCountAfter = after.RawUnpackedRegistrationCount,
-                recordKeysAddedByRepair,
-                recordKeysRemovedByRepair,
-                temporaryCloneDeleted = true
+                recordKeysAddedByRepair = addedKeys,
+                recordKeysRemovedByRepair = removedKeys,
+                temporaryCloneDeleted = deleted
             };
         }
         catch (Exception ex)
         {
+            EnsureStopped(chrome);
+            var deleted = TryDeleteDirectory(cloneRoot);
+            cleanupRecorded = true;
             return new
             {
                 schemaVersion = 1,
@@ -229,52 +212,33 @@ internal static class ChromeMinimalProfileCloneProbePublisher
                 state = "probe-error",
                 lastUsedProfile,
                 chromeVersion,
-                errorClass = ex.GetType().Name,
+                errorCode = ex is ProbeException probe ? probe.Code : ex.GetType().Name,
                 sourceProfileMutated = false,
                 copiedBrowsingDatabases = 0,
                 chatGptNavigationPerformed = false,
-                temporaryCloneDeleted = true
+                temporaryCloneDeleted = deleted
             };
         }
         finally
         {
-            if (chrome is not null)
-            {
-                try
-                {
-                    if (!chrome.HasExited) chrome.Kill(entireProcessTree: true);
-                }
-                catch { }
-                chrome.Dispose();
-            }
-            try { Directory.Delete(cloneRoot, recursive: true); } catch { }
+            if (chrome is not null) chrome.Dispose();
+            if (!cleanupRecorded) _ = TryDeleteDirectory(cloneRoot);
         }
     }
 
-    private static object Result(
-        string state,
-        DateTimeOffset observedAtUtc,
-        string? lastUsedProfile,
-        string? chromeVersion,
-        RegistrationSnapshot? snapshot = null)
+    private static object InitialResult(string state, DateTimeOffset observedAtUtc, string? lastUsedProfile, string? chromeVersion) => new
     {
-        return new
-        {
-            schemaVersion = 1,
-            capability = "chrome-minimal-profile-clone-readonly-source-v1",
-            observedAtUtc,
-            state,
-            lastUsedProfile,
-            chromeVersion,
-            sourceProfileMutated = false,
-            copiedBrowsingDatabases = 0,
-            chatGptNavigationPerformed = false,
-            cloneRegistrationPresentBefore = snapshot?.RegistrationPresent,
-            cloneNotifierAuthenticatorPresentBefore = snapshot?.NotifierAuthenticatorPresent,
-            rawUnpackedRegistrationCountBefore = snapshot?.RawUnpackedRegistrationCount,
-            temporaryCloneDeleted = true
-        };
-    }
+        schemaVersion = 1,
+        capability = "chrome-minimal-profile-clone-readonly-source-v1",
+        observedAtUtc,
+        state,
+        lastUsedProfile,
+        chromeVersion,
+        sourceProfileMutated = false,
+        copiedBrowsingDatabases = 0,
+        chatGptNavigationPerformed = false,
+        temporaryCloneDeleted = (bool?)null
+    };
 
     private static async Task<Uri?> WaitForDevToolsEndpointAsync(string cloneRoot, Process process, TimeSpan timeout)
     {
@@ -291,8 +255,7 @@ internal static class ChromeMinimalProfileCloneProbePublisher
                     if (lines.Length >= 2 && int.TryParse(lines[0], out var port) && port is > 0 and <= 65535)
                     {
                         var wsPath = lines[1].Trim();
-                        if (wsPath.StartsWith("/", StringComparison.Ordinal))
-                            return new Uri($"ws://127.0.0.1:{port}{wsPath}");
+                        if (wsPath.StartsWith("/", StringComparison.Ordinal)) return new Uri($"ws://127.0.0.1:{port}{wsPath}");
                     }
                 }
             }
@@ -302,16 +265,10 @@ internal static class ChromeMinimalProfileCloneProbePublisher
         return null;
     }
 
-    private static async Task<JsonDocument> SendCommandAsync(
-        ClientWebSocket socket,
-        int id,
-        string method,
-        object? parameters,
-        TimeSpan timeout)
+    private static async Task<JsonDocument> SendCommandAsync(ClientWebSocket socket, int id, string method, object? parameters, TimeSpan timeout)
     {
-        var request = parameters is null
-            ? new { id, method }
-            : new { id, method, @params = parameters };
+        var request = new Dictionary<string, object?> { ["id"] = id, ["method"] = method };
+        if (parameters is not null) request["params"] = parameters;
         var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request, JsonOptions.Default));
         using var cts = new CancellationTokenSource(timeout);
         await socket.SendAsync(bytes, WebSocketMessageType.Text, true, cts.Token);
@@ -320,10 +277,8 @@ internal static class ChromeMinimalProfileCloneProbePublisher
         {
             var text = await ReceiveTextAsync(socket, cts.Token);
             using var candidate = JsonDocument.Parse(text);
-            if (!candidate.RootElement.TryGetProperty("id", out var idNode) || !idNode.TryGetInt32(out var responseId) || responseId != id)
-                continue;
-            if (candidate.RootElement.TryGetProperty("error", out var error))
-                throw new InvalidOperationException(error.GetRawText());
+            if (!candidate.RootElement.TryGetProperty("id", out var idNode) || !idNode.TryGetInt32(out var responseId) || responseId != id) continue;
+            if (candidate.RootElement.TryGetProperty("error", out var error)) throw new InvalidOperationException(error.GetRawText());
             return JsonDocument.Parse(text);
         }
     }
@@ -335,12 +290,10 @@ internal static class ChromeMinimalProfileCloneProbePublisher
         while (true)
         {
             var result = await socket.ReceiveAsync(buffer, cancellationToken);
-            if (result.MessageType == WebSocketMessageType.Close)
-                throw new IOException("Chrome DevTools WebSocket closed before the diagnostic response arrived.");
+            if (result.MessageType == WebSocketMessageType.Close) throw new IOException("Chrome DevTools WebSocket closed before response.");
             stream.Write(buffer, 0, result.Count);
+            if (stream.Length > 2 * 1024 * 1024) throw new InvalidDataException("Chrome DevTools response exceeded diagnostic size bound.");
             if (result.EndOfMessage) return Encoding.UTF8.GetString(stream.ToArray());
-            if (stream.Length > 2 * 1024 * 1024)
-                throw new InvalidDataException("Chrome DevTools response exceeded the diagnostic size bound.");
         }
     }
 
@@ -353,8 +306,7 @@ internal static class ChromeMinimalProfileCloneProbePublisher
         {
             if (item.ValueKind != JsonValueKind.Object) continue;
             var id = StringValue(item, "id");
-            if (string.IsNullOrWhiteSpace(id)) continue;
-            list.Add(new ExtensionInfo(id, StringValue(item, "version"), BooleanValue(item, "enabled")));
+            if (!string.IsNullOrWhiteSpace(id)) list.Add(new ExtensionInfo(id, StringValue(item, "version"), BooleanValue(item, "enabled")));
         }
         return list;
     }
@@ -391,9 +343,9 @@ internal static class ChromeMinimalProfileCloneProbePublisher
             }
         }
 
-        var legacyHmac = HasNonEmptyStringAtPath(root, "protection", "macs", "extensions", "settings", NativeHostConstants.ExtensionId);
-        var encryptedHash = HasNonEmptyStringAtPath(root, "protection", "macs", "extensions", "settings_encrypted_hash", NativeHostConstants.ExtensionId);
-        return new RegistrationSnapshot(registrationPresent, legacyHmac || encryptedHash, rawUnpackedCount, keys);
+        var authenticated = HasNonEmptyStringAtPath(root, "protection", "macs", "extensions", "settings", NativeHostConstants.ExtensionId)
+            || HasNonEmptyStringAtPath(root, "protection", "macs", "extensions", "settings_encrypted_hash", NativeHostConstants.ExtensionId);
+        return new RegistrationSnapshot(registrationPresent, authenticated, rawUnpackedCount, keys);
     }
 
     private static string? ReadLastUsedProfile(string userDataRoot)
@@ -424,11 +376,7 @@ internal static class ChromeMinimalProfileCloneProbePublisher
 
     private static string? FindChromeExecutable()
     {
-        foreach (var basePath in new[]
-        {
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles),
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86)
-        })
+        foreach (var basePath in new[] { Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86) })
         {
             if (string.IsNullOrWhiteSpace(basePath)) continue;
             var candidate = Path.Combine(basePath, "Google", "Chrome", "Application", "chrome.exe");
@@ -462,6 +410,30 @@ internal static class ChromeMinimalProfileCloneProbePublisher
         try { await process.WaitForExitAsync(cts.Token); } catch (OperationCanceledException) { }
     }
 
+    private static void EnsureStopped(Process? process)
+    {
+        if (process is null) return;
+        try
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                process.WaitForExit(3000);
+            }
+        }
+        catch { }
+    }
+
+    private static bool TryDeleteDirectory(string path)
+    {
+        try
+        {
+            if (Directory.Exists(path)) Directory.Delete(path, recursive: true);
+            return !Directory.Exists(path);
+        }
+        catch { return false; }
+    }
+
     private static JsonDocument ReadJsonShared(string path)
     {
         var info = new FileInfo(path);
@@ -481,17 +453,11 @@ internal static class ChromeMinimalProfileCloneProbePublisher
         return true;
     }
 
-    private static bool HasNonEmptyStringAtPath(JsonElement root, params string[] path)
-    {
-        return TryGetPath(root, path, out var value)
-            && value.ValueKind == JsonValueKind.String
-            && !string.IsNullOrWhiteSpace(value.GetString());
-    }
+    private static bool HasNonEmptyStringAtPath(JsonElement root, params string[] path) =>
+        TryGetPath(root, path, out var value) && value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString());
 
-    private static string? StringValue(JsonElement root, string name)
-    {
-        return root.TryGetProperty(name, out var node) && node.ValueKind == JsonValueKind.String ? node.GetString() : null;
-    }
+    private static string? StringValue(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var node) && node.ValueKind == JsonValueKind.String ? node.GetString() : null;
 
     private static bool? BooleanValue(JsonElement root, string name)
     {
@@ -499,11 +465,14 @@ internal static class ChromeMinimalProfileCloneProbePublisher
         return node.ValueKind switch { JsonValueKind.True => true, JsonValueKind.False => false, _ => null };
     }
 
-    private static int? IntegerValue(JsonElement root, string name)
-    {
-        return root.TryGetProperty(name, out var node) && node.ValueKind == JsonValueKind.Number && node.TryGetInt32(out var value) ? value : null;
-    }
+    private static int? IntegerValue(JsonElement root, string name) =>
+        root.TryGetProperty(name, out var node) && node.ValueKind == JsonValueKind.Number && node.TryGetInt32(out var value) ? value : null;
 
-    private readonly record struct ExtensionInfo(string Id, string? Version, bool? Enabled);
+    private sealed record ExtensionInfo(string Id, string? Version, bool? Enabled);
     private readonly record struct RegistrationSnapshot(bool RegistrationPresent, bool NotifierAuthenticatorPresent, int RawUnpackedRegistrationCount, string[] RecordKeys);
+
+    private sealed class ProbeException(string code) : Exception(code)
+    {
+        public string Code { get; } = code;
+    }
 }
