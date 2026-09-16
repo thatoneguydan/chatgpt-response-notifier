@@ -6,6 +6,7 @@ on:
     paths:
       - 'tools/Collect-NotifierRuntimeEvidence.ps1'
       - 'tools/Add-NotifierChromeRegistrationEvidence.ps1'
+      - 'tools/Add-NotifierChromeStartupPreferenceEvidence.ps1'
       - 'tools/Add-NotifierStartupRegistryEvidence.ps1'
       - 'tools/Add-NotifierSafeEvidence.ps1'
       - '.github/workflows/runtime-evidence.yml'
@@ -51,6 +52,7 @@ jobs:
           foreach ($script in @(
             '.\tools\Collect-NotifierRuntimeEvidence.ps1',
             '.\tools\Add-NotifierChromeRegistrationEvidence.ps1',
+            '.\tools\Add-NotifierChromeStartupPreferenceEvidence.ps1',
             '.\tools\Add-NotifierStartupRegistryEvidence.ps1',
             '.\tools\Add-NotifierSafeEvidence.ps1'
           )) {
@@ -115,6 +117,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Bounded notifier evidence read failed with exit code $LASTEXITCODE." }
           powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Add-NotifierChromeRegistrationEvidence.ps1 -EvidencePath $output
           if ($LASTEXITCODE -ne 0) { throw "Chrome registration evidence adapter failed with exit code $LASTEXITCODE." }
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Add-NotifierChromeStartupPreferenceEvidence.ps1 -EvidencePath $output
+          if ($LASTEXITCODE -ne 0) { throw "Chrome startup preference evidence adapter failed with exit code $LASTEXITCODE." }
 
           $evidence = Get-Content -LiteralPath $output -Raw -Encoding UTF8 | ConvertFrom-Json
           $evidence.sourceCommit = $env:SOURCE_SHA
@@ -136,12 +140,15 @@ jobs:
             throw 'Runtime evidence leaked the interactive profile path.'
           }
 
-          Write-Host ("Evidence summary: install={0}; manifest={1}; helperProcesses={2}; listener={3}; registration={4}; startupRegistration={5}; safeEvidence={6}; safeInstalled={7}; currentLoaded={8}; historicalLoaded={9}; diagnostics={10}; liveRuntimeIdentity={11}; windowsIncidents={12}" -f `
+          Write-Host ("Evidence summary: install={0}; manifest={1}; helperProcesses={2}; listener={3}; registration={4}; developerMode={5}; creationFlags={6}; installedViaCdp={7}; startupRegistration={8}; safeEvidence={9}; safeInstalled={10}; currentLoaded={11}; historicalLoaded={12}; diagnostics={13}; liveRuntimeIdentity={14}; windowsIncidents={15}" -f `
             $evidence.installState.state,
             $evidence.installedManifest.state,
             $evidence.helper.processCount,
             $evidence.helper.loopbackListener.listening,
             $evidence.chrome.registration.state,
+            $evidence.chrome.startupPreferences.developerMode,
+            $evidence.chrome.startupPreferences.effectiveCreationFlags,
+            $evidence.chrome.startupPreferences.installedViaCdp,
             $evidence.helper.startupRegistration.state,
             $evidence.safeRuntimeEvidence.state,
             $evidence.safeRuntimeEvidence.installedVersion,
