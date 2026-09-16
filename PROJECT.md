@@ -1,10 +1,12 @@
 # ChatGPT Response Notifier
 
-Canonical source: **thatoneguydan/chatgpt-response-notifier**, main plus the active PR named in [DevelopmentInfrastructure #439](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/439). [#283](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/283) retains the historical incident work.
+Canonical source: **thatoneguydan/chatgpt-response-notifier**, main plus the active work recorded in [DevelopmentInfrastructure #439](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/439). [#283](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/283) retains the historical incident work.
 
-Read [ROADMAP.md](ROADMAP.md) for current scope, acceptance gates, and continuation. For the current v0.9.26 unfocused-window failure, read [the diagnostic handoff](docs/HIDDEN-WINDOW-DIAGNOSTIC-HANDOFF-2026-09-15.md) before proposing another behavior change. Read [README.md](README.md) for released behavior. [Review #32](https://github.com/thatoneguydan/chatgpt-response-notifier/issues/32) records the v0.8.1 reliability findings and offline proof.
+Read [ROADMAP.md](ROADMAP.md) for program structure and acceptance gates. For the current hidden-window investigation, the authoritative installed checkpoint is [v0.9.27 hidden-window diagnostics — installed checkpoint](docs/HIDDEN-WINDOW-DIAGNOSTICS-V0927-INSTALLED-2026-09-15.md), with the earlier source audit and conditional repair branches in [the v0.9.26 diagnostic handoff](docs/HIDDEN-WINDOW-DIAGNOSTIC-HANDOFF-2026-09-15.md). Read [README.md](README.md) for released behavior. [Review #32](https://github.com/thatoneguydan/chatgpt-response-notifier/issues/32) records the v0.8.1 reliability findings and offline proof.
 
-The older Glass project documents are historical and do not establish the current release, installed state, or active branch. The stable known-good/v0.6.0 branch remains the pre-status-gating rollback.
+**Current runtime:** v0.9.27 is published and installed on Glass from validated candidate source `d87d80a08093d985aad315b2fc6fa837535b7e4e`. Its bounded hidden-window diagnostics have been proven through the extension → helper → safe-evidence projection. v0.9.27 is diagnostic instrumentation, not a claimed fix. The next required evidence is one real notifier-eligible completion while Chrome remains unfocused/occluded, preferably on another Windows virtual desktop, followed immediately by the exact-source read-only evidence rerun documented in the installed checkpoint. Do not ship another behavior guess before that trace selects the repair boundary.
+
+The older Glass project documents are historical and do not establish the current release, installed state, or active work. The stable known-good/v0.6.0 branch remains the pre-status-gating rollback.
 
 Normal completion uses the unchanged upstream detector. Local browser code owns canonical status interpretation and guarded composer interaction; the loopback Windows helper owns persistent independent toasts. Never add ChatGPT polling or automatic foregrounding to recover a missed browser event.
 
