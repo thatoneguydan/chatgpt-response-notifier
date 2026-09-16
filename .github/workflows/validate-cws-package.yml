@@ -32,22 +32,25 @@ jobs:
           $actual = (git rev-parse HEAD).Trim()
           if ($actual -ne $env:SOURCE_SHA) { throw "Exact-source checkout mismatch: expected $env:SOURCE_SHA, got $actual." }
 
+      - name: Parse Store tooling
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($path in @('.\tools\Build-ChromeWebStorePackage.ps1', '.\tools\Set-ChromeWebStoreIdentity.ps1')) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error "$path: $($_.Message)" }
+              throw "PowerShell parse errors in $path."
+            }
+          }
+
       - name: Build and inspect seed package
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           Set-StrictMode -Version Latest
-
-          $tokens = $null
-          $errors = $null
-          [void][System.Management.Automation.Language.Parser]::ParseFile(
-            (Resolve-Path '.\tools\Build-ChromeWebStorePackage.ps1'),
-            [ref]$tokens,
-            [ref]$errors)
-          if ($errors.Count -gt 0) {
-            $errors | ForEach-Object { Write-Error $_.Message }
-            throw 'Chrome Web Store package builder has PowerShell parse errors.'
-          }
 
           $zipPath = Join-Path $env:RUNNER_TEMP 'chatgpt-response-notifier-cws-seed.zip'
           $expanded = Join-Path $env:RUNNER_TEMP 'chatgpt-response-notifier-cws-seed-expanded'
@@ -86,9 +89,11 @@ jobs:
             finally { $image.Dispose() }
           }
 
+          $sourceRoot = (Resolve-Path '.\extension').Path.TrimEnd('\') + '\'
           $sourceFiles = @(Get-ChildItem -LiteralPath .\extension -File -Recurse | Where-Object { $_.Name -cne 'manifest.json' })
           foreach ($sourceFile in $sourceFiles) {
-            $relative = [IO.Path]::GetRelativePath((Resolve-Path '.\extension').Path, $sourceFile.FullName)
+            if (-not $sourceFile.FullName.StartsWith($sourceRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unexpected extension source path.' }
+            $relative = $sourceFile.FullName.Substring($sourceRoot.Length)
             $storeFile = Join-Path $expanded $relative
             if (-not (Test-Path -LiteralPath $storeFile -PathType Leaf)) { throw "Store package is missing source file $relative." }
             $sourceHash = (Get-FileHash -LiteralPath $sourceFile.FullName -Algorithm SHA256).Hash
@@ -98,16 +103,52 @@ jobs:
 
           Write-Host "Validated seed Store package: version=$($storeManifest.version); sourceFiles=$($sourceFiles.Count); generatedIcons=$($requiredIcons.Count)"
 
+      - name: Upload exact-head seed package
+        if: ${{ hashFiles('store/chrome-web-store.identity.json') == '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-web-store-seed-${{ env.SOURCE_SHA }}
+          path: ${{ runner.temp }}\chatgpt-response-notifier-cws-seed.zip
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Prove bound mode fails closed before Store identity exists
         if: ${{ hashFiles('store/chrome-web-store.identity.json') == '' }}
         shell: powershell
         run: |
           $ErrorActionPreference = 'Stop'
           $zipPath = Join-Path $env:RUNNER_TEMP 'chatgpt-response-notifier-cws-bound.zip'
+          Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
           & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-ChromeWebStorePackage.ps1 -IdentityMode Bound -OutputPath $zipPath *> (Join-Path $env:RUNNER_TEMP 'cws-bound-expected-failure.txt')
           if ($LASTEXITCODE -eq 0) { throw 'Bound Store packaging unexpectedly succeeded without Store identity metadata.' }
           if (Test-Path -LiteralPath $zipPath -PathType Leaf) { throw 'Failed bound Store packaging left a package artifact behind.' }
           Write-Host 'Bound Store package correctly failed closed because Store identity is not yet bound.'
+
+      - name: Prove identity binder and bound package in disposable source copy
+        if: ${{ hashFiles('store/chrome-web-store.identity.json') == '' }}
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'notifier-source-for-cws-binding.zip'
+          $testRoot = Join-Path $env:RUNNER_TEMP 'notifier-source-for-cws-binding'
+          $boundZip = Join-Path $env:RUNNER_TEMP 'chatgpt-response-notifier-cws-bound-mock.zip'
+          Remove-Item -LiteralPath $archive -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $testRoot -Recurse -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $boundZip -Force -ErrorAction SilentlyContinue
+          git archive --format=zip --output=$archive HEAD
+          if ($LASTEXITCODE -ne 0) { throw 'Could not create disposable exact-head source archive.' }
+          Expand-Archive -LiteralPath $archive -DestinationPath $testRoot -Force
+
+          $manifest = Get-Content -LiteralPath (Join-Path $testRoot 'extension\manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+          $currentPublicKey = [string]$manifest.key
+          $mockItemId = 'lciedmoiiapbgemklkpoadimhffaaaah'
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File (Join-Path $testRoot 'tools\Set-ChromeWebStoreIdentity.ps1') -RepositoryRoot $testRoot -ItemId $mockItemId -PublicKey $currentPublicKey
+          if ($LASTEXITCODE -ne 0) { throw "Disposable Store identity binding failed with exit code $LASTEXITCODE." }
+
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-ChromeWebStorePackage.ps1 -ExtensionRoot (Join-Path $testRoot 'extension') -IdentityMode Bound -IdentityMetadataPath (Join-Path $testRoot 'store\chrome-web-store.identity.json') -OutputPath $boundZip
+          if ($LASTEXITCODE -ne 0) { throw "Disposable bound Store package failed with exit code $LASTEXITCODE." }
+          if (-not (Test-Path -LiteralPath $boundZip -PathType Leaf)) { throw 'Disposable bound Store package is missing.' }
+          Write-Host 'Identity binder and bound-package contract passed in disposable exact-head source copy.'
 
       - name: Validate bound package when Store identity exists
         if: ${{ hashFiles('store/chrome-web-store.identity.json') != '' }}
