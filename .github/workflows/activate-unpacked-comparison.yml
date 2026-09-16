@@ -1,0 +1,162 @@
+name: Activate unpacked persistence comparison
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/Invoke-NotifierManagedUpdate.ps1'
+      - 'tools/Collect-ChromeUnpackedControlComparison.ps1'
+      - '.github/workflows/activate-unpacked-comparison.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  activate-and-compare:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.head.repo.owner.login == github.repository_owner) }}
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 9
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact source identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) {
+            throw "Exact-source checkout mismatch: expected $env:SOURCE_SHA, got $actual."
+          }
+
+      - name: Validate diagnostic script syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($path in @(
+            '.\tools\Invoke-NotifierManagedUpdate.ps1',
+            '.\tools\Collect-ChromeUnpackedControlComparison.ps1'
+          )) {
+            $tokens = $null
+            $errors = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile(
+              (Resolve-Path $path), [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error $_.Message }
+              throw "PowerShell parse errors found in $path."
+            }
+          }
+
+      - name: Activate current approved helper bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content -LiteralPath .\VERSION.txt -Raw -Encoding UTF8).Trim()
+          if ($version -notmatch '^\d+\.\d+\.\d+(?:\.\d+)?$') { throw 'VERSION.txt is invalid.' }
+          $output = Join-Path $env:RUNNER_TEMP 'notifier-managed-update.json'
+
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Invoke-NotifierManagedUpdate.ps1 `
+            -ExpectedVersion $version `
+            -OutputPath $output `
+            -UpdateTimeoutSeconds 300 `
+            -RestartTimeoutSeconds 90
+          if ($LASTEXITCODE -ne 0) { throw "Managed update activation failed with exit code $LASTEXITCODE." }
+
+          $raw = Get-Content -LiteralPath $output -Raw -Encoding UTF8
+          $result = $raw | ConvertFrom-Json -ErrorAction Stop
+          if ([int]$result.schemaVersion -ne 1) { throw 'Unexpected managed-update evidence schema.' }
+          if ([string]$result.capability -cne 'notifier-managed-update-localhost-v1') { throw 'Unexpected managed-update evidence capability.' }
+          if ($result.loopbackOnly -ne $true) { throw 'Managed-update evidence is not loopback-only.' }
+          if ([string]$result.verifiedRestartVersion -cne $version) { throw 'Helper restart version does not match VERSION.txt.' }
+          if ([string]$result.updateState -notin @('installed','current')) { throw 'Managed update did not report a successful terminal state.' }
+
+      - name: Collect fresh original-vs-fork registration comparison
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = Join-Path $env:RUNNER_TEMP 'chrome-unpacked-control-comparison.json'
+          $evidence = $null
+
+          foreach ($attempt in 1..24) {
+            powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Collect-ChromeUnpackedControlComparison.ps1 -OutputPath $output
+            if ($LASTEXITCODE -ne 0) { throw "Control comparison adapter failed with exit code $LASTEXITCODE." }
+            $raw = Get-Content -LiteralPath $output -Raw -Encoding UTF8
+            $evidence = $raw | ConvertFrom-Json -ErrorAction Stop
+            if ([string]$evidence.state -cne 'helper-snapshot-unavailable' -and -not [string]::IsNullOrWhiteSpace([string]$evidence.targetExtensionId)) {
+              break
+            }
+            Start-Sleep -Seconds 5
+          }
+
+          if ($null -eq $evidence) { throw 'Control comparison evidence was not produced.' }
+          if ([int]$evidence.schemaVersion -ne 1) { throw 'Unexpected comparison evidence schema.' }
+          if ([string]$evidence.capability -cne 'chrome-unpacked-control-comparison-readonly-v1') { throw 'Unexpected comparison evidence capability.' }
+          if ($evidence.readOnly -ne $true) { throw 'Comparison evidence is not marked read-only.' }
+          if ([string]$evidence.state -ceq 'helper-snapshot-unavailable') { throw 'Updated helper did not publish a fresh comparison snapshot.' }
+          if ([string]::IsNullOrWhiteSpace([string]$evidence.targetExtensionId)) { throw 'Comparison snapshot did not resolve the fork extension ID.' }
+
+          foreach ($forbidden in @(
+            'C:\Users\dan',
+            'responseBody',
+            'responseText',
+            'conversationUrl',
+            'cookies',
+            'password',
+            'oauth',
+            'privateKey'
+          )) {
+            if ($raw -match [regex]::Escape($forbidden)) {
+              throw "Comparison evidence leaked forbidden detail: $forbidden"
+            }
+          }
+          foreach ($record in @($evidence.records)) {
+            foreach ($propertyName in @('path','rawPath','preferencePath','profilePath')) {
+              if ($null -ne $record.PSObject.Properties[$propertyName]) {
+                throw "Comparison evidence contains forbidden raw path property: $propertyName"
+              }
+            }
+          }
+
+          Write-Host ("CONTROL_COMPARISON state={0}; target={1}; targetRegs={2}; controlCandidates={3}; inspected={4}; unavailable={5}" -f `
+            $evidence.state,
+            $evidence.targetExtensionId,
+            $evidence.targetRegistrationCount,
+            $evidence.controlCandidateCount,
+            $evidence.profileFilesInspected,
+            $evidence.profileFilesUnavailable)
+          foreach ($record in @($evidence.records)) {
+            Write-Host ("CONTROL_RECORD role={0}; id={1}; profile={2}; source={3}; state={4}; location={5}; disabled={6}; category={7}; exists={8}; manifest={9}; key={10}; idMatch={11}; version={12}; name={13}" -f `
+              $record.role,
+              $record.extensionId,
+              $record.profile,
+              $record.source,
+              $record.stateValue,
+              $record.locationValue,
+              $record.disableReasonCount,
+              $record.pathCategory,
+              $record.pathExists,
+              $record.manifestReadable,
+              $record.manifestKeyPresent,
+              $record.calculatedIdMatchesRegistration,
+              $record.manifestVersion,
+              $record.manifestName)
+          }
+
+      - name: Upload sanitized activation and comparison evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: unpacked-persistence-comparison-${{ github.event.pull_request.head.sha || github.sha }}
+          path: |
+            ${{ runner.temp }}\notifier-managed-update.json
+            ${{ runner.temp }}\chrome-unpacked-control-comparison.json
+          if-no-files-found: error
+          retention-days: 7
