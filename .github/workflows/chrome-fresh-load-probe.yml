@@ -68,7 +68,12 @@ jobs:
             Pop-Location
           }
 
+          $browserExe = Join-Path $probeRoot 'browser-cache\chrome\win64-153.0.8010.36\chrome-win64\chrome.exe'
+          if (-not (Test-Path -LiteralPath $browserExe -PathType Leaf)) {
+            throw 'Expected Chrome for Testing executable is missing after install.'
+          }
           "PROBE_ROOT=$probeRoot" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "PROBE_BROWSER_EXE=$browserExe" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Fresh install then clean profile restart
         shell: pwsh
@@ -78,7 +83,7 @@ jobs:
           $profile = Join-Path $env:PROBE_ROOT 'profile'
           Push-Location $env:PROBE_ROOT
           try {
-            node .\probe.mjs $extension $profile
+            node .\probe.mjs $extension $profile $env:PROBE_BROWSER_EXE
             if ($LASTEXITCODE -ne 0) { throw "Chrome fresh-load persistence probe failed with exit code $LASTEXITCODE." }
           }
           finally {
