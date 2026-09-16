@@ -7,6 +7,7 @@ const EXPECTED_VERSION = '0.9.28';
 
 const extensionPath = path.resolve(process.argv[2] ?? '');
 const profilePath = path.resolve(process.argv[3] ?? '');
+const browserExecutablePath = path.resolve(process.argv[4] ?? '');
 
 function fail(message) {
   console.error(`PROBE_FAILURE ${message}`);
@@ -24,6 +25,7 @@ function summarizeExtensions(extensionMap) {
 
 async function launch(profile) {
   return puppeteer.launch({
+    executablePath: browserExecutablePath,
     headless: true,
     userDataDir: profile,
     enableExtensions: true,
@@ -39,6 +41,8 @@ if (!extensionPath || !fs.existsSync(path.join(extensionPath, 'manifest.json')))
   fail('extension-manifest-missing');
 } else if (!profilePath) {
   fail('profile-path-missing');
+} else if (!browserExecutablePath || !fs.existsSync(browserExecutablePath)) {
+  fail('chrome-for-testing-executable-missing');
 } else {
   fs.mkdirSync(profilePath, { recursive: true });
 
