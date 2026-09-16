@@ -100,14 +100,13 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'VERSION.txt is empty.' }
           $tag = "v$version"
           $releaseNotes = @(
-            'Fixes notification click-through when the target ChatGPT window is stranded on another Windows virtual desktop.',
+            'Adds bounded read-only diagnostics to compare the forked notifier registration against the original unpacked notifier that remains persistent on Glass.',
             '',
-            '- The existing Chrome-only click route still activates the exact conversation tab first; the original tab and window are never moved or closed.',
-            '- After a physical toast click, the extension verifies whether the target page actually became visible instead of trusting Chrome window-focus API success by itself.',
-            '- If the verified target remains hidden, the same ChatGPT conversation URL opens in a new focused Chrome window on the current desktop as a bounded fallback.',
-            '- If page visibility cannot be verified, the fallback fails closed and does not create a duplicate window.',
-            '- The retired native Win32 foreground/HWND path remains retired. No process/window enumeration or undocumented virtual-desktop switching API is reintroduced.',
-            '- v0.9.27 hidden-window completion diagnostics and background notification behavior are retained unchanged.'
+            '- The Chrome Web Store migration remains paused; v0.9.29 does not change the extension distribution or installation method.',
+            '- The interactive helper compares only extension registration metadata needed to explain the persistence difference: state/location, disable reasons, safe path category/existence, manifest readability/version, and key-derived ID consistency.',
+            '- Raw Chrome profile contents and raw extension paths are not exported. The comparison adapter enforces a sanitized evidence schema before upload.',
+            '- The diagnostic path is read-only: it does not write Chrome Preferences or Secure Preferences and does not load, reload, enable, disable, move, or reinstall either extension.',
+            '- Existing notification behavior, bounded recovery, and the v0.9.28 cross-desktop click fallback are retained unchanged.'
           ) -join [Environment]::NewLine
           $artifactRoot = Join-Path $env:RUNNER_TEMP "chatgpt-response-notifier-release-$version"
           Remove-Item -LiteralPath $artifactRoot -Recurse -Force -ErrorAction SilentlyContinue
