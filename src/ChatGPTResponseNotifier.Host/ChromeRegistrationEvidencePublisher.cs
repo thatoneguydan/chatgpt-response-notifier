@@ -1,7 +1,9 @@
+using System.IO;
 using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Threading;
 using ChatGPTResponseNotifier.Core;
 
 namespace ChatGPTResponseNotifier.Host;
@@ -77,6 +79,7 @@ internal static class ChromeRegistrationEvidencePublisher
 
         if (!string.IsNullOrWhiteSpace(extensionId) && Directory.Exists(userDataRoot))
         {
+            var stableExtensionId = extensionId!;
             IEnumerable<DirectoryInfo> profiles;
             try
             {
@@ -117,7 +120,7 @@ internal static class ChromeRegistrationEvidencePublisher
                             securePreferencesReadable = true;
                         }
 
-                        if (!TryReadRegistration(document.RootElement, extensionId, extensionRoot, out var registration)) continue;
+                        if (!TryReadRegistration(document.RootElement, stableExtensionId, extensionRoot, out var registration)) continue;
                         registrations.Add(new
                         {
                             profile = profile.Name,
@@ -181,7 +184,7 @@ internal static class ChromeRegistrationEvidencePublisher
             extensionId,
             lastUsedProfile,
             lastUsedProfileDeveloperModeEnabled = lastUsedDeveloperMode,
-            lastUsedProfileRegistrationPresent,
+            lastUsedProfileRegistrationPresent = lastUsedRegistrationPresent,
             lastUsedProfilePathMatchesExpectedExtensionRoot = lastUsedRegistrationPresent ? lastUsedPathMatches : (bool?)null,
             profilesDiscovered,
             profileFilesInspected = inspected,
