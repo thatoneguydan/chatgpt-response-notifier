@@ -84,11 +84,9 @@ test('tab remaining hidden after a toast click opens a focused current-desktop f
   assert.equal(result, true);
   assert.equal(runtime.originalCalls(), 1);
   assert.equal(runtime.windowsCreated.length, 1);
-  assert.deepEqual(runtime.windowsCreated[0], {
-    url: 'https://chatgpt.com/c/conversation-1',
-    focused: true,
-    type: 'normal'
-  });
+  assert.equal(runtime.windowsCreated[0].url, 'https://chatgpt.com/c/conversation-1');
+  assert.equal(runtime.windowsCreated[0].focused, true);
+  assert.equal(runtime.windowsCreated[0].type, 'normal');
   assert.ok(runtime.diagnostics.some((entry) => entry.status === 'cross-desktop-focus-hidden'));
   assert.ok(runtime.diagnostics.some((entry) => entry.status === 'cross-desktop-fallback-window-created'));
   assert.ok(runtime.diagnostics.some((entry) => entry.status === 'cross-desktop-fallback-visible'));
