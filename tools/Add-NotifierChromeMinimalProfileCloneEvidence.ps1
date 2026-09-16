@@ -44,7 +44,7 @@ $result = [ordered]@{
     rawUnpackedRegistrationCountAfter = $null
     recordKeysAddedByRepair = @()
     recordKeysRemovedByRepair = @()
-    errorClass = $null
+    errorCode = $null
     temporaryCloneDeleted = $null
 }
 
@@ -68,7 +68,7 @@ try {
         'notifierListedBeforeRepair','notifierEnabledBeforeRepair','notifierVersionBeforeRepair','repairLoadAttempted',
         'repairLoadSucceeded','notifierListedAfterRepair','notifierEnabledAfterRepair','notifierVersionAfterRepair',
         'cloneRegistrationPresentAfter','cloneNotifierAuthenticatorPresentAfter','rawUnpackedRegistrationCountAfter',
-        'errorClass','temporaryCloneDeleted'
+        'errorCode','temporaryCloneDeleted'
     )) {
         $value = Get-PropertyValue -InputObject $snapshot -Name $name
         if ($null -ne $value) { $result[$name] = $value }
@@ -88,7 +88,7 @@ $evidence = Get-Content -LiteralPath $EvidencePath -Raw -Encoding UTF8 | Convert
 $evidence.chrome | Add-Member -NotePropertyName minimalProfileClone -NotePropertyValue ([pscustomobject]$result) -Force
 $evidence | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $EvidencePath -Encoding UTF8
 
-Write-Host ('Minimal Chrome clone: state={0}; chrome={1}; registeredBefore={2}; loadedBefore={3}; enabledBefore={4}; repairAttempted={5}; repairSucceeded={6}; loadedAfter={7}; registeredAfter={8}; tempDeleted={9}' -f `
+Write-Host ('Minimal Chrome clone: state={0}; chrome={1}; registeredBefore={2}; loadedBefore={3}; enabledBefore={4}; repairAttempted={5}; repairSucceeded={6}; loadedAfter={7}; registeredAfter={8}; tempDeleted={9}; error={10}' -f `
     $result.state,
     $result.chromeVersion,
     $result.cloneRegistrationPresentBefore,
@@ -98,4 +98,5 @@ Write-Host ('Minimal Chrome clone: state={0}; chrome={1}; registeredBefore={2}; 
     $result.repairLoadSucceeded,
     $result.notifierListedAfterRepair,
     $result.cloneRegistrationPresentAfter,
-    $result.temporaryCloneDeleted)
+    $result.temporaryCloneDeleted,
+    $result.errorCode)
