@@ -10,9 +10,11 @@ param(
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+Add-Type -AssemblyName System.Drawing
 
 function Normalize-PublicKey([string]$Value) {
-    return ([regex]::Replace(($Value ?? ''), '\s+', ''))
+    if ($null -eq $Value) { return '' }
+    return ([regex]::Replace($Value, '\s+', ''))
 }
 
 function Get-ChromeExtensionId([string]$PublicKey) {
@@ -35,8 +37,7 @@ function Get-ChromeExtensionId([string]$PublicKey) {
 }
 
 function Write-StoreIcon([int]$Size, [string]$Path) {
-    Add-Type -AssemblyName System.Drawing
-    $bitmap = New-Object System.Drawing.Bitmap($Size, $Size)
+    $bitmap = New-Object System.Drawing.Bitmap -ArgumentList $Size, $Size
     $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
     $background = $null
     $foreground = $null
@@ -46,18 +47,21 @@ function Write-StoreIcon([int]$Size, [string]$Path) {
         $graphics.Clear([System.Drawing.Color]::Transparent)
 
         $scale = $Size / 128.0
-        $background = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 28, 32, 40))
-        $foreground = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 248, 250, 252))
-        $accent = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(255, 70, 164, 255))
+        $backgroundColor = [System.Drawing.Color]::FromArgb(255, 28, 32, 40)
+        $foregroundColor = [System.Drawing.Color]::FromArgb(255, 248, 250, 252)
+        $accentColor = [System.Drawing.Color]::FromArgb(255, 70, 164, 255)
+        $background = New-Object System.Drawing.SolidBrush -ArgumentList $backgroundColor
+        $foreground = New-Object System.Drawing.SolidBrush -ArgumentList $foregroundColor
+        $accent = New-Object System.Drawing.SolidBrush -ArgumentList $accentColor
 
         # Keep the primary mark inside a 96x96 box so the 128px Store icon has
         # Chrome's recommended 16px transparent padding on every side.
         $graphics.FillEllipse($background, 16 * $scale, 16 * $scale, 96 * $scale, 96 * $scale)
         $graphics.FillRectangle($foreground, 38 * $scale, 43 * $scale, 52 * $scale, 35 * $scale)
         $tail = [System.Drawing.PointF[]]@(
-            (New-Object System.Drawing.PointF(45 * $scale, 77 * $scale)),
-            (New-Object System.Drawing.PointF(45 * $scale, 91 * $scale)),
-            (New-Object System.Drawing.PointF(59 * $scale, 77 * $scale))
+            (New-Object System.Drawing.PointF -ArgumentList (45 * $scale), (77 * $scale)),
+            (New-Object System.Drawing.PointF -ArgumentList (45 * $scale), (91 * $scale)),
+            (New-Object System.Drawing.PointF -ArgumentList (59 * $scale), (77 * $scale))
         )
         $graphics.FillPolygon($foreground, $tail)
         foreach ($x in @(48, 62, 76)) {
@@ -70,9 +74,9 @@ function Write-StoreIcon([int]$Size, [string]$Path) {
         $bitmap.Save($Path, [System.Drawing.Imaging.ImageFormat]::Png)
     }
     finally {
-        if ($accent) { $accent.Dispose() }
-        if ($foreground) { $foreground.Dispose() }
-        if ($background) { $background.Dispose() }
+        if ($null -ne $accent) { $accent.Dispose() }
+        if ($null -ne $foreground) { $foreground.Dispose() }
+        if ($null -ne $background) { $background.Dispose() }
         $graphics.Dispose()
         $bitmap.Dispose()
     }
@@ -152,7 +156,7 @@ try {
         $storeManifest.action | Add-Member -NotePropertyName default_icon -NotePropertyValue $iconObject -Force
     }
 
-    $utf8NoBom = New-Object Text.UTF8Encoding($false)
+    $utf8NoBom = New-Object Text.UTF8Encoding -ArgumentList $false
     [IO.File]::WriteAllText($storeManifestPath, ($storeManifest | ConvertTo-Json -Depth 32), $utf8NoBom)
 
     if (@(Get-ChildItem -LiteralPath $packageRoot -File -Recurse -Filter '*.pem').Count -gt 0) {
