@@ -57,15 +57,22 @@ internal static class ChromeStartupPreferenceEvidencePublisher
         var userDataRoot = Path.Combine(localAppData, "Google", "Chrome", "User Data");
         var lastUsedProfile = ReadLastUsedProfile(userDataRoot);
         var state = "unavailable";
-        bool? developerMode = null;
+        bool? developerModePreferences = null;
+        bool? developerModeSecurePreferences = null;
         var registrationPresent = false;
         int? rawCreationFlags = null;
-        string? creationFlagsSource = null;
+        string? registrationSource = null;
         bool? fromWebStore = null;
         bool? wasInstalledByDefault = null;
         bool? wasInstalledByOem = null;
         bool? allowFileAccess = null;
         int? effectiveCreationFlags = null;
+        int? extensionState = null;
+        int? blocklistState = null;
+        int? omahaBlocklistState = null;
+        int? acknowledgedBlocklistState = null;
+        int? extensionTelemetryServiceBlocklistState = null;
+        bool? running = null;
 
         var profilePath = SafeProfilePath(userDataRoot, lastUsedProfile);
         if (profilePath is null)
@@ -78,16 +85,25 @@ internal static class ChromeStartupPreferenceEvidencePublisher
             try
             {
                 using var preferences = ReadJsonShared(preferencesPath);
-                developerMode = ReadDeveloperMode(preferences.RootElement);
+                developerModePreferences = ReadDeveloperMode(preferences.RootElement);
                 if (TryReadRegistrationPrefs(preferences.RootElement, out var registration))
                 {
                     registrationPresent = true;
-                    rawCreationFlags = registration.CreationFlags;
-                    creationFlagsSource = "Preferences";
-                    fromWebStore = registration.FromWebStore;
-                    wasInstalledByDefault = registration.WasInstalledByDefault;
-                    wasInstalledByOem = registration.WasInstalledByOem;
-                    allowFileAccess = registration.AllowFileAccess;
+                    ApplyRegistration(
+                        registration,
+                        "Preferences",
+                        ref rawCreationFlags,
+                        ref registrationSource,
+                        ref fromWebStore,
+                        ref wasInstalledByDefault,
+                        ref wasInstalledByOem,
+                        ref allowFileAccess,
+                        ref extensionState,
+                        ref blocklistState,
+                        ref omahaBlocklistState,
+                        ref acknowledgedBlocklistState,
+                        ref extensionTelemetryServiceBlocklistState,
+                        ref running);
                 }
                 state = "read";
             }
@@ -100,15 +116,25 @@ internal static class ChromeStartupPreferenceEvidencePublisher
             try
             {
                 using var securePreferences = ReadJsonShared(securePreferencesPath);
+                developerModeSecurePreferences = ReadDeveloperMode(securePreferences.RootElement);
                 if (TryReadRegistrationPrefs(securePreferences.RootElement, out var registration))
                 {
                     registrationPresent = true;
-                    rawCreationFlags = registration.CreationFlags;
-                    creationFlagsSource = "Secure Preferences";
-                    fromWebStore = registration.FromWebStore;
-                    wasInstalledByDefault = registration.WasInstalledByDefault;
-                    wasInstalledByOem = registration.WasInstalledByOem;
-                    allowFileAccess = registration.AllowFileAccess;
+                    ApplyRegistration(
+                        registration,
+                        "Secure Preferences",
+                        ref rawCreationFlags,
+                        ref registrationSource,
+                        ref fromWebStore,
+                        ref wasInstalledByDefault,
+                        ref wasInstalledByOem,
+                        ref allowFileAccess,
+                        ref extensionState,
+                        ref blocklistState,
+                        ref omahaBlocklistState,
+                        ref acknowledgedBlocklistState,
+                        ref extensionTelemetryServiceBlocklistState,
+                        ref running);
                     if (state != "read") state = "read";
                 }
             }
@@ -135,22 +161,61 @@ internal static class ChromeStartupPreferenceEvidencePublisher
 
         return new
         {
-            schemaVersion = 1,
-            capability = "chrome-startup-pref-readonly-helper-v1",
+            schemaVersion = 2,
+            capability = "chrome-startup-pref-readonly-helper-v2",
             observedAtUtc = DateTimeOffset.UtcNow,
             state,
             lastUsedProfile,
-            developerMode,
+            developerMode = developerModePreferences,
+            developerModePreferences,
+            developerModeSecurePreferences,
             registrationPresent,
+            registrationSource,
             creationFlagsStored = rawCreationFlags,
-            creationFlagsSource,
+            creationFlagsSource = registrationSource,
             effectiveCreationFlags,
             installedViaCdp = effectiveCreationFlags.HasValue ? (effectiveCreationFlags.Value & InstalledViaCdpFlag) != 0 : (bool?)null,
             fromWebStore,
             wasInstalledByDefault,
             wasInstalledByOem,
-            allowFileAccess
+            allowFileAccess,
+            extensionState,
+            blocklistState,
+            omahaBlocklistState,
+            acknowledgedBlocklistState,
+            extensionTelemetryServiceBlocklistState,
+            running
         };
+    }
+
+    private static void ApplyRegistration(
+        RegistrationPrefs registration,
+        string source,
+        ref int? rawCreationFlags,
+        ref string? registrationSource,
+        ref bool? fromWebStore,
+        ref bool? wasInstalledByDefault,
+        ref bool? wasInstalledByOem,
+        ref bool? allowFileAccess,
+        ref int? extensionState,
+        ref int? blocklistState,
+        ref int? omahaBlocklistState,
+        ref int? acknowledgedBlocklistState,
+        ref int? extensionTelemetryServiceBlocklistState,
+        ref bool? running)
+    {
+        rawCreationFlags = registration.CreationFlags;
+        registrationSource = source;
+        fromWebStore = registration.FromWebStore;
+        wasInstalledByDefault = registration.WasInstalledByDefault;
+        wasInstalledByOem = registration.WasInstalledByOem;
+        allowFileAccess = registration.AllowFileAccess;
+        extensionState = registration.ExtensionState;
+        blocklistState = registration.BlocklistState;
+        omahaBlocklistState = registration.OmahaBlocklistState;
+        acknowledgedBlocklistState = registration.AcknowledgedBlocklistState;
+        extensionTelemetryServiceBlocklistState = registration.ExtensionTelemetryServiceBlocklistState;
+        running = registration.Running;
     }
 
     private static bool? ReadDeveloperMode(JsonElement root)
@@ -178,7 +243,13 @@ internal static class ChromeStartupPreferenceEvidencePublisher
             BooleanValue(entry, "from_webstore"),
             BooleanValue(entry, "was_installed_by_default"),
             BooleanValue(entry, "was_installed_by_oem"),
-            BooleanValue(entry, "newAllowFileAccess"));
+            BooleanValue(entry, "newAllowFileAccess"),
+            IntegerValue(entry, "state"),
+            IntegerValue(entry, "blacklist_state"),
+            IntegerValue(entry, "omaha_blocklist_state"),
+            IntegerValue(entry, "acknowledged_blocklist_state"),
+            IntegerValue(entry, "extension_telemetry_service_blocklist_state"),
+            BooleanValue(entry, "running"));
         return true;
     }
 
@@ -246,5 +317,11 @@ internal static class ChromeStartupPreferenceEvidencePublisher
         bool? FromWebStore,
         bool? WasInstalledByDefault,
         bool? WasInstalledByOem,
-        bool? AllowFileAccess);
+        bool? AllowFileAccess,
+        int? ExtensionState,
+        int? BlocklistState,
+        int? OmahaBlocklistState,
+        int? AcknowledgedBlocklistState,
+        int? ExtensionTelemetryServiceBlocklistState,
+        bool? Running);
 }
