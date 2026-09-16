@@ -8,6 +8,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: validate-cws-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   validate-cws-package:
     if: >-
@@ -41,7 +45,7 @@ jobs:
             $errors = $null
             [void][System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors)
             if ($errors.Count -gt 0) {
-              $errors | ForEach-Object { Write-Error "$path: $($_.Message)" }
+              $errors | ForEach-Object { Write-Error "${path}: $($_.Message)" }
               throw "PowerShell parse errors in $path."
             }
           }
