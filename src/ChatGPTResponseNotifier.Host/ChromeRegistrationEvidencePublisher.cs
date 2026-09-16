@@ -180,7 +180,7 @@ internal static class ChromeRegistrationEvidencePublisher
                 referencedFilesUnreadable = extensionIdentity.ReferencedFilesUnreadable
             },
             lastUsedProfile,
-            lastUsedProfileRegistrationPresent,
+            lastUsedProfileRegistrationPresent = lastUsedRegistrationPresent,
             lastUsedProfilePathMatchesExpectedExtensionRoot = lastUsedRegistrationPresent ? lastUsedPathMatches : (bool?)null,
             profilesDiscovered,
             profileFilesInspected = inspected,
