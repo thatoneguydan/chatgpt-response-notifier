@@ -1,0 +1,115 @@
+name: Collect isolated Chrome profile clone evidence
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/ChatGPTResponseNotifier.Host/ChromeIsolatedProfileCloneProbePublisher.cs'
+      - 'tools/Add-NotifierChromeIsolatedProfileCloneEvidence.ps1'
+      - '.github/workflows/chrome-isolated-profile-clone.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.head.repo.owner.login == github.repository_owner) }}
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 4
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact source identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) {
+            throw "Exact-source checkout mismatch: expected $env:SOURCE_SHA, got $actual."
+          }
+
+      - name: Validate adapter and isolation guards
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path '.\tools\Add-NotifierChromeIsolatedProfileCloneEvidence.ps1'),
+            [ref]$tokens,
+            [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'Isolated Chrome clone adapter has PowerShell parse errors.'
+          }
+
+          $source = Get-Content -LiteralPath '.\src\ChatGPTResponseNotifier.Host\ChromeIsolatedProfileCloneProbePublisher.cs' -Raw -Encoding UTF8
+          if ($source -notmatch 'scoped_dir_notifier_') { throw 'Isolated clone does not use Chromium scoped_dir prefix.' }
+          if ($source -match 'Extensions\.loadUnpacked') { throw 'Isolated clone must not repair/load unpacked extensions.' }
+          if ($source -match '--profile-directory=Default') { throw 'Isolated clone must not reuse Default profile basename.' }
+          if ($source -notmatch 'RegistryView\.Registry32') { throw 'Isolated clone must inspect Chrome external validator in registry 32-bit view.' }
+
+      - name: Collect bounded helper evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = Join-Path $env:RUNNER_TEMP 'chrome-isolated-profile-clone-evidence.json'
+          [ordered]@{
+            schemaVersion = 1
+            sourceCommit = $env:SOURCE_SHA
+            readOnlySource = $true
+            chrome = [ordered]@{}
+          } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $output -Encoding UTF8
+
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Add-NotifierChromeIsolatedProfileCloneEvidence.ps1 -EvidencePath $output
+          if ($LASTEXITCODE -ne 0) { throw "Isolated Chrome clone adapter failed with exit code $LASTEXITCODE." }
+
+          $evidence = Get-Content -LiteralPath $output -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+          $raw = Get-Content -LiteralPath $output -Raw -Encoding UTF8
+          if ($evidence.schemaVersion -ne 1 -or $evidence.readOnlySource -ne $true) { throw 'Isolated clone evidence schema/read-only marker is invalid.' }
+          if ([string]$evidence.sourceCommit -ne $env:SOURCE_SHA) { throw 'Isolated clone evidence source mismatch.' }
+          foreach ($forbidden in @('C:\Users\dan','responseBody','responseText','conversationUrl','cookie','history','sessionToken','accessToken','PreferenceMACs\\Default')) {
+            if ($raw -match [regex]::Escape($forbidden)) { throw "Isolated clone evidence leaked forbidden detail: $forbidden" }
+          }
+
+          $probe = $evidence.chrome.isolatedProfileClone
+          if ($probe.sourceProfileMutated -eq $true) { throw 'Isolated clone reported a real profile-file mutation.' }
+          if ([int]$probe.copiedBrowsingDatabases -ne 0) { throw 'Isolated clone copied a browsing database.' }
+          if ($probe.chatGptNavigationPerformed -eq $true) { throw 'Isolated clone navigated to ChatGPT.' }
+          if ($probe.repairAttempted -eq $true) { throw 'Isolated clone attempted a repair.' }
+          if ($probe.state -in @('complete','probe-error') -and $probe.temporaryCloneDeleted -ne $true) { throw 'Isolated clone did not verify temporary file cleanup.' }
+          if ($probe.state -eq 'complete' -and $probe.isolatedProfileUsesScopedDirPrefix -ne $true) { throw 'Isolated clone did not use Chromium scoped_dir profile prefix.' }
+          if ($probe.realExternalValidatorChangedByProbe -eq $true) { throw 'Isolated clone changed the real Chrome external validator.' }
+          if ($probe.state -eq 'complete' -and $probe.isolatedExternalValidatorReadableAfter -eq $true -and $probe.isolatedExternalValidatorPresentAfter -eq $true) { throw 'Chromium did not clean the isolated clone external validator.' }
+
+          Write-Host ("Isolated clone summary: state={0}; chrome={1}; registeredBefore={2}; listed={3}; registeredAfter={4}; realExternalBefore={5}/{6}/{7}; realExternalChanged={8}; isolatedExternalPresentAfter={9}; tempDeleted={10}; error={11}" -f `
+            $probe.state,
+            $probe.chromeVersion,
+            $probe.cloneRegistrationPresentBefore,
+            $probe.notifierListedByChrome,
+            $probe.cloneRegistrationPresentAfterStartup,
+            $probe.realExternalValidatorKeyPresentBefore,
+            $probe.realExternalValidatorValueCountBefore,
+            $probe.realExternalNotifierValuePresentBefore,
+            $probe.realExternalValidatorChangedByProbe,
+            $probe.isolatedExternalValidatorPresentAfter,
+            $probe.temporaryCloneDeleted,
+            $probe.errorCode)
+
+      - name: Upload sanitized evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-isolated-profile-clone-evidence-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}\chrome-isolated-profile-clone-evidence.json
+          if-no-files-found: error
+          retention-days: 7
