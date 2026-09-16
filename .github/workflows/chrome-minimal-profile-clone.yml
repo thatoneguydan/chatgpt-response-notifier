@@ -90,8 +90,11 @@ jobs:
           if ($evidence.chrome.minimalProfileClone.chatGptNavigationPerformed -eq $true) {
             throw 'Minimal Chrome profile clone probe navigated to ChatGPT.'
           }
+          if ($evidence.chrome.minimalProfileClone.state -in @('complete','probe-error') -and $evidence.chrome.minimalProfileClone.temporaryCloneDeleted -ne $true) {
+            throw 'Minimal Chrome profile clone probe did not verify deletion of its temporary clone.'
+          }
 
-          Write-Host ("Minimal clone summary: state={0}; chrome={1}; registeredBefore={2}; loadedBefore={3}; enabledBefore={4}; repairAttempted={5}; repairSucceeded={6}; loadedAfter={7}; registeredAfter={8}; tempDeleted={9}" -f `
+          Write-Host ("Minimal clone summary: state={0}; chrome={1}; registeredBefore={2}; loadedBefore={3}; enabledBefore={4}; repairAttempted={5}; repairSucceeded={6}; loadedAfter={7}; registeredAfter={8}; tempDeleted={9}; error={10}" -f `
             $evidence.chrome.minimalProfileClone.state,
             $evidence.chrome.minimalProfileClone.chromeVersion,
             $evidence.chrome.minimalProfileClone.cloneRegistrationPresentBefore,
@@ -101,7 +104,8 @@ jobs:
             $evidence.chrome.minimalProfileClone.repairLoadSucceeded,
             $evidence.chrome.minimalProfileClone.notifierListedAfterRepair,
             $evidence.chrome.minimalProfileClone.cloneRegistrationPresentAfter,
-            $evidence.chrome.minimalProfileClone.temporaryCloneDeleted)
+            $evidence.chrome.minimalProfileClone.temporaryCloneDeleted,
+            $evidence.chrome.minimalProfileClone.errorCode)
 
       - name: Upload sanitized evidence
         uses: actions/upload-artifact@v4
