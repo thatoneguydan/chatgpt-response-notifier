@@ -122,19 +122,26 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $zipPath = Join-Path $env:RUNNER_TEMP 'chatgpt-response-notifier-cws-bound.zip'
-          $failureLog = Join-Path $env:RUNNER_TEMP 'cws-bound-expected-failure.txt'
+          $stdoutLog = Join-Path $env:RUNNER_TEMP 'cws-bound-expected-stdout.txt'
+          $stderrLog = Join-Path $env:RUNNER_TEMP 'cws-bound-expected-stderr.txt'
           Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
-          Remove-Item -LiteralPath $failureLog -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $stdoutLog -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $stderrLog -Force -ErrorAction SilentlyContinue
 
-          $savedErrorActionPreference = $ErrorActionPreference
-          $ErrorActionPreference = 'SilentlyContinue'
-          & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-ChromeWebStorePackage.ps1 -IdentityMode Bound -OutputPath $zipPath *> $failureLog
-          $boundExitCode = $LASTEXITCODE
-          $ErrorActionPreference = $savedErrorActionPreference
+          $builderPath = (Resolve-Path '.\tools\Build-ChromeWebStorePackage.ps1').Path
+          $boundProcess = Start-Process -FilePath 'powershell.exe' -ArgumentList @(
+            '-NoLogo',
+            '-NoProfile',
+            '-ExecutionPolicy', 'Bypass',
+            '-File', $builderPath,
+            '-IdentityMode', 'Bound',
+            '-OutputPath', $zipPath
+          ) -Wait -PassThru -NoNewWindow -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog
+          $boundExitCode = $boundProcess.ExitCode
 
           if ($boundExitCode -eq 0) { throw 'Bound Store packaging unexpectedly succeeded without Store identity metadata.' }
           if (Test-Path -LiteralPath $zipPath -PathType Leaf) { throw 'Failed bound Store packaging left a package artifact behind.' }
-          $failureText = Get-Content -LiteralPath $failureLog -Raw -ErrorAction Stop
+          $failureText = ((Get-Content -LiteralPath $stdoutLog -Raw -ErrorAction SilentlyContinue) + "`n" + (Get-Content -LiteralPath $stderrLog -Raw -ErrorAction SilentlyContinue))
           if ($failureText -notmatch 'Bound Store packaging requires store/chrome-web-store\.identity\.json') {
             throw 'Bound Store packaging failed, but not for the expected missing-identity reason.'
           }
