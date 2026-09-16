@@ -153,7 +153,6 @@ try {
         $message = $null
         try { $message = Receive-BridgeMessage -Socket $socket -TimeoutSeconds $remaining }
         catch [OperationCanceledException] { continue }
-        catch [Threading.Tasks.TaskCanceledException] { continue }
 
         if ($null -eq $message) { break }
         if ([string]$message.type -cne 'update.result' -or [string]$message.requestId -cne $requestId) { continue }
