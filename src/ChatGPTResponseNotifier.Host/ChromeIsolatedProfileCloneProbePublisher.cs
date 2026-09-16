@@ -2,23 +2,27 @@ using System.Diagnostics;
 using System.IO;
 using System.Net.WebSockets;
 using System.Runtime.CompilerServices;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using Microsoft.Win32;
 using ChatGPTResponseNotifier.Core;
 
 namespace ChatGPTResponseNotifier.Host;
 
 /// <summary>
-/// Copies only Chrome's minimum preference files into a disposable profile,
-/// starts the installed Chrome once without repairing any extension, queries
-/// Chrome's effective extension registry, closes it, then records only bounded
-/// before/after shape for the notifier registration. The real profile is read-only.
+/// Replays only Chrome's minimum preference files in a disposable profile whose
+/// basename starts with Chromium's ScopedTempDir prefix. On Windows this gives
+/// the clone its own external PreferenceMACs registry store, which Chromium
+/// removes when the temporary profile shuts down. The real profile and its
+/// external validator are read-only.
 /// </summary>
-internal static class ChromeMinimalProfileStartupMutationProbePublisher
+internal static class ChromeIsolatedProfileCloneProbePublisher
 {
     private const long MaxJsonBytes = 32L * 1024L * 1024L;
     private const int MaxRecordKeys = 96;
-    private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(31);
+    private const string ChromeRegistryRoot = @"Software\Google\Chrome";
+    private static readonly TimeSpan InitialDelay = TimeSpan.FromSeconds(19);
     private static Timer? _timer;
 
     [ModuleInitializer]
@@ -41,7 +45,7 @@ internal static class ChromeMinimalProfileStartupMutationProbePublisher
         {
             var evidenceRoot = Path.Combine(NativeHostInstaller.InstallRoot, "Evidence");
             Directory.CreateDirectory(evidenceRoot);
-            var path = Path.Combine(evidenceRoot, "chrome-minimal-profile-startup-mutation-evidence.json");
+            var path = Path.Combine(evidenceRoot, "chrome-isolated-profile-clone-evidence.json");
             var temp = path + ".next";
             File.WriteAllText(temp, JsonSerializer.Serialize(await CaptureAsync(), new JsonSerializerOptions(JsonOptions.Default) { WriteIndented = true }));
             File.Move(temp, path, overwrite: true);
@@ -58,20 +62,25 @@ internal static class ChromeMinimalProfileStartupMutationProbePublisher
         var sourceProfilePath = SafeProfilePath(sourceUserDataRoot, lastUsedProfile);
         var chromePath = FindChromeExecutable();
         var chromeVersion = ReadProductVersion(chromePath);
+        var realExternalBefore = ReadExternalValidator(lastUsedProfile);
 
         if (sourceProfilePath is null)
-            return InitialResult("source-profile-unavailable", observedAtUtc, lastUsedProfile, chromeVersion);
+            return InitialResult("source-profile-unavailable", observedAtUtc, lastUsedProfile, chromeVersion, realExternalBefore);
         if (chromePath is null)
-            return InitialResult("chrome-executable-unavailable", observedAtUtc, lastUsedProfile, chromeVersion);
+            return InitialResult("chrome-executable-unavailable", observedAtUtc, lastUsedProfile, chromeVersion, realExternalBefore);
 
         var localStatePath = Path.Combine(sourceUserDataRoot, "Local State");
         var preferencesPath = Path.Combine(sourceProfilePath, "Preferences");
         var securePreferencesPath = Path.Combine(sourceProfilePath, "Secure Preferences");
         if (!File.Exists(localStatePath) || !File.Exists(preferencesPath) || !File.Exists(securePreferencesPath))
-            return InitialResult("source-preferences-incomplete", observedAtUtc, lastUsedProfile, chromeVersion);
+            return InitialResult("source-preferences-incomplete", observedAtUtc, lastUsedProfile, chromeVersion, realExternalBefore);
 
-        var cloneRoot = Path.Combine(Path.GetTempPath(), $"notifier-chrome-startup-clone-{Guid.NewGuid():N}");
-        var cloneProfile = Path.Combine(cloneRoot, "Default");
+        // Chromium's Windows tracked-pref implementation recognizes profile
+        // basenames beginning with "scoped_dir" as disposable and attaches a
+        // registry cleaner to that profile's external PreferenceMACs store.
+        var isolatedProfileName = $"scoped_dir_notifier_{Guid.NewGuid():N}";
+        var cloneRoot = Path.Combine(Path.GetTempPath(), $"notifier-chrome-isolated-{Guid.NewGuid():N}");
+        var cloneProfile = Path.Combine(cloneRoot, isolatedProfileName);
         Process? chrome = null;
         var cleanupRecorded = false;
 
@@ -97,7 +106,7 @@ internal static class ChromeMinimalProfileStartupMutationProbePublisher
             foreach (var argument in new[]
             {
                 $"--user-data-dir={cloneRoot}",
-                "--profile-directory=Default",
+                $"--profile-directory={isolatedProfileName}",
                 "--remote-debugging-port=0",
                 "--headless=new",
                 "--no-first-run",
@@ -135,12 +144,16 @@ internal static class ChromeMinimalProfileStartupMutationProbePublisher
             var removedKeys = before.RecordKeys.Except(afterStartup.RecordKeys, StringComparer.Ordinal)
                 .OrderBy(static key => key, StringComparer.Ordinal).Take(MaxRecordKeys).ToArray();
 
+            var isolatedExternalAfter = ReadExternalValidator(isolatedProfileName);
+            var realExternalAfter = ReadExternalValidator(lastUsedProfile);
+            var realExternalChanged = CompareExternalValidators(realExternalBefore, realExternalAfter);
+
             var deleted = TryDeleteDirectory(cloneRoot);
             cleanupRecorded = true;
             return new
             {
                 schemaVersion = 1,
-                capability = "chrome-minimal-profile-startup-mutation-readonly-source-v1",
+                capability = "chrome-isolated-profile-clone-readonly-source-v1",
                 observedAtUtc,
                 state = "complete",
                 lastUsedProfile,
@@ -150,6 +163,7 @@ internal static class ChromeMinimalProfileStartupMutationProbePublisher
                 copiedBrowsingDatabases = 0,
                 chatGptNavigationPerformed = false,
                 repairAttempted = false,
+                isolatedProfileUsesScopedDirPrefix = isolatedProfileName.StartsWith("scoped_dir", StringComparison.OrdinalIgnoreCase),
                 cloneRegistrationPresentBefore = before.RegistrationPresent,
                 cloneLegacyAuthenticatorPresentBefore = before.LegacyAuthenticatorPresent,
                 cloneEncryptedAuthenticatorPresentBefore = before.EncryptedAuthenticatorPresent,
@@ -164,18 +178,32 @@ internal static class ChromeMinimalProfileStartupMutationProbePublisher
                 rawUnpackedRegistrationCountAfterStartup = afterStartup.RawUnpackedRegistrationCount,
                 recordKeysAddedByStartup = addedKeys,
                 recordKeysRemovedByStartup = removedKeys,
+                realExternalValidatorReadableBefore = realExternalBefore.Readable,
+                realExternalValidatorKeyPresentBefore = realExternalBefore.KeyPresent,
+                realExternalValidatorValueCountBefore = realExternalBefore.ValueCount,
+                realExternalNotifierValuePresentBefore = realExternalBefore.NotifierValuePresent,
+                realExternalValidatorReadableAfter = realExternalAfter.Readable,
+                realExternalValidatorKeyPresentAfter = realExternalAfter.KeyPresent,
+                realExternalValidatorValueCountAfter = realExternalAfter.ValueCount,
+                realExternalNotifierValuePresentAfter = realExternalAfter.NotifierValuePresent,
+                realExternalValidatorChangedByProbe = realExternalChanged,
+                isolatedExternalValidatorReadableAfter = isolatedExternalAfter.Readable,
+                isolatedExternalValidatorPresentAfter = isolatedExternalAfter.KeyPresent,
                 temporaryCloneDeleted = deleted
             };
         }
         catch (Exception ex)
         {
             EnsureStopped(chrome);
+            var realExternalAfter = ReadExternalValidator(lastUsedProfile);
+            var changed = CompareExternalValidators(realExternalBefore, realExternalAfter);
+            var isolatedExternalAfter = ReadExternalValidator(isolatedProfileName);
             var deleted = TryDeleteDirectory(cloneRoot);
             cleanupRecorded = true;
             return new
             {
                 schemaVersion = 1,
-                capability = "chrome-minimal-profile-startup-mutation-readonly-source-v1",
+                capability = "chrome-isolated-profile-clone-readonly-source-v1",
                 observedAtUtc,
                 state = "probe-error",
                 lastUsedProfile,
@@ -185,6 +213,18 @@ internal static class ChromeMinimalProfileStartupMutationProbePublisher
                 copiedBrowsingDatabases = 0,
                 chatGptNavigationPerformed = false,
                 repairAttempted = false,
+                isolatedProfileUsesScopedDirPrefix = true,
+                realExternalValidatorReadableBefore = realExternalBefore.Readable,
+                realExternalValidatorKeyPresentBefore = realExternalBefore.KeyPresent,
+                realExternalValidatorValueCountBefore = realExternalBefore.ValueCount,
+                realExternalNotifierValuePresentBefore = realExternalBefore.NotifierValuePresent,
+                realExternalValidatorReadableAfter = realExternalAfter.Readable,
+                realExternalValidatorKeyPresentAfter = realExternalAfter.KeyPresent,
+                realExternalValidatorValueCountAfter = realExternalAfter.ValueCount,
+                realExternalNotifierValuePresentAfter = realExternalAfter.NotifierValuePresent,
+                realExternalValidatorChangedByProbe = changed,
+                isolatedExternalValidatorReadableAfter = isolatedExternalAfter.Readable,
+                isolatedExternalValidatorPresentAfter = isolatedExternalAfter.KeyPresent,
                 temporaryCloneDeleted = deleted
             };
         }
@@ -195,10 +235,15 @@ internal static class ChromeMinimalProfileStartupMutationProbePublisher
         }
     }
 
-    private static object InitialResult(string state, DateTimeOffset observedAtUtc, string? lastUsedProfile, string? chromeVersion) => new
+    private static object InitialResult(
+        string state,
+        DateTimeOffset observedAtUtc,
+        string? lastUsedProfile,
+        string? chromeVersion,
+        ExternalValidatorSnapshot external) => new
     {
         schemaVersion = 1,
-        capability = "chrome-minimal-profile-startup-mutation-readonly-source-v1",
+        capability = "chrome-isolated-profile-clone-readonly-source-v1",
         observedAtUtc,
         state,
         lastUsedProfile,
@@ -207,8 +252,67 @@ internal static class ChromeMinimalProfileStartupMutationProbePublisher
         copiedBrowsingDatabases = 0,
         chatGptNavigationPerformed = false,
         repairAttempted = false,
+        realExternalValidatorReadableBefore = external.Readable,
+        realExternalValidatorKeyPresentBefore = external.KeyPresent,
+        realExternalValidatorValueCountBefore = external.ValueCount,
+        realExternalNotifierValuePresentBefore = external.NotifierValuePresent,
+        realExternalValidatorChangedByProbe = (bool?)null,
         temporaryCloneDeleted = (bool?)null
     };
+
+    private static ExternalValidatorSnapshot ReadExternalValidator(string? profileName)
+    {
+        if (string.IsNullOrWhiteSpace(profileName) || profileName.Length > 64 || profileName.IndexOfAny(new[] { '\\', '/' }) >= 0)
+            return ExternalValidatorSnapshot.Unavailable;
+
+        try
+        {
+            using var baseKey = RegistryKey.OpenBaseKey(RegistryHive.CurrentUser, RegistryView.Registry32);
+            var path = $@"{ChromeRegistryRoot}\PreferenceMACs\{profileName}\extensions.settings";
+            using var key = baseKey.OpenSubKey(path, writable: false);
+            if (key is null)
+                return new ExternalValidatorSnapshot(true, false, 0, false, EmptyDigest, EmptyDigest);
+
+            var names = key.GetValueNames().OrderBy(static name => name, StringComparer.Ordinal).ToArray();
+            var storeBuilder = new StringBuilder();
+            string? notifierMaterial = null;
+            foreach (var name in names)
+            {
+                var value = key.GetValue(name, null, RegistryValueOptions.DoNotExpandEnvironmentNames)?.ToString() ?? string.Empty;
+                storeBuilder.Append(name.Length).Append(':').Append(name).Append('|')
+                    .Append(value.Length).Append(':').Append(value).Append('\n');
+                if (string.Equals(name, NativeHostConstants.ExtensionId, StringComparison.Ordinal))
+                    notifierMaterial = value;
+            }
+
+            return new ExternalValidatorSnapshot(
+                true,
+                true,
+                names.Length,
+                notifierMaterial is not null,
+                Digest(storeBuilder.ToString()),
+                notifierMaterial is null ? EmptyDigest : Digest(notifierMaterial));
+        }
+        catch
+        {
+            return ExternalValidatorSnapshot.Unavailable;
+        }
+    }
+
+    private static bool? CompareExternalValidators(ExternalValidatorSnapshot before, ExternalValidatorSnapshot after)
+    {
+        if (!before.Readable || !after.Readable) return null;
+        return before.KeyPresent != after.KeyPresent
+            || before.ValueCount != after.ValueCount
+            || before.NotifierValuePresent != after.NotifierValuePresent
+            || !string.Equals(before.StoreDigest, after.StoreDigest, StringComparison.Ordinal)
+            || !string.Equals(before.NotifierDigest, after.NotifierDigest, StringComparison.Ordinal);
+    }
+
+    private static string EmptyDigest => Digest(string.Empty);
+
+    private static string Digest(string value) =>
+        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(value)));
 
     private static async Task<Uri?> WaitForDevToolsEndpointAsync(string cloneRoot, Process process, TimeSpan timeout)
     {
@@ -237,11 +341,9 @@ internal static class ChromeMinimalProfileStartupMutationProbePublisher
 
     private static async Task<JsonDocument> SendCommandAsync(ClientWebSocket socket, int id, string method, TimeSpan timeout)
     {
-        var request = new Dictionary<string, object?> { ["id"] = id, ["method"] = method };
-        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(request, JsonOptions.Default));
+        var bytes = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new Dictionary<string, object?> { ["id"] = id, ["method"] = method }, JsonOptions.Default));
         using var cts = new CancellationTokenSource(timeout);
         await socket.SendAsync(bytes, WebSocketMessageType.Text, true, cts.Token);
-
         while (true)
         {
             var text = await ReceiveTextAsync(socket, cts.Token);
@@ -287,7 +389,6 @@ internal static class ChromeMinimalProfileStartupMutationProbePublisher
         var keys = Array.Empty<string>();
         var registrationPresent = false;
         var rawUnpackedCount = 0;
-
         if (TryGetPath(root, new[] { "extensions", "settings" }, out var settings) && settings.ValueKind == JsonValueKind.Object)
         {
             foreach (var entry in settings.EnumerateObject().Take(4096))
@@ -433,6 +534,10 @@ internal static class ChromeMinimalProfileStartupMutationProbePublisher
 
     private sealed record ExtensionInfo(string Id, string? Version, bool? Enabled);
     private readonly record struct RegistrationSnapshot(bool RegistrationPresent, bool LegacyAuthenticatorPresent, bool EncryptedAuthenticatorPresent, int RawUnpackedRegistrationCount, string[] RecordKeys);
+    private readonly record struct ExternalValidatorSnapshot(bool Readable, bool KeyPresent, int? ValueCount, bool? NotifierValuePresent, string? StoreDigest, string? NotifierDigest)
+    {
+        public static ExternalValidatorSnapshot Unavailable => new(false, false, null, null, null, null);
+    }
 
     private sealed class ProbeException(string code) : Exception(code)
     {

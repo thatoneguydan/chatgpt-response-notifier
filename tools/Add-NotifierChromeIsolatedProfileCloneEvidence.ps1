@@ -17,7 +17,7 @@ function Get-PropertyValue {
 
 $result = [ordered]@{
     source = 'helper-snapshot'
-    capability = 'chrome-minimal-profile-startup-mutation-readonly-source-v1'
+    capability = 'chrome-isolated-profile-clone-readonly-source-v1'
     observedAtUtc = $null
     state = 'unavailable'
     lastUsedProfile = $null
@@ -27,6 +27,7 @@ $result = [ordered]@{
     copiedBrowsingDatabases = $null
     chatGptNavigationPerformed = $null
     repairAttempted = $null
+    isolatedProfileUsesScopedDirPrefix = $null
     cloneRegistrationPresentBefore = $null
     cloneLegacyAuthenticatorPresentBefore = $null
     cloneEncryptedAuthenticatorPresentBefore = $null
@@ -41,30 +42,45 @@ $result = [ordered]@{
     rawUnpackedRegistrationCountAfterStartup = $null
     recordKeysAddedByStartup = @()
     recordKeysRemovedByStartup = @()
+    realExternalValidatorReadableBefore = $null
+    realExternalValidatorKeyPresentBefore = $null
+    realExternalValidatorValueCountBefore = $null
+    realExternalNotifierValuePresentBefore = $null
+    realExternalValidatorReadableAfter = $null
+    realExternalValidatorKeyPresentAfter = $null
+    realExternalValidatorValueCountAfter = $null
+    realExternalNotifierValuePresentAfter = $null
+    realExternalValidatorChangedByProbe = $null
+    isolatedExternalValidatorReadableAfter = $null
+    isolatedExternalValidatorPresentAfter = $null
     errorCode = $null
     temporaryCloneDeleted = $null
 }
 
-$snapshotPath = Join-Path $ExpectedProfileRoot 'AppData\Local\ChatGPTResponseNotifier\Evidence\chrome-minimal-profile-startup-mutation-evidence.json'
+$snapshotPath = Join-Path $ExpectedProfileRoot 'AppData\Local\ChatGPTResponseNotifier\Evidence\chrome-isolated-profile-clone-evidence.json'
 try {
     $raw = Get-Content -LiteralPath $snapshotPath -Raw -Encoding UTF8 -ErrorAction Stop
     $snapshot = $raw | ConvertFrom-Json -ErrorAction Stop
-    if ([int](Get-PropertyValue -InputObject $snapshot -Name 'schemaVersion') -ne 1) { throw 'Unexpected startup mutation evidence schema.' }
-    if ([string](Get-PropertyValue -InputObject $snapshot -Name 'capability') -cne 'chrome-minimal-profile-startup-mutation-readonly-source-v1') { throw 'Unexpected startup mutation evidence capability.' }
+    if ([int](Get-PropertyValue -InputObject $snapshot -Name 'schemaVersion') -ne 1) { throw 'Unexpected isolated clone evidence schema.' }
+    if ([string](Get-PropertyValue -InputObject $snapshot -Name 'capability') -cne 'chrome-isolated-profile-clone-readonly-source-v1') { throw 'Unexpected isolated clone evidence capability.' }
 
     $observedText = [string](Get-PropertyValue -InputObject $snapshot -Name 'observedAtUtc')
     $observed = [DateTimeOffset]::Parse($observedText)
     $age = ([DateTimeOffset]::UtcNow - $observed).TotalSeconds
-    if ($age -lt -5 -or $age -gt 600) { throw 'Startup mutation helper snapshot is stale.' }
+    if ($age -lt -5 -or $age -gt 600) { throw 'Isolated clone helper snapshot is stale.' }
 
     $result.observedAtUtc = $observed.ToString('o')
     foreach ($name in @(
         'state','lastUsedProfile','chromeVersion','sourceProfileMutated','copiedFiles','copiedBrowsingDatabases',
-        'chatGptNavigationPerformed','repairAttempted','cloneRegistrationPresentBefore','cloneLegacyAuthenticatorPresentBefore',
-        'cloneEncryptedAuthenticatorPresentBefore','rawUnpackedRegistrationCountBefore','notifierListedByChrome',
-        'notifierEnabledByChrome','notifierVersionByChrome','loadedExtensionCount','cloneRegistrationPresentAfterStartup',
-        'cloneLegacyAuthenticatorPresentAfterStartup','cloneEncryptedAuthenticatorPresentAfterStartup',
-        'rawUnpackedRegistrationCountAfterStartup','errorCode','temporaryCloneDeleted'
+        'chatGptNavigationPerformed','repairAttempted','isolatedProfileUsesScopedDirPrefix',
+        'cloneRegistrationPresentBefore','cloneLegacyAuthenticatorPresentBefore','cloneEncryptedAuthenticatorPresentBefore',
+        'rawUnpackedRegistrationCountBefore','notifierListedByChrome','notifierEnabledByChrome','notifierVersionByChrome',
+        'loadedExtensionCount','cloneRegistrationPresentAfterStartup','cloneLegacyAuthenticatorPresentAfterStartup',
+        'cloneEncryptedAuthenticatorPresentAfterStartup','rawUnpackedRegistrationCountAfterStartup',
+        'realExternalValidatorReadableBefore','realExternalValidatorKeyPresentBefore','realExternalValidatorValueCountBefore',
+        'realExternalNotifierValuePresentBefore','realExternalValidatorReadableAfter','realExternalValidatorKeyPresentAfter',
+        'realExternalValidatorValueCountAfter','realExternalNotifierValuePresentAfter','realExternalValidatorChangedByProbe',
+        'isolatedExternalValidatorReadableAfter','isolatedExternalValidatorPresentAfter','errorCode','temporaryCloneDeleted'
     )) {
         $value = Get-PropertyValue -InputObject $snapshot -Name $name
         if ($null -ne $value) { $result[$name] = $value }
@@ -81,18 +97,16 @@ catch {
 }
 
 $evidence = Get-Content -LiteralPath $EvidencePath -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
-$evidence.chrome | Add-Member -NotePropertyName minimalProfileStartupMutation -NotePropertyValue ([pscustomobject]$result) -Force
+$evidence.chrome | Add-Member -NotePropertyName isolatedProfileClone -NotePropertyValue ([pscustomobject]$result) -Force
 $evidence | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $EvidencePath -Encoding UTF8
 
-Write-Host ('Chrome clone startup-only: state={0}; chrome={1}; registeredBefore={2}; listed={3}; registeredAfter={4}; legacyAfter={5}; encryptedAfter={6}; unpackedBefore={7}; unpackedAfter={8}; tempDeleted={9}; error={10}' -f `
+Write-Host ('Isolated Chrome clone: state={0}; chrome={1}; registeredBefore={2}; listed={3}; registeredAfter={4}; realExternalChanged={5}; isolatedExternalPresentAfter={6}; tempDeleted={7}; error={8}' -f `
     $result.state,
     $result.chromeVersion,
     $result.cloneRegistrationPresentBefore,
     $result.notifierListedByChrome,
     $result.cloneRegistrationPresentAfterStartup,
-    $result.cloneLegacyAuthenticatorPresentAfterStartup,
-    $result.cloneEncryptedAuthenticatorPresentAfterStartup,
-    $result.rawUnpackedRegistrationCountBefore,
-    $result.rawUnpackedRegistrationCountAfterStartup,
+    $result.realExternalValidatorChangedByProbe,
+    $result.isolatedExternalValidatorPresentAfter,
     $result.temporaryCloneDeleted,
     $result.errorCode)
