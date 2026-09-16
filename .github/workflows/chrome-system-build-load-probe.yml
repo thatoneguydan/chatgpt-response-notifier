@@ -1,0 +1,123 @@
+name: Probe installed Chrome fresh-load
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - '.github/workflows/chrome-system-build-load-probe.yml'
+      - 'tools/chrome-system-build-load-probe.mjs'
+      - 'extension/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.head.repo.owner.login == github.repository_owner) }}
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 10
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact source and system Chrome
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) {
+            throw "Exact-source checkout mismatch: expected $env:SOURCE_SHA, got $actual."
+          }
+          node --version
+          if ($LASTEXITCODE -ne 0) { throw 'Node.js is unavailable on the Glass builder.' }
+          npm --version
+          if ($LASTEXITCODE -ne 0) { throw 'npm is unavailable on the Glass builder.' }
+
+          $candidates = [System.Collections.Generic.List[string]]::new()
+          if ($env:ProgramFiles) {
+            $candidates.Add((Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'))
+          }
+          if (${env:ProgramFiles(x86)}) {
+            $candidates.Add((Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe'))
+          }
+
+          $chrome = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (-not $chrome) {
+            foreach ($registryPath in @(
+              'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe',
+              'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe'
+            )) {
+              try {
+                $key = Get-Item -LiteralPath $registryPath -ErrorAction Stop
+                $candidate = $key.GetValue('')
+                if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+                  $chrome = [string]$candidate
+                  break
+                }
+              }
+              catch { }
+            }
+          }
+          if (-not $chrome) { throw 'Installed system Chrome executable was not found.' }
+
+          $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($chrome).ProductVersion
+          if ([string]::IsNullOrWhiteSpace($version)) { throw 'Installed Chrome product version is unavailable.' }
+          $major = [int]($version.Split('.')[0])
+          if ($major -ne 153) { throw "Expected Chrome major 153 for this incident, observed $major." }
+          Write-Host "Installed Chrome product version: $version"
+          "SYSTEM_CHROME_EXE=$chrome" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+          "SYSTEM_CHROME_VERSION=$version" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install isolated Puppeteer package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $probeRoot = Join-Path $env:RUNNER_TEMP "notifier-system-chrome-probe-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          Remove-Item -LiteralPath $probeRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $probeRoot -Force | Out-Null
+          Copy-Item -LiteralPath '.\tools\chrome-system-build-load-probe.mjs' -Destination (Join-Path $probeRoot 'probe.mjs')
+
+          Push-Location $probeRoot
+          try {
+            npm init -y | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'npm init failed.' }
+            $env:PUPPETEER_SKIP_DOWNLOAD = 'true'
+            npm install puppeteer@25.11.0 --no-fund --no-audit
+            if ($LASTEXITCODE -ne 0) { throw 'Puppeteer install failed.' }
+          }
+          finally {
+            Pop-Location
+          }
+          "PROBE_ROOT=$probeRoot" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Fresh-load exact notifier with installed Chrome
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $extension = (Resolve-Path '.\extension').Path
+          $profile = Join-Path $env:PROBE_ROOT 'profile'
+          Push-Location $env:PROBE_ROOT
+          try {
+            node .\probe.mjs $extension $profile $env:SYSTEM_CHROME_EXE
+            if ($LASTEXITCODE -ne 0) { throw "Installed Chrome fresh-load probe failed with exit code $LASTEXITCODE." }
+          }
+          finally {
+            Pop-Location
+          }
+
+      - name: Cleanup isolated probe files
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:PROBE_ROOT) {
+            Remove-Item -LiteralPath $env:PROBE_ROOT -Recurse -Force -ErrorAction SilentlyContinue
+          }
