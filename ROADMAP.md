@@ -1,86 +1,90 @@
 # ChatGPT Response Notifier — Roadmap
 
-Program: **ChatGPT Response Notifier**. Source authority: this repository. Historical incident authority: DevelopmentInfrastructure #283. Current reboot-durable installation authority: DevelopmentInfrastructure #443. Cross-Windows-virtual-desktop toast-click acceptance authority: #442.
+Program: **ChatGPT Response Notifier**. Runtime owners: [DevelopmentInfrastructure #443](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/443) for installation and [#442](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/442) for click acceptance. Independent review: [#453](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/453), [implementation handoff](docs/INDEPENDENT-FAILURE-REVIEW-2026-09-16.md).
 
-## Current checkpoint — 2026-09-16, v0.9.28 source; browser registration durability is the blocker
+## Immediate priority — 2026-09-16
 
-The hidden/unfocused completion problem is no longer the active blocker. v0.9.27 produced a real notifier-eligible native notification while Chrome remained hidden/unfocused. v0.9.28 then merged a browser-only cross-desktop toast-click fallback that activates the existing conversation first and, only after a physical toast click, opens the same conversation URL in a new focused Chrome window when the original remains invisible on another Windows virtual desktop.
+**Restore a durably loaded runtime, then complete recovery and click reliability before additional features.** Source-only recovery work can proceed in a separately claimed scope while #443 continues. Do not interrupt its helper/deployment lane. Physical acceptance requires a loaded extension.
 
-After a normal Windows Update reboot, the v0.9.28 extension files and helper installation remained intact but Chrome exposed no live notifier extension runtime. Full Chrome exit/reopen did not restore it. Bounded evidence ruled out ordinary source/path/manifest/identity/policy/disable/blocklist incompatibility causes. PR #66 also fixed a diagnostic-control flaw where a disposable clone using the basename `Default` could share Chromium's external `PreferenceMACs\Default` validator; the remaining isolated clone probe now uses a collision-free `scoped_dir` basename and fails closed.
+The original unpacked notifier survives reboot on Glass. Chrome Web Store migration is **paused**; [Store preparation](docs/CHROME-WEB-STORE-DURABLE-DISTRIBUTION.md) is contingency. Earlier instructions making Store registration/payment the immediate step are superseded.
 
-The active repair is DevelopmentInfrastructure **#443**: replace the production dependency on one-time manual **Load unpacked** registration with a reboot-durable, supported Chrome distribution mechanism. For an unmanaged Glass Windows PC, the production target is an **Unlisted Chrome Web Store item**. The localhost helper, notification ownership, bounded recovery, updater/release automation, rollback, protected deployment, and no-focus-stealing boundaries remain unchanged.
+Current source is v0.9.29. PR #70 [run 35135642109](https://github.com/thatoneguydan/chatgpt-response-notifier/actions/runs/35135642109) verified helper restart and a three-record registration comparison, not extension restoration/reboot durability. Distinguish original, intended fork and legacy fork before interpreting the comparison.
 
-Active source work: notifier **PR #67**, branch `repair/cws-durable-distribution`, based on main `d47b4a205370fe588f09cf9bc4840366e1bc0184`.
+Roadmap change: retain **5 workstreams**. Workstream 3 retains **1 stage / 4 steps**, replacing the Store-first sequence with comparison, evidenced repair, restart proof and behavior-acceptance readiness. The existing other workstreams now have explicit reliability gates. No runtime repair is claimed by this documentation update.
 
-## #443 durable distribution sequence
-
-Parent: **ChatGPT Response Notifier → Workstream 3/5 — Installation, Release, and Acceptance → Stage 1/1 — Reboot-durable Chrome distribution**.
-
-| Step | Gate | Tasks |
+| Priority | Workstream | Immediate outcome |
 | --- | --- | --- |
-| Step 1/4 — Prepare deterministic Store packaging | Gate 1/1 — exact-head Seed package is reproducible, reviewable, contains required Store icon assets, preserves runtime files byte-for-byte, strips only the development identity key, and contains no private key material | Restore/audit package builder; generate Store-only PNG icons; validate Seed/Bound identity modes; publish exact-head Seed ZIP artifact; document Store policy/human boundary. |
-| Step 2/4 — Bind the Store-assigned identity | Gate 1/1 — Store Item ID/public key are proven to match, all source/helper identity surfaces move together, and Bound packaging fails closed on drift | Obtain public Store Item ID/public key through Developer Dashboard; derive ID; update manifest/helper/test metadata atomically; validate exact head. |
-| Step 3/4 — Publish and cut over Glass | Gate 1/1 — matching helper identity is released/deployed and the Unlisted Store extension is the live runtime | Build/release matching helper; protected Glass deployment; upload reviewed Bound package; complete accurate Store listing/privacy fields; publish Unlisted; install Store item; remove reliance on manual Load unpacked. |
-| Step 4/4 — Prove restart durability and unblock #442 | Gate 1/1 — normal reboot/login leaves Store extension installed/live and helper connected without manual recovery | Collect pre/post reboot evidence; verify notification path; then rerun #442 cross-desktop physical-toast-click acceptance. |
+| 1 | Workstream 3/5 — Installation, Release, and Acceptance | Explain original/fork divergence; restore persistence; complete test discovery before the next behavior release. |
+| 2 | Workstream 5/5 — Status Contract and Bounded Recovery | One request-owned error classifier with complete phrase/location coverage and safety vetoes. |
+| 3 | Workstream 4/5 — Reliable Background Automation | Recovery survives progress text, hidden-page delays and actual reload without losing incident identity. |
+| 4 | Workstream 1/5 — Foundation and Conversation Identity | Separately prove observation, notification and recovery across hidden-page states. |
+| 4 | Workstream 2/5 — Native Toast UX | Bound click verification and pass physical cross-desktop acceptance. |
 
-**Current:** Step 1/4 → Gate 1/1. Complete all safe source/package work before requesting the authenticated Developer Dashboard action needed to create the Store item.
+## Workstream 3/5 — Installation, Release, and Acceptance
 
-## #443 hardening contract
+Stage 1/1 — Restore and prove installation persistence. Owner: #443. Each step has Gate 1/1 as specified below.
 
-- Chrome profile protected preferences are evidence, never an installation API. Do not write `Preferences` / `Secure Preferences` to repair registration.
-- CDP `loadUnpacked` remains disposable-test tooling only. Do not turn it into production restart persistence.
-- Normal Chrome Web Store publishing uses Store-managed signing. Do not add private signing material to GitHub, workflow artifacts, installed bundles, or evidence.
-- Do not opt into Verified CRX Uploads during this migration unless a separate reviewed key-management design is approved.
-- Seed Store packages omit the current development `manifest.key`; source remains unchanged until Chrome Web Store assigns the item public key/ID.
-- Bound Store packages require committed Store identity metadata and must fail closed unless manifest key, derived extension ID, helper origin/ID, and Store Item ID agree.
-- No temporary broad helper origin wildcard is allowed. If Store identity differs from the current unpacked ID, cut over the exact new origin coherently.
-- Preserve loopback-only helper transport. No ChatGPT API/session polling, duplicate ChatGPT request, or background page scraping outside the existing extension behavior.
-- Preserve the retired native foreground boundary. Cross-desktop click handling remains browser-only and user-initiated.
-- Promotion requires exact-head normal validation plus exact-head Store-package validation before any user-facing Store upload.
-
-## Program structure
-
-| Workstream | Scope | Current state |
+| Step | Gate 1/1 | Tasks |
 | --- | --- | --- |
-| Workstream 1/5 — Foundation and Conversation Identity | Completion sensor, stable chat routing, request/document identity, loopback protocol. | Hidden/unfocused completion accepted on v0.9.27. Diagnostic evidence retained; no new behavior guess is active. |
-| Workstream 2/5 — Native Toast UX | Persistent notifications, timestamps, history, quick prompts, click/dismiss routing. | v0.9.28 cross-desktop click fallback merged. Live physical-click acceptance is blocked by #443 because the extension runtime is not durably loaded. |
-| Workstream 3/5 — Installation, Release, and Acceptance | Installer/helper startup, stable root, updater, rollback, release publication, Chrome distribution, live acceptance. | **ACTIVE:** #443 replaces manual unpacked registration with Unlisted Chrome Web Store distribution and reboot proof. |
-| Workstream 4/5 — Reliable Background Automation | Durable ownership, guarded continuation, timeout/silent-stop recovery, outbox/delivery. | Existing bounded automation retained. Store migration must not weaken request identity, safety vetoes, or continuation caps. |
-| Workstream 5/5 — Status Contract and Bounded Recovery | Work-status contract recognition, coded notification eligibility, bounded recovery and proof. | Existing status-contract v2 and DOM/stream identity semantics remain authoritative. Distribution work must not change them. |
+| Step 1/4 — Compare original, intended and legacy fork | Same-profile comparison explains the first effective-loading divergence or precisely identifies the missing observation | Task 1/3: consume PR #70 evidence already available. Task 2/3: compare bounded effective loading/provenance and exact disable reasons for the three identities. Task 3/3: checkpoint the evidence-selected repair or one discriminating experiment. |
+| Step 2/4 — Repair the evidenced boundary | Exact candidate preserves identity/root/rollback and complete regression coverage | Task 1/3: make validate/release run the same complete intended test discovery; 11 of 19 files were omitted at review. Task 2/3: implement only the proven repair through the owning lane. Task 3/3: validate and attach same-source installation/loading receipts. |
+| Step 3/4 — Prove normal restart durability | Clean Chrome exit/reopen and Windows reboot/login retain the intended loaded extension and helper connection | Prepare pre/post identity, file and effective-runtime evidence; keep the original control intact. No re-registration may manufacture the pass. |
+| Step 4/4 — Release the acceptance dependency | Installed version/source, extension runtime, helper bridge and test readiness agree | Route #442 and the background/recovery matrix to that exact candidate. Helper version alone is insufficient. |
 
-## Accepted behavior retained
+Next implementation position: **ChatGPT Response Notifier → Workstream 3/5 → Stage 1/1 → Step 1/4 → Gate 1/1 → Task 2/3**, subject to current #443/#70 state. Existing Task 1 evidence should be reused. Do not speculatively remove the manifest key or delete a legacy registration. Store tooling from PR #67 remains contingency, not permission to migrate identity or publish now.
 
-- Coded completion notification no longer requires waiting for the final assistant DOM to paint while Chrome is hidden; the v0.9.27 stream/DOM evidence path delivered a real hidden-window notification.
-- Stream-derived evidence is notification-only. Automatic Continue still requires the existing DOM terminal identity checks and user/safety vetoes.
-- Existing open ChatGPT tabs receive notifier startup/update attachment without requiring a manual page refresh when a live extension runtime exists.
-- Verified timeout/system recovery and silent-stop recovery remain separate bounded paths.
-- Automatic recovery Continue and coded-status Continue remain timestamped at send time using the local quick-prompt format.
-- Automatic continuation remains bounded by exact request identity, user/safety vetoes, per-incident caps, and profile-wide spacing.
-- Persistent notification history, durable helper acknowledgment, duplicate suppression, manual-stop behavior, rollback, stable install root, and helper-owned native presentation remain retained.
-- Cross-desktop toast clicks remain user-initiated and browser-only; no native foreground/window enumeration route is permitted.
+## Workstream 5/5 — Status Contract and Bounded Recovery
 
-## Retained recovery defaults
+Stage 1/1 — Consistent request-owned error classification. Each step has Gate 1/1.
 
-- missing-footer grace: 30 seconds;
-- silent-stop evidence: at least 90 seconds idle plus two consistent inspections at least 30 seconds apart;
-- ambiguous-thinking diagnostic: 15 minutes without forced retry;
-- silent-stop reload cap: 3;
-- explicit-interruption reload cap: 5;
-- explicit-interruption retry spacing after a surviving reload: 5 minutes;
-- recovery continuation cap: 1 per incident;
-- format-repair prompts: 0;
-- profile-wide action spacing: at least 30 seconds;
-- generation-producing action ceiling: 12 per trusted human-started run;
-- reset only by a genuinely new trusted human request or explicit Resume.
+| Step | Gate 1/1 | Tasks |
+| --- | --- | --- |
+| Step 1/2 — Unify classifier and attribution | Same application error has equivalent meaning in current-turn UI and a request-owned global banner | Task 1/3: centralize phrase matching; cover Disconnected, Response interrupted and Response failed. Task 2/3: bind global UI to current request/incident freshness and preserve safety fields through projections. Task 3/3: verify current/historical/quoted/global fixtures and mixed safety/error-node permutations. |
+| Step 2/2 — Verify decision boundaries | Only proven current-request failures become recovery candidates | Keep healthy reasoning indicators, old banners, quoted/tool/assistant prose, uncoded final answers, Stop, auth, approval, rate limits and drafts out of recovery. Test classification after serialization, compatibility augmentation and reload. |
 
-## Recent accepted proof
+Plain “Thinking longer” is insufficient failure evidence. A current request's systems/interruption message differs from healthy reasoning. Do not match every occurrence of thinking/error in transcript text.
 
-- **v0.9.27 hidden-window acceptance:** a real notifier-eligible coded response produced its native notification while Chrome stayed hidden/unfocused. This closed the live completion-timing blocker that had driven #439.
-- **v0.9.28 click repair:** notifier PR #58 merged the browser-only cross-desktop click fallback. Its live physical-click acceptance remains blocked behind #443.
-- **Reboot registration incident:** after a normal Windows Update reboot, installed v0.9.28 files/helper state remained while Chrome omitted the live notifier runtime. Full Chrome exit/reopen did not restore it.
-- **Bounded registration diagnostics:** PRs #59–#65 ruled out ordinary source/path/manifest/ID/policy/disable/blocklist/suppressing-flag/source-compatibility explanations and showed fresh Chrome 153 could load the exact source in an isolated test profile.
-- **Clone-control hardening:** notifier PR #66 merged as `d47b4a205370fe588f09cf9bc4840366e1bc0184`, replacing the collision-prone `Default` clone control with an isolated `scoped_dir` probe and external PreferenceMAC validator checks.
+## Workstream 4/5 — Reliable Background Automation
 
-## Continuing work
+Stage 1/1 — Durable recovery from an interrupted run. Each step has Gate 1/1.
 
-Adopt DevelopmentInfrastructure #443 and notifier PR #67. Finish deterministic Store package/identity preparation and exact-head validation first. Only then cross the authenticated Developer Dashboard boundary to create the initial Store item and obtain its public Item ID/public key. Resume automation immediately after identity is supplied. Keep #443 open through Unlisted Store publication, Glass install, and a normal reboot/login durability proof. Rerun and close #442 only after that durable runtime gate passes.
+| Step | Gate 1/1 | Tasks |
+| --- | --- | --- |
+| Step 1/3 — Preserve interrupted-run evidence | Progress/START text or reload cannot erase a positively identified failed run | Task 1/3: separate last progress from proven final answer. Task 2/3: retain request failure/settlement, prompt revision, incident class and budget across document replacement; collect fresh safety checks. Task 3/3: drive an actual page-runtime reload fixture through attempts and one confirmed Continue. |
+| Step 2/3 — Bound observation and scheduling | Page-timer delays and unavailable replies produce durable explainable states | Use worker-owned persisted deadlines/alarms for initial observations and admitted incidents; deadline-wrap inspection/injection; ignore late identity-mismatched replies. Distinguish unobservable from generation failure and reinspect safely on resume. |
+| Step 3/3 — Prove finite recovery | Each required scenario ends in recovery, resumed work or a named stop reason | Use virtual-time/composed-module restart/reload tests. Preserve one Continue per incident and page-turn plus matching-request acceptance. Expose attempt count, next due time and veto/uncertainty reason through existing status/history surfaces. |
+
+Preserve **3 silent-stop reloads**, **5 explicit-interruption reloads**, **5-minute surviving explicit retry spacing**, **1 recovery Continue per incident**, **at least 30-second profile spacing**, and **12 generation-producing actions per trusted human-started run**. New states do not reset budgets. Completion/resumed work cancels attempts. Ambiguous long-running requests never trigger forced retry.
+
+## Workstream 1/5 — Foundation and Conversation Identity
+
+Stage 1/1 — Trustworthy observation across page states. Each step has Gate 1/1.
+
+| Step | Gate 1/1 | Tasks |
+| --- | --- | --- |
+| Step 1/2 — Complete the existing correlated trace | Each incident identifies its first missing boundary and action reason | Task 1/2: reuse v0.9.27 request/document/stream/page-query/lifecycle/helper evidence; add only missing recovery decisions. Task 2/2: distinguish absent runtime, absent attachment, stale/throttled page, frozen/discarded page, veto and delivery failure. |
+| Step 2/2 — Accept hidden/background behavior | Each scenario independently proves observation, notification and recovery | Test foreground, inactive tab, unfocused/occluded, minimized and other Windows desktop; use disposable lifecycle controls for frozen/discarded cases. Retain the one v0.9.27 hidden notification as proof for that event only. |
+
+Memory Saver exclusions prevent deactivation, not all hidden rendering/timer effects. Do not add dummy audio, focus tricks, launch flags or faster polling. Stream completion remains notification-only; the main-world stream observer is page-side and cannot guarantee execution in a frozen renderer.
+
+## Workstream 2/5 — Native Toast UX
+
+Stage 1/1 — Verified user-initiated click presentation. Owner: #442. Each step has Gate 1/1.
+
+| Step | Gate 1/1 | Tasks |
+| --- | --- | --- |
+| Step 1/2 — Bound and verify the browser route | Click handling has an end-to-end deadline and truthful outcome | Task 1/3: deadline-wrap page probes/whole click and preserve target identity. Task 2/3: distinguish requested, visible, focused and unverified; hung/unavailable is not success. Task 3/3: deduplicate fallback per physical click, recheck user intent and retain failure/retry affordance until presentation is established. |
+| Step 2/2 — Accept cross-desktop click on Glass | Correct conversation becomes visible/focused without hang, crash or registration loss | Use the exact loaded runtime; cover same desktop, minimized Chrome, duplicate conversation tabs, double-click, missing/unresponsive script and user focus change. Preserve original tab/window and no unsolicited focus. |
+
+v0.9.28's fallback already tries the existing tab then opens the same URL in a new focused window if the original stays hidden. Successful `windows.create` does not prove its physical desktop. Keep native Win32 foreground/window enumeration retired.
+
+## Retained defaults, behavior and evidence
+
+- Status contract v2, passive missing footers, human-run recognition, guarded continuation, helper acknowledgement, deduplication and rollback remain authoritative.
+- Rolling history of 20 notifications, timestamps and loopback transport remain preserved; an existing live runtime can attach tabs without manual F5.
+- Initial silent-stop baseline: at least 90 seconds plus two observations 30 seconds apart. Long-thinking diagnostic: 15 minutes without forced retry. Missing-footer grace: 30 seconds; format-repair prompts: 0.
+- Reset budgets only for a genuinely new trusted human request or explicit Resume.
+- `docs/HIDDEN-WINDOW-*` retains historical evidence. #443 and PR #66 document the clone-control flaw; never reuse the real profile's external integrity-store basename for a clone.
+- Review verification: all 19 existing extension test files passed locally, **256/256**. This does not replace Windows installation/physical acceptance; normal CI omitted 11 files.
+
+Implementation proceeds from the [handoff](docs/INDEPENDENT-FAILURE-REVIEW-2026-09-16.md) after reconciling owners/heads. This review's documentation publication does not claim that runtime repair is complete.
