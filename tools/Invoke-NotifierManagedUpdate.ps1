@@ -38,21 +38,21 @@ function Connect-Bridge {
     param([object]$Constants, [int]$TimeoutSeconds = 15)
 
     $socket = [System.Net.WebSockets.ClientWebSocket]::new()
-    $socket.Options.SetRequestHeader('Origin', [string]$Constants.Origin)
+    [void]$socket.Options.SetRequestHeader('Origin', [string]$Constants.Origin)
     $cts = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds($TimeoutSeconds))
     try {
-        $socket.ConnectAsync($Constants.Uri, $cts.Token).GetAwaiter().GetResult()
+        [void]$socket.ConnectAsync($Constants.Uri, $cts.Token).GetAwaiter().GetResult()
         if ($socket.State -ne [System.Net.WebSockets.WebSocketState]::Open) {
             throw "Bridge socket did not open: $($socket.State)."
         }
-        return $socket
+        return [pscustomobject]@{ Client = $socket }
     }
     catch {
-        $socket.Dispose()
+        [void]$socket.Dispose()
         throw
     }
     finally {
-        $cts.Dispose()
+        [void]$cts.Dispose()
     }
 }
 
@@ -73,7 +73,7 @@ function Receive-BridgeMessage {
             if ($result.MessageType -ne [System.Net.WebSockets.WebSocketMessageType]::Text) {
                 throw 'Notifier bridge returned a non-text WebSocket message.'
             }
-            $stream.Write($buffer, 0, $result.Count)
+            [void]$stream.Write($buffer, 0, $result.Count)
             if ($stream.Length -gt 65536) { throw 'Notifier bridge response exceeded the diagnostic size bound.' }
         }
         while (-not $result.EndOfMessage)
@@ -82,8 +82,8 @@ function Receive-BridgeMessage {
         return $json | ConvertFrom-Json -ErrorAction Stop
     }
     finally {
-        $cts.Dispose()
-        $stream.Dispose()
+        [void]$cts.Dispose()
+        [void]$stream.Dispose()
     }
 }
 
@@ -100,10 +100,10 @@ function Send-BridgeMessage {
     $segment = [ArraySegment[byte]]::new($bytes)
     $cts = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds($TimeoutSeconds))
     try {
-        $Socket.SendAsync($segment, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $cts.Token).GetAwaiter().GetResult()
+        [void]$Socket.SendAsync($segment, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $cts.Token).GetAwaiter().GetResult()
     }
     finally {
-        $cts.Dispose()
+        [void]$cts.Dispose()
     }
 }
 
@@ -114,13 +114,13 @@ function Close-Bridge {
         if ($Socket.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
             $cts = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(2))
             try {
-                $Socket.CloseAsync([System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure, 'diagnostic-complete', $cts.Token).GetAwaiter().GetResult()
+                [void]$Socket.CloseAsync([System.Net.WebSockets.WebSocketCloseStatus]::NormalClosure, 'diagnostic-complete', $cts.Token).GetAwaiter().GetResult()
             }
-            finally { $cts.Dispose() }
+            finally { [void]$cts.Dispose() }
         }
     }
     catch { }
-    finally { $Socket.Dispose() }
+    finally { [void]$Socket.Dispose() }
 }
 
 function Get-InstalledVersionFromReady {
@@ -140,7 +140,8 @@ $resultVersion = $null
 $socket = $null
 
 try {
-    $socket = Connect-Bridge -Constants $constants
+    $connection = Connect-Bridge -Constants $constants
+    $socket = [System.Net.WebSockets.ClientWebSocket]$connection.Client
     $ready = Receive-BridgeMessage -Socket $socket
     $initialVersion = Get-InstalledVersionFromReady -Message $ready
     if ([string]::IsNullOrWhiteSpace($initialVersion)) { throw 'Notifier helper did not provide a valid host.ready message.' }
@@ -179,7 +180,8 @@ $restartDeadline = [DateTimeOffset]::UtcNow.AddSeconds($RestartTimeoutSeconds)
 while ([DateTimeOffset]::UtcNow -lt $restartDeadline) {
     $probe = $null
     try {
-        $probe = Connect-Bridge -Constants $constants -TimeoutSeconds 5
+        $probeConnection = Connect-Bridge -Constants $constants -TimeoutSeconds 5
+        $probe = [System.Net.WebSockets.ClientWebSocket]$probeConnection.Client
         $ready = Receive-BridgeMessage -Socket $probe -TimeoutSeconds 5
         $candidate = Get-InstalledVersionFromReady -Message $ready
         if (-not [string]::IsNullOrWhiteSpace($candidate)) {
