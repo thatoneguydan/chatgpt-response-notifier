@@ -122,10 +122,22 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $zipPath = Join-Path $env:RUNNER_TEMP 'chatgpt-response-notifier-cws-bound.zip'
+          $failureLog = Join-Path $env:RUNNER_TEMP 'cws-bound-expected-failure.txt'
           Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
-          & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-ChromeWebStorePackage.ps1 -IdentityMode Bound -OutputPath $zipPath *> (Join-Path $env:RUNNER_TEMP 'cws-bound-expected-failure.txt')
-          if ($LASTEXITCODE -eq 0) { throw 'Bound Store packaging unexpectedly succeeded without Store identity metadata.' }
+          Remove-Item -LiteralPath $failureLog -Force -ErrorAction SilentlyContinue
+
+          $savedErrorActionPreference = $ErrorActionPreference
+          $ErrorActionPreference = 'SilentlyContinue'
+          & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-ChromeWebStorePackage.ps1 -IdentityMode Bound -OutputPath $zipPath *> $failureLog
+          $boundExitCode = $LASTEXITCODE
+          $ErrorActionPreference = $savedErrorActionPreference
+
+          if ($boundExitCode -eq 0) { throw 'Bound Store packaging unexpectedly succeeded without Store identity metadata.' }
           if (Test-Path -LiteralPath $zipPath -PathType Leaf) { throw 'Failed bound Store packaging left a package artifact behind.' }
+          $failureText = Get-Content -LiteralPath $failureLog -Raw -ErrorAction Stop
+          if ($failureText -notmatch 'Bound Store packaging requires store/chrome-web-store\.identity\.json') {
+            throw 'Bound Store packaging failed, but not for the expected missing-identity reason.'
+          }
           Write-Host 'Bound Store package correctly failed closed because Store identity is not yet bound.'
 
       - name: Prove identity binder and bound package in disposable source copy
