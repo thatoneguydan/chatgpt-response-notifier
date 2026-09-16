@@ -5,12 +5,16 @@ param(
     [string]$ItemId,
     [Parameter(Mandatory = $true)]
     [string]$PublicKey,
-    [string]$RepositoryRoot = (Join-Path $PSScriptRoot '..'),
+    [string]$RepositoryRoot = '',
     [switch]$ReplaceExistingBinding
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
+
+if ([string]::IsNullOrWhiteSpace($RepositoryRoot)) {
+    $RepositoryRoot = Join-Path $PSScriptRoot '..'
+}
 
 function Normalize-PublicKey([string]$Value) {
     if ($null -eq $Value) { return '' }
