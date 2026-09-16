@@ -1,16 +1,23 @@
 [CmdletBinding()]
 param(
-    [string]$ExtensionRoot = (Join-Path $PSScriptRoot '..\extension'),
+    [string]$ExtensionRoot = '',
     [Parameter(Mandatory = $true)]
     [string]$OutputPath,
     [ValidateSet('Seed', 'Bound')]
     [string]$IdentityMode = 'Seed',
-    [string]$IdentityMetadataPath = (Join-Path $PSScriptRoot '..\store\chrome-web-store.identity.json')
+    [string]$IdentityMetadataPath = ''
 )
 
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 Add-Type -AssemblyName System.Drawing
+
+if ([string]::IsNullOrWhiteSpace($ExtensionRoot)) {
+    $ExtensionRoot = Join-Path $PSScriptRoot '..\extension'
+}
+if ([string]::IsNullOrWhiteSpace($IdentityMetadataPath)) {
+    $IdentityMetadataPath = Join-Path $PSScriptRoot '..\store\chrome-web-store.identity.json'
+}
 
 function Normalize-PublicKey([string]$Value) {
     if ($null -eq $Value) { return '' }
