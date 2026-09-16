@@ -29,6 +29,7 @@ jobs:
           foreach ($script in @(
             '.\extension\background.js',
             '.\extension\diagnostics-bootstrap.js',
+            '.\extension\cross-desktop-click-fallback-background.js',
             '.\extension\attachment-script.js',
             '.\extension\coordinator-background.js',
             '.\extension\service-worker.js',
@@ -99,15 +100,14 @@ jobs:
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'VERSION.txt is empty.' }
           $tag = "v$version"
           $releaseNotes = @(
-            'Adds bounded diagnostics for notifier completions that stall while Chrome is unfocused. This release does not claim the hidden-window stall is fixed.',
+            'Fixes notification click-through when the target ChatGPT window is stranded on another Windows virtual desktop.',
             '',
-            '- A passive MAIN-world observer clones only the existing ChatGPT conversation response and records bounded transport/protocol timing and counters; it does not issue another ChatGPT request.',
-            '- Raw-token and decoded-string candidate evidence is separated, and diagnostics are permanently non-authorizing: they cannot trigger a notification or automatic Continue.',
-            '- Chrome request/document identity is correlated with stream nonces. Overlapping candidates fail closed as explicit ambiguous incidents instead of silently choosing the newest request.',
-            '- Page visibility/focus/freeze, tab frozen/discarded state, Chrome window focus/state, page-query deadlines, and post-settlement stream-final deadlines are retained as timestamped transitions.',
-            '- Hidden-window incident evidence is retained separately from the noisy flat event ring with bounds of 20 incidents, 48 transitions per incident, and 128 KiB of projected metadata.',
-            '- Helper and exported evidence contain only sanitized metadata and identifier suffixes; response bodies, prompts, titles, authentication data, and full URLs are not exported.',
-            '- Existing notification and automatic-Continue behavior remains on the previously reviewed production paths. No debugger attachment, foregrounding, refresh loop, request replay, session polling, or new ChatGPT traffic is added.'
+            '- The existing Chrome-only click route still activates the exact conversation tab first; the original tab and window are never moved or closed.',
+            '- After a physical toast click, the extension verifies whether the target page actually became visible instead of trusting Chrome window-focus API success by itself.',
+            '- If the verified target remains hidden, the same ChatGPT conversation URL opens in a new focused Chrome window on the current desktop as a bounded fallback.',
+            '- If page visibility cannot be verified, the fallback fails closed and does not create a duplicate window.',
+            '- The retired native Win32 foreground/HWND path remains retired. No process/window enumeration or undocumented virtual-desktop switching API is reintroduced.',
+            '- v0.9.27 hidden-window completion diagnostics and background notification behavior are retained unchanged.'
           ) -join [Environment]::NewLine
           $artifactRoot = Join-Path $env:RUNNER_TEMP "chatgpt-response-notifier-release-$version"
           Remove-Item -LiteralPath $artifactRoot -Recurse -Force -ErrorAction SilentlyContinue
