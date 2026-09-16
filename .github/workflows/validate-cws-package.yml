@@ -1,0 +1,127 @@
+name: Validate Chrome Web Store package
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-cws-package:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.head.repo.owner.login == github.repository_owner) }}
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 10
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact source identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) { throw "Exact-source checkout mismatch: expected $env:SOURCE_SHA, got $actual." }
+
+      - name: Build and inspect seed package
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-StrictMode -Version Latest
+
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path '.\tools\Build-ChromeWebStorePackage.ps1'),
+            [ref]$tokens,
+            [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'Chrome Web Store package builder has PowerShell parse errors.'
+          }
+
+          $zipPath = Join-Path $env:RUNNER_TEMP 'chatgpt-response-notifier-cws-seed.zip'
+          $expanded = Join-Path $env:RUNNER_TEMP 'chatgpt-response-notifier-cws-seed-expanded'
+          Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $expanded -Recurse -Force -ErrorAction SilentlyContinue
+
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-ChromeWebStorePackage.ps1 -IdentityMode Seed -OutputPath $zipPath
+          if ($LASTEXITCODE -ne 0) { throw "Seed package builder failed with exit code $LASTEXITCODE." }
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $expanded -Force
+
+          $sourceManifest = Get-Content -LiteralPath .\extension\manifest.json -Raw -Encoding UTF8 | ConvertFrom-Json
+          $storeManifest = Get-Content -LiteralPath (Join-Path $expanded 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ($null -eq $sourceManifest.PSObject.Properties['key']) { throw 'Development manifest unexpectedly lacks its stable identity key.' }
+          if ($null -ne $storeManifest.PSObject.Properties['key']) { throw 'Seed Store manifest still contains the development-only identity key.' }
+          if ([string]$storeManifest.version -cne [string]$sourceManifest.version) { throw 'Store package changed the extension version.' }
+          if (@(Get-ChildItem -LiteralPath $expanded -File -Recurse -Filter '*.pem').Count -gt 0) { throw 'Store package contains a PEM file.' }
+
+          Add-Type -AssemblyName System.Drawing
+          $requiredIcons = [ordered]@{
+            '16' = 'images/store-icon-16.png'
+            '32' = 'images/store-icon-32.png'
+            '48' = 'images/store-icon-48.png'
+            '128' = 'images/store-icon-128.png'
+          }
+          foreach ($entry in $requiredIcons.GetEnumerator()) {
+            if ([string]$storeManifest.icons.($entry.Key) -cne $entry.Value) { throw "Store manifest icon mapping is wrong for $($entry.Key)." }
+            if ([string]$storeManifest.action.default_icon.($entry.Key) -cne $entry.Value) { throw "Action icon mapping is wrong for $($entry.Key)." }
+            $iconPath = Join-Path $expanded $entry.Value
+            if (-not (Test-Path -LiteralPath $iconPath -PathType Leaf)) { throw "Generated Store icon is missing: $($entry.Value)." }
+            $image = [System.Drawing.Image]::FromFile($iconPath)
+            try {
+              if ($image.Width -ne [int]$entry.Key -or $image.Height -ne [int]$entry.Key) {
+                throw "Generated Store icon has wrong dimensions: $($entry.Value)=$($image.Width)x$($image.Height)."
+              }
+            }
+            finally { $image.Dispose() }
+          }
+
+          $sourceFiles = @(Get-ChildItem -LiteralPath .\extension -File -Recurse | Where-Object { $_.Name -cne 'manifest.json' })
+          foreach ($sourceFile in $sourceFiles) {
+            $relative = [IO.Path]::GetRelativePath((Resolve-Path '.\extension').Path, $sourceFile.FullName)
+            $storeFile = Join-Path $expanded $relative
+            if (-not (Test-Path -LiteralPath $storeFile -PathType Leaf)) { throw "Store package is missing source file $relative." }
+            $sourceHash = (Get-FileHash -LiteralPath $sourceFile.FullName -Algorithm SHA256).Hash
+            $storeHash = (Get-FileHash -LiteralPath $storeFile -Algorithm SHA256).Hash
+            if ($sourceHash -cne $storeHash) { throw "Store package changed source file $relative." }
+          }
+
+          Write-Host "Validated seed Store package: version=$($storeManifest.version); sourceFiles=$($sourceFiles.Count); generatedIcons=$($requiredIcons.Count)"
+
+      - name: Prove bound mode fails closed before Store identity exists
+        if: ${{ hashFiles('store/chrome-web-store.identity.json') == '' }}
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zipPath = Join-Path $env:RUNNER_TEMP 'chatgpt-response-notifier-cws-bound.zip'
+          & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-ChromeWebStorePackage.ps1 -IdentityMode Bound -OutputPath $zipPath *> (Join-Path $env:RUNNER_TEMP 'cws-bound-expected-failure.txt')
+          if ($LASTEXITCODE -eq 0) { throw 'Bound Store packaging unexpectedly succeeded without Store identity metadata.' }
+          if (Test-Path -LiteralPath $zipPath -PathType Leaf) { throw 'Failed bound Store packaging left a package artifact behind.' }
+          Write-Host 'Bound Store package correctly failed closed because Store identity is not yet bound.'
+
+      - name: Validate bound package when Store identity exists
+        if: ${{ hashFiles('store/chrome-web-store.identity.json') != '' }}
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zipPath = Join-Path $env:RUNNER_TEMP 'chatgpt-response-notifier-cws-bound.zip'
+          $expanded = Join-Path $env:RUNNER_TEMP 'chatgpt-response-notifier-cws-bound-expanded'
+          Remove-Item -LiteralPath $zipPath -Force -ErrorAction SilentlyContinue
+          Remove-Item -LiteralPath $expanded -Recurse -Force -ErrorAction SilentlyContinue
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Build-ChromeWebStorePackage.ps1 -IdentityMode Bound -OutputPath $zipPath
+          if ($LASTEXITCODE -ne 0) { throw "Bound Store package builder failed with exit code $LASTEXITCODE." }
+          Expand-Archive -LiteralPath $zipPath -DestinationPath $expanded -Force
+          $identity = Get-Content -LiteralPath .\store\chrome-web-store.identity.json -Raw -Encoding UTF8 | ConvertFrom-Json
+          $manifest = Get-Content -LiteralPath (Join-Path $expanded 'manifest.json') -Raw -Encoding UTF8 | ConvertFrom-Json
+          if ([string]$manifest.key -cne [string]$identity.publicKey) { throw 'Bound package manifest public key differs from Store identity metadata.' }
+          Write-Host "Validated bound Store package for item $($identity.itemId)."
