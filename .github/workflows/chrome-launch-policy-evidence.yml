@@ -1,0 +1,88 @@
+name: Collect Chrome launch and policy evidence
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/Collect-ChromeLaunchPolicyEvidence.ps1'
+      - '.github/workflows/chrome-launch-policy-evidence.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  collect:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.head.repo.owner.login == github.repository_owner) }}
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 3
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact source identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) {
+            throw "Exact-source checkout mismatch: expected $env:SOURCE_SHA, got $actual."
+          }
+
+      - name: Validate collector syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path '.\tools\Collect-ChromeLaunchPolicyEvidence.ps1'),
+            [ref]$tokens,
+            [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'Chrome launch/policy collector has PowerShell parse errors.'
+          }
+
+      - name: Collect bounded read-only evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = Join-Path $env:RUNNER_TEMP 'chrome-launch-policy-evidence.json'
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Collect-ChromeLaunchPolicyEvidence.ps1 -OutputPath $output
+          if ($LASTEXITCODE -ne 0) { throw "Chrome launch/policy collector failed with exit code $LASTEXITCODE." }
+
+          $evidence = Get-Content -LiteralPath $output -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+          $raw = Get-Content -LiteralPath $output -Raw -Encoding UTF8
+          if ($evidence.schemaVersion -ne 1 -or $evidence.readOnly -ne $true) {
+            throw 'Chrome launch/policy evidence schema/read-only marker is invalid.'
+          }
+          foreach ($forbidden in @('"commandLine":','"executablePath":','"profileImagePath":','HKEY_USERS\\S-1-','C:\\Users\\dan')) {
+            if ($raw -match [regex]::Escape($forbidden)) {
+              throw "Chrome launch/policy evidence leaked forbidden detail: $forbidden"
+            }
+          }
+          Write-Host ("Chrome launch/policy evidence: processState={0}; browserProcesses={1}; disableExtensions={2}; disableExtensionsExcept={3}; userDataDirOverride={4}; userPolicy={5}; policyScopes={6}" -f `
+            $evidence.chromeProcesses.state,
+            $evidence.chromeProcesses.browserProcessCount,
+            $evidence.chromeProcesses.anyBrowserDisableExtensions,
+            $evidence.chromeProcesses.anyBrowserDisableExtensionsExcept,
+            $evidence.chromeProcesses.anyBrowserUserDataDirOverride,
+            $evidence.policies.userPolicyState,
+            @($evidence.policies.scopes).Count)
+
+      - name: Upload sanitized evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-launch-policy-evidence-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}\chrome-launch-policy-evidence.json
+          if-no-files-found: error
+          retention-days: 7
