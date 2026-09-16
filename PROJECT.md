@@ -1,32 +1,36 @@
 # ChatGPT Response Notifier
 
-Canonical source: **thatoneguydan/chatgpt-response-notifier**. Canonical coordination for current work: [DevelopmentInfrastructure #443](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/443). [#442](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/442) retains the merged cross-Windows-virtual-desktop toast-click acceptance work and is blocked behind #443. [#283](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/283) remains historical incident context.
+Canonical source: **thatoneguydan/chatgpt-response-notifier**. Current runtime source: **v0.9.29**. Reconcile current GitHub heads and active-work claims before implementation.
 
-Read [ROADMAP.md](ROADMAP.md) for the current five-workstream program and acceptance gates. Read [CHROME-WEB-STORE-DURABLE-DISTRIBUTION.md](docs/CHROME-WEB-STORE-DURABLE-DISTRIBUTION.md) for the active reboot-durable browser-install design. Hidden-window investigation checkpoints remain under `docs/HIDDEN-WINDOW-*` as historical evidence; they are no longer the active blocker.
+## Read next
+
+- [ROADMAP.md](ROADMAP.md) — immediate reliability priorities within the existing five workstreams.
+- [Independent failure review](docs/INDEPENDENT-FAILURE-REVIEW-2026-09-16.md) — evidence, limitations, exact next repairs and acceptance matrix.
+- [DevelopmentInfrastructure #443](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/443) — owns registration diagnosis, implementation, release and Glass deployment.
+- [DevelopmentInfrastructure #442](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/442) — owns cross-desktop click repair/acceptance, blocked by a loaded runtime.
+- [DevelopmentInfrastructure #453](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/453) — independent documentation review; does not replace either runtime owner.
 
 ## Current checkpoint — 2026-09-16
 
-Notifier runtime source is **v0.9.28**. Hidden/unfocused completion delivery was proven on v0.9.27: a real notifier-eligible coded response produced its native notification while Chrome remained hidden/unfocused. v0.9.28 then merged the browser-only cross-desktop toast-click fallback.
+One real coded notification was accepted while Chrome stayed hidden/unfocused on v0.9.27. This proves that observed completion-delivery path; it does not establish universal hidden-tab recovery or click reliability. v0.9.28 added the browser-only cross-desktop fallback, whose physical acceptance remains open.
 
-After a normal Windows Update reboot, the v0.9.28 extension files, helper installation/startup state, stable unpacked root, and protected Chrome preference entry remained present, but Chrome no longer exposed a live notifier extension runtime. Full Chrome exit/reopen did not restore it. Bounded diagnostics through notifier PR #66 ruled out ordinary path/manifest/identity/policy/disable/blocklist/source-compatibility causes and corrected an isolated-clone diagnostic that had shared Chromium's external PreferenceMAC basename.
+After Windows Update reboot, files, helper and a persisted Chrome registration remained, but the intended extension runtime was absent. The original unpacked notifier survives reboot on Glass. **Chrome Web Store migration is paused; unpacked installation alone is not an established cause.** [Store preparation](docs/CHROME-WEB-STORE-DURABLE-DISTRIBUTION.md) is contingency material, including its Developer Dashboard instructions. No Store fee/item creation is the current next step.
 
-The active repair in #443 is therefore architectural: **stop treating one-time manual `Load unpacked` registration as the production browser installation mechanism.** Use Chrome Web Store distribution (Unlisted for Glass) while preserving the localhost helper, managed updater/release path, rollback, notification ownership, bounded recovery, and no-focus-stealing behavior.
+The active implementation's [PR #70 comparison run](https://github.com/thatoneguydan/chatgpt-response-notifier/actions/runs/35135642109) verified helper update/restart to v0.9.29. Both intended fork and original control report location 4, readable existing manifests and no disable reasons. A legacy fork ID also points at the current fork root and no longer matches its manifest key. Investigate that divergence through #443; it is not yet proof of the reboot cause. Helper restart and persisted preferences do not prove a loaded Chrome extension.
 
-Current durable-distribution preparation: notifier PR #67 / branch `repair/cws-durable-distribution`, based on main `d47b4a205370fe588f09cf9bc4840366e1bc0184`.
+The independent review reproduced phrase/location detection gaps, passive handling of progress-then-silence, and incomplete click verification. It also found 11 existing test files omitted from normal validation/release test lists. These are immediate reliability tasks before new features or distribution redesign.
 
-## Hard boundaries
+## Boundaries
 
-- Do not write Chrome `Preferences` or `Secure Preferences` to restore an extension.
-- Do not use recurring/production CDP `loadUnpacked` as installation persistence.
-- Do not add ChatGPT API/session polling or duplicate ChatGPT requests.
-- Do not restore native Win32 foreground/window-enumeration routing.
-- Do not place private signing keys, OAuth credentials, passwords, recovery codes, or other account secrets in source, issues, workflow evidence, or artifacts.
-- Preserve loopback-only helper transport and exact extension-origin validation.
+- Do not write Chrome Preferences, Secure Preferences or external integrity state to repair registration.
+- Do not use recurring/production CDP `loadUnpacked`, native Win32 foreground routing or Chrome process/window enumeration as a repair.
+- Preserve the stable install root/key, exact extension-origin validation, loopback-only helper, rollback and protected deployment gates.
+- Observe existing ChatGPT requests only: no ChatGPT API/session polling, duplicate backend requests or broad background scraping.
+- Preserve Pause/manual Stop, drafts/uploads, authentication/approval/rate-limit vetoes, request identity, durable budgets and uncertainty stops.
+- Stream-derived completion evidence remains notification-only. Silence/missing footer alone is insufficient automatic-action authority.
+- Focus changes follow a physical user click; preserve the original tab/window when opening the existing fallback.
+- Do not export conversations, raw profiles, credentials, signing secrets or unnecessary user paths in evidence.
 
-## Operator-interaction policy
+## Operator interaction
 
-Operator interaction is a last resort. A chat must not ask the operator to click **Update**, run an installer, reload Chrome, execute a command, or perform another manual deployment/recovery step merely because that path is convenient.
-
-Before requesting operator action, exhaust safe non-interactive routes already available to the project: managed update/release automation, loopback helper/control paths, protected Glass deployment and verification workflows, exact-head package validation, and repository-defined diagnostics that preserve Chrome profile state.
-
-For #443, the first unavoidable human boundary is the authenticated Chrome Web Store Developer Dashboard. Source/package preparation and validation must be complete first. The operator should only be asked to create/upload the initial Store item and return its **public** Item ID/public key; never request private keys or account credentials. After source is bound to that Store identity, automation resumes until the later authenticated publish/install/reboot acceptance boundary.
+Complete safe source work and use existing bounded diagnostic/update/deployment routes before asking for manual action. A desktop switch, foreground observation or normal reboot may still be needed for physical acceptance; combine those checks into one prepared pass after deterministic repairs are validated. Do not request repeated reinstalls, test commands, Chrome restarts, Developer Mode toggles or a Store account while evidence and source work remain available.
