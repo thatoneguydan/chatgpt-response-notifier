@@ -75,13 +75,18 @@ $currentId = if ([string]::IsNullOrWhiteSpace($currentKey)) { '' } else { Get-Ch
 $manifest.key = $normalizedKey
 
 $bridgeText = Get-Content -LiteralPath $bridgeConstantsPath -Raw -Encoding UTF8
-$bridgeText = Replace-ExactlyOnce $bridgeText 'ExtensionOrigin\s*=\s*"chrome-extension://[a-p]{32}"' ('ExtensionOrigin = "chrome-extension://' + $ItemId + '"') 'Local bridge extension origin'
+$bridgeReplacement = 'ExtensionOrigin = "chrome-extension://{0}"' -f $ItemId
+$bridgeText = Replace-ExactlyOnce $bridgeText 'ExtensionOrigin\s*=\s*"chrome-extension://[a-p]{32}"' $bridgeReplacement 'Local bridge extension origin'
 
 $nativeText = Get-Content -LiteralPath $nativeConstantsPath -Raw -Encoding UTF8
-$nativeText = Replace-ExactlyOnce $nativeText 'ExtensionId\s*=\s*"[a-p]{32}"' ('ExtensionId = "' + $ItemId + '"') 'Native host extension ID'
+$nativeReplacement = 'ExtensionId = "{0}"' -f $ItemId
+$nativeText = Replace-ExactlyOnce $nativeText 'ExtensionId\s*=\s*"[a-p]{32}"' $nativeReplacement 'Native host extension ID'
 
 $testText = Get-Content -LiteralPath $identityTestPath -Raw -Encoding UTF8
-$testText = Replace-ExactlyOnce $testText '\$expectedId\s*=\s*''[a-p]{32}''' ('$expectedId = ''' + $ItemId + '''') 'Identity test expected ID'
+$singleQuote = [char]39
+$testPattern = '\$expectedId\s*=\s*' + $singleQuote + '[a-p]{32}' + $singleQuote
+$testReplacement = '$expectedId = ' + $singleQuote + $ItemId + $singleQuote
+$testText = Replace-ExactlyOnce $testText $testPattern $testReplacement 'Identity test expected ID'
 
 $utf8NoBom = New-Object Text.UTF8Encoding -ArgumentList $false
 [IO.File]::WriteAllText($manifestPath, ($manifest | ConvertTo-Json -Depth 32), $utf8NoBom)
