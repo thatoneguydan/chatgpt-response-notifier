@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import test from 'node:test';
 import './hidden-window-diagnostics.behavior.test.mjs';
+import './cross-desktop-click.behavior.test.mjs';
 
 const worker = readFileSync(new URL('../../extension/service-worker.js', import.meta.url), 'utf8');
 const readText = (relative) => readFileSync(new URL(`../../${relative}`, import.meta.url), 'utf8');
@@ -285,6 +286,6 @@ test('native toast renders persisted completion time in local time and release v
   assert.match(toast, /FormatCompletedAt\(record\.CompletedAt\)/);
   assert.match(toast, /value\.ToLocalTime\(\)/);
   assert.match(toast, /local\.ToString\("t"\)/);
-  assert.equal(version, '0.9.27');
+  assert.equal(version, '0.9.28');
   assert.equal(manifest.version, version);
 });
