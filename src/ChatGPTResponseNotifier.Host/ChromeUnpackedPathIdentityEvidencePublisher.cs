@@ -152,7 +152,10 @@ internal static class ChromeUnpackedPathIdentityEvidencePublisher
         if (!extensions.TryGetProperty("settings", out var settings) || settings.ValueKind != JsonValueKind.Object) return;
         if (!settings.TryGetProperty(extensionId, out var entry) || entry.ValueKind != JsonValueKind.Object) return;
 
-        var rawPath = StringValue(entry, "path", 2048);
+        // Do not trim or canonicalize this string before deriving an ID. Chromium's
+        // Windows path-ID algorithm hashes the exact native path value after only
+        // uppercasing a leading drive letter.
+        var rawPath = RawStringValue(entry, "path", 2048);
         var disableReasons = new List<int>();
         if (entry.TryGetProperty("disable_reasons", out var reasons) && reasons.ValueKind == JsonValueKind.Array)
         {
@@ -162,7 +165,7 @@ internal static class ChromeUnpackedPathIdentityEvidencePublisher
             }
         }
 
-        var pathAvailable = !string.IsNullOrWhiteSpace(rawPath);
+        var pathAvailable = !string.IsNullOrEmpty(rawPath);
         var pathIsAbsolute = false;
         if (pathAvailable)
         {
@@ -263,6 +266,14 @@ internal static class ChromeUnpackedPathIdentityEvidencePublisher
         if (info.Length < 0 || info.Length > MaxJsonBytes) throw new InvalidDataException("Chrome JSON file exceeds diagnostic size bound.");
         using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
         return JsonDocument.Parse(stream);
+    }
+
+    private static string? RawStringValue(JsonElement root, string name, int maxLength)
+    {
+        if (!root.TryGetProperty(name, out var node) || node.ValueKind != JsonValueKind.String) return null;
+        var text = node.GetString() ?? string.Empty;
+        if (text.Length == 0 || text.Length > maxLength) return null;
+        return text;
     }
 
     private static string? StringValue(JsonElement root, string name, int maxLength)
