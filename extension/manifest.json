@@ -34,10 +34,18 @@
         "status-code.js",
         "status-policy.js",
         "monitor-script.js",
-        "observation-relay.js",
         "bounded-recovery-script.js",
         "status-script.js",
         "recovery-script.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "observation-relay.js"
       ],
       "run_at": "document_start"
     },
