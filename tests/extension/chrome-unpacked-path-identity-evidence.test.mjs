@@ -44,7 +44,7 @@ test('unpacked path identity evidence stays read-only and path-sanitized', () =>
   assert.match(collector, /'pathDerivedExtensionId','pathDerivedIdMatchesRegistration'/);
   assert.doesNotMatch(collector, /Set-Content[^\n]*(?:Preferences|Secure Preferences)/i);
 
-  assert.match(workflow, /C:\\\\Users\\\\dan/);
+  assert.ok(workflow.includes("'C:\\Users\\dan'"));
   assert.match(workflow, /'AppData'/);
   assert.match(workflow, /'rawPath'/);
   assert.match(workflow, /'preferencePath'/);
