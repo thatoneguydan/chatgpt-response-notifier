@@ -148,7 +148,8 @@ test('bootstrap installs decision diagnostics without changing recovery authorit
   assert.ok(backgroundIndex >= 0 && recoveryIndex > backgroundIndex && hiddenIndex > recoveryIndex);
   assert.doesNotMatch(recoveryDiagnosticsSource, /chrome\.tabs\.reload|CHATGPT_BOUNDED_RECOVERY_COMMAND|backend-api|\bfetch\s*\(/);
   assert.match(recoveryDiagnosticsSource, /const base = globalThis\.ChatGPTNotifierRecoveryModel/);
-  assert.match(recoveryDiagnosticsSource, /return base\.claimAction/);
+  assert.match(recoveryDiagnosticsSource, /const result = base\.claimAction/);
+  assert.match(recoveryDiagnosticsSource, /return result;/);
 });
 
 test('retained trace joins recovery and delivery onto request incidents with evidence-qualified boundary categories', () => {
