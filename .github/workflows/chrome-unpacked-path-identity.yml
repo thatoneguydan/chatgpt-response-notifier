@@ -1,0 +1,131 @@
+name: Compare unpacked Chrome path identities
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/ChatGPTResponseNotifier.Host/ChromeUnpackedPathIdentityEvidencePublisher.cs'
+      - 'tools/Collect-ChromeUnpackedPathIdentity.ps1'
+      - '.github/workflows/chrome-unpacked-path-identity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.head.repo.owner.login == github.repository_owner) }}
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 4
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact source identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) {
+            throw "Exact-source checkout mismatch: expected $env:SOURCE_SHA, got $actual."
+          }
+
+      - name: Validate collector syntax
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path '.\tools\Collect-ChromeUnpackedPathIdentity.ps1'),
+            [ref]$tokens,
+            [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'Unpacked path identity collector has PowerShell parse errors.'
+          }
+
+      - name: Collect bounded path identity evidence
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $output = Join-Path $env:RUNNER_TEMP 'chrome-unpacked-path-identity.json'
+
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Collect-ChromeUnpackedPathIdentity.ps1 -OutputPath $output
+          if ($LASTEXITCODE -ne 0) {
+            throw "Unpacked path identity collector failed with exit code $LASTEXITCODE."
+          }
+
+          $raw = Get-Content -LiteralPath $output -Raw -Encoding UTF8
+          $evidence = $raw | ConvertFrom-Json -ErrorAction Stop
+          if ([int]$evidence.schemaVersion -ne 1) { throw 'Unexpected path identity evidence schema.' }
+          if ([string]$evidence.capability -cne 'chrome-unpacked-path-identity-readonly-v1') { throw 'Unexpected path identity evidence capability.' }
+          if ($evidence.readOnly -ne $true) { throw 'Path identity evidence is not marked read-only.' }
+
+          foreach ($forbidden in @(
+            'C:\Users\dan',
+            'AppData',
+            'responseBody',
+            'responseText',
+            'conversationUrl',
+            'history',
+            'cookies',
+            'password',
+            'oauth',
+            'privateKey',
+            'manifestKey'
+          )) {
+            if ($raw -match [regex]::Escape($forbidden)) {
+              throw "Path identity evidence leaked forbidden detail: $forbidden"
+            }
+          }
+
+          foreach ($record in @($evidence.records)) {
+            foreach ($propertyName in @('path','rawPath','preferencePath','profilePath','extensionRoot')) {
+              if ($null -ne $record.PSObject.Properties[$propertyName]) {
+                throw "Path identity evidence contains forbidden raw path property: $propertyName"
+              }
+            }
+            if ([string]$record.extensionId -notmatch '^[a-p]{32}$') { throw 'Invalid registration extension ID in evidence.' }
+            if (-not [string]::IsNullOrWhiteSpace([string]$record.pathDerivedExtensionId) -and
+                [string]$record.pathDerivedExtensionId -notmatch '^[a-p]{32}$') {
+              throw 'Invalid path-derived extension ID in evidence.'
+            }
+          }
+
+          Write-Host ("Unpacked path identity: state={0}; stalePresent={1}; stalePathIdMatch={2}; targetPresent={3}; targetPathIdMatch={4}; inspected={5}; unavailable={6}" -f `
+            $evidence.state,
+            $evidence.staleRegistrationPresent,
+            $evidence.stalePathDerivedIdMatchesRegistration,
+            $evidence.intendedRegistrationPresent,
+            $evidence.intendedPathDerivedIdMatchesRegistration,
+            $evidence.profileFilesInspected,
+            $evidence.profileFilesUnavailable)
+
+          foreach ($record in @($evidence.records)) {
+            Write-Host ("  role={0}; id={1}; source={2}; location={3}; disabled={4}; pathMatchesForkRoot={5}; pathDerivedId={6}; pathIdMatch={7}" -f `
+              $record.role,
+              $record.extensionId,
+              $record.source,
+              $record.locationValue,
+              $record.disableReasonCount,
+              $record.pathMatchesForkRoot,
+              $record.pathDerivedExtensionId,
+              $record.pathDerivedIdMatchesRegistration)
+          }
+
+      - name: Upload sanitized evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-unpacked-path-identity-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}\chrome-unpacked-path-identity.json
+          if-no-files-found: error
+          retention-days: 7
