@@ -52,6 +52,7 @@ try {
     'traffic-safety-background.js',
     'interrupted-run-evidence-background.js',
     'bounded-recovery-background.js',
+    'observation-scheduler-background.js',
     'bounded-recovery-attachment-background.js',
     'quick-prompts-attachment-background.js',
     'service-worker.js',

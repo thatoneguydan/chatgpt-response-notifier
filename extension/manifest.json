@@ -45,6 +45,15 @@
         "https://chatgpt.com/*"
       ],
       "js": [
+        "observation-relay.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
         "response-stream-status-main.js"
       ],
       "run_at": "document_start",
