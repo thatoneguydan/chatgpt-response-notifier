@@ -78,13 +78,25 @@ test('recovery diagnostics report only bounded identity suffixes and decision re
     { now: 10_000, leaseId: 'lease-1', recoveryEnabled: true }
   );
   assert.equal(claim.allowed, true);
+  const finished = runtime.model.finishAction(
+    claim.humanRun,
+    claim.incident,
+    claim.profile,
+    { leaseId: claim.leaseId, uncertain: true, state: 'observing' },
+    { now: 11_000 }
+  );
+  assert.equal(finished.incident.state, 'attention');
 
   const diagnostics = runtime.nativeMessages.map((item) => item.diagnostic);
-  assert.deepEqual(diagnostics.map((item) => item.status), ['candidate', 'action-admitted']);
+  assert.deepEqual(diagnostics.map((item) => item.status), ['candidate', 'action-admitted', 'action-finished']);
   assert.equal(diagnostics[0].reason, 'timed-out');
   assert.equal(diagnostics[0].actionKind, 'reload');
   assert.equal(diagnostics[0].chromeDocumentSuffix, observation.documentId.slice(-8));
   assert.equal(diagnostics[0].requestSuffix, observation.requestId.slice(-8));
+  assert.equal(diagnostics[2].uncertain, true);
+  assert.equal(diagnostics[2].reason, 'action-interrupted-uncertain');
+  assert.equal(diagnostics[2].chromeDocumentSuffix, observation.documentId.slice(-8));
+  assert.equal(diagnostics[2].requestSuffix, observation.requestId.slice(-8));
   for (const diagnostic of diagnostics) {
     const serialized = JSON.stringify(diagnostic);
     assert.doesNotMatch(serialized, /must-not-leak/);
@@ -154,6 +166,9 @@ test('retained trace joins recovery and delivery onto request incidents with evi
   assert.match(retentionSource, /tab-frozen/);
   assert.match(retentionSource, /page-frozen/);
   assert.match(retentionSource, /delivery-failure/);
+  assert.match(retentionSource, /recovery-veto/);
+  assert.match(retentionSource, /recovery-hold/);
+  assert.match(retentionSource, /recovery-uncertain/);
   assert.match(retentionSource, /existing-tab-diagnostics-attach-error/);
   assert.match(retentionSource, /!_verdicts\.ContainsKey\(id\)/, 'persisted verdicts must survive helper restart without being re-inferred from empty current-process attachment sets');
   assert.match(retentionSource, /ActionState/);
@@ -161,6 +176,7 @@ test('retained trace joins recovery and delivery onto request incidents with evi
   assert.match(retentionSource, /DeliveryState/);
   assert.match(retentionSource, /FirstMissingBoundary/);
   assert.match(retentionSource, /uncorrelatedBoundaryEvents/);
+  assert.match(retentionSource, /existingFirstMissingBoundary/);
   assert.doesNotMatch(retentionSource, /promptText|assistantText|responseText|responseBody/);
 });
 
