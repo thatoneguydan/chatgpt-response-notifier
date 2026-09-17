@@ -48,6 +48,8 @@ jobs:
             "testInstallProvenance: 'devtools-test-only'",
             'restartDurabilityProven: false',
             'realAcceptanceRequiresManualLoadUnpacked: true',
+            'postClosePreferenceResultInterpretable: false',
+            'devToolsTeardownMayPruneSyntheticRegistrations: true',
             'cleanupAttempted: false',
             'liveChromeProfileAccessed: false',
             'liveChromeRegistrationMutated: false'
@@ -108,15 +110,15 @@ jobs:
           if ([string]$evidence.stableId -cne 'lciedmoiiapbgemklkpoadimhffaaaah') { throw 'Stable ID mismatch.' }
           if ($evidence.sourceManifestHashPreserved -ne $true) { throw 'Canonical extension source changed.' }
           if ($evidence.legacyOrphan.present -ne $true -or $evidence.legacyOrphan.pointsAtLegacyRoot -ne $true) { throw 'Stale legacy orphan was not reproduced at the old root.' }
-          if ($evidence.legacyAfterRelocation.present -ne $true -or $evidence.legacyAfterRelocation.pointsAtLegacyRoot -ne $true) { throw 'Relocation proof changed the stale orphan.' }
           if ($evidence.legacyVisibleBeforeRelocation -ne $false -or $evidence.legacyVisibleAfterRelocation -ne $false) { throw 'Stale pref-only orphan unexpectedly became a live registry extension.' }
           if ($evidence.relocatedRuntimePathMatches -ne $true -or $evidence.relocationAcceptanceProven -ne $true) { throw 'Stable fixed-key extension did not run from the distinct root.' }
           if ([string]$evidence.testInstallProvenance -cne 'devtools-test-only') { throw 'Relocation proof lost its DevTools-test provenance disclosure.' }
           if ($evidence.restartDurabilityProven -ne $false -or $evidence.realAcceptanceRequiresManualLoadUnpacked -ne $true) { throw 'Relocation proof overclaimed persistence.' }
+          if ($evidence.postClosePreferenceResultInterpretable -ne $false -or $evidence.devToolsTeardownMayPruneSyntheticRegistrations -ne $true) { throw 'Relocation proof overinterpreted DevTools teardown preference state.' }
           foreach ($forbidden in @('C:\Users\dan','User Data','PreferenceMACs','cookie','history','sessionToken','accessToken','responseBody','responseText','conversationUrl')) {
             if ($raw -match [regex]::Escape($forbidden)) { throw "Root relocation evidence leaked forbidden detail: $forbidden" }
           }
-          Write-Host ("LEGACY_ROOT_RELOCATION_RESULT browser={0}; legacy={1}; stable={2}; legacyLiveBefore={3}; stableRelocatedPath={4}; legacyLiveAfter={5}; orphanPreserved={6}; accepted={7}; durabilityProven={8}" -f $evidence.browserVersion,$evidence.legacyId,$evidence.stableId,$evidence.legacyVisibleBeforeRelocation,$evidence.relocatedRuntimePathMatches,$evidence.legacyVisibleAfterRelocation,$evidence.legacyAfterRelocation.present,$evidence.relocationAcceptanceProven,$evidence.restartDurabilityProven)
+          Write-Host ("LEGACY_ROOT_RELOCATION_RESULT browser={0}; legacy={1}; stable={2}; legacyLiveBefore={3}; stableRelocatedPath={4}; legacyLiveAfter={5}; postCloseLegacyPresent={6}; postCloseInterpretable={7}; accepted={8}; durabilityProven={9}" -f $evidence.browserVersion,$evidence.legacyId,$evidence.stableId,$evidence.legacyVisibleBeforeRelocation,$evidence.relocatedRuntimePathMatches,$evidence.legacyVisibleAfterRelocation,$evidence.legacyPreferenceRetentionAfterDevToolsSession,$evidence.postClosePreferenceResultInterpretable,$evidence.relocationAcceptanceProven,$evidence.restartDurabilityProven)
 
       - name: Upload sanitized root relocation evidence
         uses: actions/upload-artifact@v4
