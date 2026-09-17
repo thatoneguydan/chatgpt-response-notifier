@@ -61,7 +61,9 @@ test('traffic action evidence serializes initial records before request-result p
   assert.match(traffic, /metaWriteChain = metaWriteChain\.catch\(\(\) => \{\}\)\.then\(\(\) => writeMetaNow\(\)\)/);
 });
 
-test('page monitor treats literal too-many-requests UI as rate-limit evidence', () => {
+test('page monitor delegates literal rate-limit UI to the shared classifier', () => {
   const monitor = readText('extension/monitor-script.js');
-  assert.match(monitor, /too many requests\|rate limit\|try again later/);
+  const policy = readText('extension/status-policy.js');
+  assert.match(monitor, /ChatGPTNotifierContinuationPolicy\?\.classifyApplicationText/);
+  assert.match(policy, /too many requests\|rate limit\|try again later/);
 });

@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 4;
+  const RUNTIME_VERSION = 5;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const FALLBACK_SELECTOR = [
     '[role="alert"]',
@@ -23,6 +23,7 @@
   ].join(',');
   const MAX_FALLBACK_NODES = 512;
   const MAX_FALLBACK_TEXT = 420;
+  const GLOBAL_ERROR_ASSOCIATION_MS = 30_000;
   const STALLED_RESPONSE_KEY = 'chatgpt-notifier-explicit-interruption-baseline-v1';
   const STALLED_RESPONSE_TTL_MS = 30 * 60_000;
 
@@ -46,16 +47,23 @@
     return true;
   }
 
-  function interruptionFromText(textValue) {
-    const text = normalize(textValue).toLowerCase();
-    if (!text) return null;
-    const patterns = [
-      ['connection-interrupted', /connection interrupted|stream interrupted|response interrupted|network error|connection lost|disconnected|failed to connect/],
-      ['systems-taking-longer', /our systems? (?:are )?(?:taking longer|busy|experiencing|under (?:heavy )?load|at capacity|temporarily unavailable)|systems? (?:are )?taking longer|taking longer than expected|high demand|service temporarily unavailable/],
-      ['timed-out', /(?:message|response|request|generation)?\s*(?:delivery\s*)?(?:timed out|timeout)|took too long|taking too long/],
-      ['generation-error', /failed to (?:generate|respond|complete)|error (?:generating|while generating|during generation)|something went wrong|there was an error|unable to generate|could(?: not|n't) generate/]
-    ];
-    return patterns.find(([, pattern]) => pattern.test(text)) || null;
+  function classifyApplicationText(textValue) {
+    const classifier = globalThis.ChatGPTNotifierContinuationPolicy?.classifyApplicationText;
+    if (typeof classifier !== 'function') {
+      return { rateLimited: false, authRequired: false, approvalRequired: false, explicitInterruption: false, interruptionKind: '' };
+    }
+    try {
+      const result = classifier(textValue) || {};
+      return {
+        rateLimited: result.rateLimited === true,
+        authRequired: result.authRequired === true,
+        approvalRequired: result.approvalRequired === true,
+        explicitInterruption: result.explicitInterruption === true,
+        interruptionKind: String(result.interruptionKind || '')
+      };
+    } catch {
+      return { rateLimited: false, authRequired: false, approvalRequired: false, explicitInterruption: false, interruptionKind: '' };
+    }
   }
 
   function readStalledBaseline() {
@@ -141,6 +149,11 @@
 
     let nodes = [];
     try { nodes = Array.from(document.querySelectorAll(FALLBACK_SELECTOR)).slice(-MAX_FALLBACK_NODES); } catch {}
+    let rateLimited = false;
+    let authRequired = false;
+    let approvalRequired = false;
+    let interruptionKind = '';
+
     for (let index = nodes.length - 1; index >= 0; index -= 1) {
       const node = nodes[index];
       if (!visible(node)) continue;
@@ -151,43 +164,48 @@
       const text = normalize(node?.innerText || node?.textContent || '');
       if (!text || text.length > MAX_FALLBACK_TEXT) continue;
 
-      const lower = text.toLowerCase();
-      const rateLimited = /too many requests|rate limit|try again later/.test(lower);
-      const authRequired = /session expired|please log in|please sign in|authentication required/.test(lower);
-      const approvalRequired = /approval required|requires approval|approve this action/.test(lower);
-      if (rateLimited || authRequired || approvalRequired) {
-        return {
-          explicitInterruption: false,
-          interruptionKind: '',
-          interruptionAttribution: '',
-          rateLimited,
-          authRequired,
-          approvalRequired,
-          conversationId,
-          documentId,
-          promptKey,
-          applicationStateIdentityMatched: true,
-          applicationStateReason: 'bounded-global-safety-state'
-        };
-      }
+      const classification = classifyApplicationText(text);
+      rateLimited = rateLimited || classification.rateLimited;
+      authRequired = authRequired || classification.authRequired;
+      approvalRequired = approvalRequired || classification.approvalRequired;
+      if (!interruptionKind && classification.explicitInterruption) interruptionKind = classification.interruptionKind;
+    }
 
-      const interruption = interruptionFromText(text);
-      if (!interruption) continue;
+    if (rateLimited || authRequired || approvalRequired) {
       return {
-        explicitInterruption: true,
-        interruptionKind: interruption[0],
-        interruptionAttribution: 'current-request-global',
-        rateLimited: false,
-        authRequired: false,
-        approvalRequired: false,
+        explicitInterruption: false,
+        interruptionKind: '',
+        interruptionAttribution: '',
+        rateLimited,
+        authRequired,
+        approvalRequired,
         conversationId,
         documentId,
         promptKey,
         applicationStateIdentityMatched: true,
-        applicationStateReason: 'bounded-global-interruption-fallback'
+        applicationStateReason: 'bounded-global-safety-state'
       };
     }
-    return null;
+
+    const requestSettledAt = Math.max(0, Number(base.requestSettledAt || 0));
+    const freshGlobalRequestError = String(base.requestPhase || '') === 'error' &&
+      requestSettledAt > 0 &&
+      Date.now() - requestSettledAt <= GLOBAL_ERROR_ASSOCIATION_MS;
+    if (!interruptionKind || !freshGlobalRequestError) return null;
+
+    return {
+      explicitInterruption: true,
+      interruptionKind,
+      interruptionAttribution: 'current-request-global',
+      rateLimited: false,
+      authRequired: false,
+      approvalRequired: false,
+      conversationId,
+      documentId,
+      promptKey,
+      applicationStateIdentityMatched: true,
+      applicationStateReason: 'bounded-global-interruption-fallback'
+    };
   }
 
   function detectExplicitInterruption(expected = {}) {
@@ -213,22 +231,22 @@
         applicationStateReason: String(result.applicationStateReason || '')
       };
       if (primary.applicationStateIdentityMatched === false) return primary;
-      if (primary.explicitInterruption) {
-        rememberStalledBaseline(base || primary, primary.interruptionKind);
-        return primary;
-      }
       if (primary.rateLimited || primary.authRequired || primary.approvalRequired) {
         clearStalledBaseline();
         return primary;
       }
+      if (primary.explicitInterruption) {
+        rememberStalledBaseline(base || primary, primary.interruptionKind);
+        return primary;
+      }
 
       const fallback = fallbackApplicationState(base || primary, expected);
-      if (fallback?.explicitInterruption) {
-        rememberStalledBaseline(base || fallback, fallback.interruptionKind);
-        return fallback;
-      }
       if (fallback?.rateLimited || fallback?.authRequired || fallback?.approvalRequired) {
         clearStalledBaseline();
+        return fallback;
+      }
+      if (fallback?.explicitInterruption) {
+        rememberStalledBaseline(base || fallback, fallback.interruptionKind);
         return fallback;
       }
 

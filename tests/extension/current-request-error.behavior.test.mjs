@@ -80,6 +80,7 @@ function harness({ turns, semanticNodes, href = 'https://chatgpt.com/c/conversat
     Number,
     String,
     Set,
+    Map,
     Object,
     Math,
     crypto: webcrypto,
@@ -207,4 +208,71 @@ test('document or prompt identity mismatch fails closed and SPA navigation durin
   const raced = h.inspect(expectedFrom(s));
   assert.equal(raced.applicationStateIdentityMatched, false);
   assert.equal(raced.explicitInterruption, false);
+});
+
+test('shared classifier covers current-turn disconnected interrupted and failed variants', () => {
+  const cases = [
+    ['Disconnected', 'connection-interrupted'],
+    ['Response interrupted', 'connection-interrupted'],
+    ['Response failed', 'generation-error']
+  ];
+  for (const [text, expectedKind] of cases) {
+    const user = turn('user', 1, 'prompt');
+    const assistant = turn('assistant', 2, 'reply');
+    const h = harness({ turns: [user, assistant], semanticNodes: [alertFor(assistant, text)] });
+    const s = h.snapshot();
+    const result = h.inspect(expectedFrom(s));
+    assert.equal(result.explicitInterruption, true, text);
+    assert.equal(result.interruptionKind, expectedKind, text);
+    assert.equal(result.interruptionAttribution, 'current-turn', text);
+  }
+});
+
+test('healthy Thinking longer text is not classified as an interruption', () => {
+  const user = turn('user', 1, 'prompt');
+  const assistant = turn('assistant', 2, 'reply');
+  const h = harness({ turns: [user, assistant], semanticNodes: [alertFor(assistant, 'Thinking longer')] });
+  const s = h.snapshot();
+  const result = h.inspect(expectedFrom(s));
+  assert.equal(result.explicitInterruption, false);
+  assert.equal(result.interruptionKind, '');
+});
+
+test('global canonical error variants require fresh request-error attribution', () => {
+  const cases = [
+    ['Disconnected', 'connection-interrupted'],
+    ['Response interrupted', 'connection-interrupted'],
+    ['Response failed', 'generation-error']
+  ];
+  for (const [text, expectedKind] of cases) {
+    const user = turn('user', 1, 'prompt');
+    const assistant = turn('assistant', 2, 'reply');
+    const h = harness({ turns: [user, assistant], semanticNodes: [new FakeNode({ text })] });
+    let s = h.snapshot();
+    assert.equal(h.inspect(expectedFrom(s)).explicitInterruption, false, `${text} before request error`);
+    h.requestPhase('started');
+    h.requestPhase('error');
+    s = h.snapshot();
+    const result = h.inspect(expectedFrom(s));
+    assert.equal(result.explicitInterruption, true, `${text} after request error`);
+    assert.equal(result.interruptionKind, expectedKind, text);
+    assert.equal(result.interruptionAttribution, 'current-request-global', text);
+  }
+});
+
+test('safety vetoes are retained regardless of mixed error node order', () => {
+  for (const semanticNodes of [
+    [new FakeNode({ text: 'Response failed' }), new FakeNode({ text: 'Too many requests. Try again later.' })],
+    [new FakeNode({ text: 'Too many requests. Try again later.' }), new FakeNode({ text: 'Response failed' })]
+  ]) {
+    const user = turn('user', 1, 'prompt');
+    const assistant = turn('assistant', 2, 'reply');
+    const h = harness({ turns: [user, assistant], semanticNodes });
+    h.requestPhase('started');
+    h.requestPhase('error');
+    const s = h.snapshot();
+    assert.equal(s.explicitInterruption, true);
+    assert.equal(s.rateLimited, true);
+    assert.equal(h.context.ChatGPTNotifierContinuationPolicy.classifyObservation(s).reason, 'rate-limited');
+  }
 });

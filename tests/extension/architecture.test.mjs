@@ -110,6 +110,9 @@ test('passive monitored-build observer persists identity and scope signal withou
   assert.match(monitor, /promptRevision:/);
   assert.match(monitor, /assistantRevision:/);
   assert.match(monitor, /workStartSignal:/);
+  assert.match(monitor, /interruptionAttribution:/);
+  assert.match(monitor, /applicationStateIdentityMatched:/);
+  assert.match(monitor, /applicationStateReason:/);
   assert.doesNotMatch(monitor, /promptText\s*:/);
   assert.doesNotMatch(monitor, /assistantText\s*:/);
   assert.doesNotMatch(monitor, /responseText\s*:/);
@@ -222,12 +225,17 @@ test('attention.required is durable and separate from rolling coded history', ()
 
 test('known interruption text is scoped to application alerts, not quoted assistant turn content', () => {
   const page = text('extension/monitor-script.js');
+  const policy = text('extension/status-policy.js');
   assert.match(page, /\[role="alert"\]/);
-  assert.match(page, /node\.closest\(TURN_SELECTOR\)/);
-  assert.match(page, /connection interrupted/);
-  assert.match(page, /taking longer than expected/);
-  assert.match(page, /timed out/);
-  assert.match(page, /rate limit/);
+  assert.match(page, /node\.closest\?\.\(TURN_SELECTOR\)/);
+  assert.match(page, /classifyApplicationText/);
+  assert.match(page, /EXCLUDED_ERROR_CONTEXT_SELECTOR/);
+  assert.match(policy, /connection interrupted/);
+  assert.match(policy, /taking longer than expected/);
+  assert.match(policy, /timed out/);
+  assert.match(policy, /rate limit/);
+  assert.match(policy, /response failed/);
+  assert.match(policy, /disconnected/);
 });
 
 test('active user, draft, upload and manual-stop safeguards are explicit and trusted-event based', () => {

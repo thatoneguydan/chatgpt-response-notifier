@@ -222,7 +222,9 @@ function createRecoveryLiveContext({ sessionStorage, documentId, timeoutVisible 
     assistantRevision: 'assistant-rev-1',
     statusCode: '',
     stopGenerating: false,
-    toolActivity: false
+    toolActivity: false,
+    requestPhase: timeoutVisible ? 'error' : 'unknown',
+    requestSettledAt: timeoutVisible ? Date.now() : 0
   };
   const document = {
     documentElement: {},
@@ -239,6 +241,9 @@ function createRecoveryLiveContext({ sessionStorage, documentId, timeoutVisible 
     Array,
     Object,
     RegExp,
+    Map,
+    Set,
+    Math,
     sessionStorage,
     document,
     getComputedStyle: () => ({ display: 'block', visibility: 'visible', opacity: '1' }),
@@ -271,6 +276,7 @@ function createRecoveryLiveContext({ sessionStorage, documentId, timeoutVisible 
       })
     }
   });
+  vm.runInContext(readText('extension/status-policy.js'), context);
   vm.runInContext(readText('extension/recovery-live-fix-content.js'), context);
   return context.__chatgptNotifierRecoveryLiveContent;
 }
