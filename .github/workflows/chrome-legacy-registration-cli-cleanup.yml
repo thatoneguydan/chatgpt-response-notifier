@@ -1,0 +1,120 @@
+name: Validate Chrome CLI legacy registration cleanup
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/chrome-legacy-registration-cli-cleanup-probe.mjs'
+      - '.github/workflows/chrome-legacy-registration-cli-cleanup.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-cli-cleanup:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.head.repo.owner.login == github.repository_owner) }}
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 10
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify isolation guards
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) { throw "Exact-source checkout mismatch: expected $env:SOURCE_SHA, got $actual." }
+          node --check .\tools\chrome-legacy-registration-cli-cleanup-probe.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'CLI cleanup probe has invalid JavaScript syntax.' }
+
+          $source = Get-Content -LiteralPath '.\tools\chrome-legacy-registration-cli-cleanup-probe.mjs' -Raw -Encoding UTF8
+          foreach ($forbidden in @('LOCALAPPDATA','PreferenceMACs','Registry','page.goto','chatgpt.com','C:\Users\dan')) {
+            if ($source -match [regex]::Escape($forbidden)) { throw "CLI cleanup probe contains forbidden live-profile/navigation primitive: $forbidden" }
+          }
+          foreach ($required in @('userDataDir: profilePath','chrome.runtime.reload()','--uninstall-extension=${legacyId}','--user-data-dir=${profilePath}','liveChromeProfileAccessed: false','liveChromeRegistrationMutated: false')) {
+            if ($source -notmatch [regex]::Escape($required)) { throw "CLI cleanup probe is missing isolation guard: $required" }
+          }
+
+      - name: Resolve installed Chrome 153
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @()
+          if ($env:ProgramFiles) { $candidates += (Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe') }
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe') }
+          $chrome = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (-not $chrome) { throw 'Installed Chrome executable was not found.' }
+          $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($chrome).ProductVersion
+          if ([int]($version.Split('.')[0]) -ne 153) { throw "Expected Chrome major 153; observed $version." }
+          Write-Host "Installed Chrome product version: $version"
+          "SYSTEM_CHROME_EXE=$chrome" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install isolated Puppeteer package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $packageRoot = Join-Path $env:RUNNER_TEMP "notifier-legacy-cli-cleanup-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          Remove-Item -LiteralPath $packageRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+          Copy-Item -LiteralPath '.\tools\chrome-legacy-registration-cli-cleanup-probe.mjs' -Destination (Join-Path $packageRoot 'probe.mjs')
+          Push-Location $packageRoot
+          try {
+            npm init -y | Out-Null
+            $env:PUPPETEER_SKIP_DOWNLOAD = 'true'
+            npm install puppeteer@25.11.0 --no-fund --no-audit
+            if ($LASTEXITCODE -ne 0) { throw 'Puppeteer install failed.' }
+          } finally { Pop-Location }
+          "PACKAGE_ROOT=$packageRoot" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prove one-shot Chrome command-line cleanup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $extension = (Resolve-Path '.\extension').Path
+          $probeRoot = Join-Path $env:PACKAGE_ROOT 'probe-root'
+          $output = Join-Path $env:RUNNER_TEMP 'chrome-legacy-registration-cli-cleanup-evidence.json'
+          Push-Location $env:PACKAGE_ROOT
+          try {
+            node .\probe.mjs $extension $probeRoot $env:SYSTEM_CHROME_EXE $output
+            if ($LASTEXITCODE -ne 0) { throw "CLI cleanup probe failed with exit code $LASTEXITCODE." }
+          } finally { Pop-Location }
+
+          $raw = Get-Content -LiteralPath $output -Raw -Encoding UTF8
+          $evidence = $raw | ConvertFrom-Json -ErrorAction Stop
+          if ([int]$evidence.schemaVersion -ne 1) { throw 'Unexpected CLI cleanup evidence schema.' }
+          if ([string]$evidence.capability -cne 'chrome-legacy-registration-cli-cleanup-disposable-v1') { throw 'Unexpected CLI cleanup evidence capability.' }
+          if ($evidence.disposableProfile -ne $true -or $evidence.liveChromeProfileAccessed -ne $false -or $evidence.liveChromeRegistrationMutated -ne $false) { throw 'CLI cleanup isolation contract failed.' }
+          if ($evidence.chatGptNavigationPerformed -ne $false) { throw 'CLI cleanup probe navigated to ChatGPT.' }
+          if ([string]$evidence.stableId -cne 'lciedmoiiapbgemklkpoadimhffaaaah') { throw 'Stable ID mismatch.' }
+          if ([int]$evidence.commandExitStatus -ne 0) { throw 'Chrome command-line uninstall did not exit successfully.' }
+          if ($evidence.legacyRuntimeRemoved -ne $true -or $evidence.stableRuntimeAfterCleanup -ne $true) { throw 'CLI cleanup runtime selectivity failed.' }
+          if ($evidence.sourceManifestHashPreserved -ne $true -or $evidence.selectiveCleanupSucceeded -ne $true) { throw 'CLI cleanup persistence/selectivity proof failed.' }
+          foreach ($forbidden in @('C:\Users\dan','PreferenceMACs','cookie','history','sessionToken','accessToken','responseBody','responseText','conversationUrl')) {
+            if ($raw -match [regex]::Escape($forbidden)) { throw "CLI cleanup evidence leaked forbidden detail: $forbidden" }
+          }
+          Write-Host ("LEGACY_CLI_CLEANUP_RESULT browser={0}; legacy={1}; stable={2}; exit={3}; legacyRuntimeRemoved={4}; legacyPresentAfter={5}; stablePresentAfter={6}; stableRootAfter={7}; stableRuntimeAfter={8}; selective={9}" -f $evidence.browserVersion,$evidence.legacyId,$evidence.stableId,$evidence.commandExitStatus,$evidence.legacyRuntimeRemoved,$evidence.legacyAfter.present,$evidence.stableAfter.present,$evidence.stableAfter.sameDisposableRoot,$evidence.stableRuntimeAfterCleanup,$evidence.selectiveCleanupSucceeded)
+
+      - name: Upload sanitized CLI cleanup evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-legacy-registration-cli-cleanup-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}\chrome-legacy-registration-cli-cleanup-evidence.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Cleanup disposable probe
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:PACKAGE_ROOT) { Remove-Item -LiteralPath $env:PACKAGE_ROOT -Recurse -Force -ErrorAction SilentlyContinue }
+          Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'chrome-legacy-registration-cli-cleanup-evidence.json') -Force -ErrorAction SilentlyContinue
