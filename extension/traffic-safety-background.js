@@ -215,7 +215,7 @@
     const now = Date.now();
     return Array.from(pendingClaims.values())
       .filter((entry) => now - Number(entry.claimedAt || 0) <= REQUEST_MATCH_WINDOW_MS)
-      .filter((entry) => !conversationSuffix || entry.conversationSuffix === conversationSuffix)
+      .filter((entry) => entry.conversationSuffix === conversationSuffix)
       .sort((left, right) => Number(right.claimedAt || 0) - Number(left.claimedAt || 0))[0] || null;
   }
 
@@ -371,10 +371,13 @@
 
   if (typeof indexedDB !== 'undefined') {
     readMeta().then((stored) => {
-      hardBreakerOpen = stored?.hardBreakerOpen === true;
-      hardBreakerReason = String(stored?.hardBreakerReason || '');
-      hardBreakerOpenedAt = Number(stored?.hardBreakerOpenedAt || 0);
-      lastAutomaticActionAt = Number(stored?.lastAutomaticActionAt || 0);
+      const storedBreakerOpen = stored?.hardBreakerOpen === true;
+      if (!hardBreakerOpen && storedBreakerOpen) {
+        hardBreakerOpen = true;
+        hardBreakerReason = String(stored?.hardBreakerReason || 'rate-limited');
+        hardBreakerOpenedAt = Number(stored?.hardBreakerOpenedAt || 0);
+      }
+      lastAutomaticActionAt = Math.max(lastAutomaticActionAt, Number(stored?.lastAutomaticActionAt || 0));
       stateReady = true;
     }).catch(() => {
       // Fail closed. A broken local safety store must never silently authorize automation.
