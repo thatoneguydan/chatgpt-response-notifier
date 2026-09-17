@@ -26,6 +26,8 @@
   const pendingClaims = new Map();
   const requestToAction = new Map();
   let databasePromise = null;
+  const actionWriteChains = new Map();
+  let metaWriteChain = Promise.resolve();
   let stateReady = false;
   let hardBreakerOpen = false;
   let hardBreakerReason = '';
@@ -125,7 +127,7 @@
     return await requestResult(transaction.objectStore(META_STORE).get(META_KEY), 'Could not read traffic-safety state.') || null;
   }
 
-  async function writeMeta() {
+  async function writeMetaNow() {
     const database = await openDatabase();
     await new Promise((resolve, reject) => {
       const transaction = database.transaction(META_STORE, 'readwrite');
@@ -143,6 +145,23 @@
     });
   }
 
+  function persistMeta() {
+    metaWriteChain = metaWriteChain.catch(() => {}).then(() => writeMetaNow());
+    return metaWriteChain;
+  }
+
+  function queueActionWrite(actionId, writer) {
+    const key = String(actionId || '');
+    if (!key) return Promise.resolve();
+    const prior = actionWriteChains.get(key) || Promise.resolve();
+    const next = prior.catch(() => {}).then(writer);
+    actionWriteChains.set(key, next);
+    next.finally(() => {
+      if (actionWriteChains.get(key) === next) actionWriteChains.delete(key);
+    }).catch(() => {});
+    return next;
+  }
+
   async function putAction(record) {
     const database = await openDatabase();
     await new Promise((resolve, reject) => {
@@ -155,7 +174,7 @@
     pruneLedger().catch(() => {});
   }
 
-  async function patchAction(actionId, patch = {}) {
+  async function patchActionNow(actionId, patch = {}) {
     if (!actionId) return;
     const database = await openDatabase();
     await new Promise((resolve, reject) => {
@@ -173,6 +192,10 @@
     });
   }
 
+  function patchAction(actionId, patch = {}) {
+    return queueActionWrite(actionId, () => patchActionNow(actionId, patch));
+  }
+
   async function pruneLedger() {
     const database = await openDatabase();
     const transaction = database.transaction(ACTION_STORE, 'readwrite');
@@ -187,7 +210,7 @@
     hardBreakerReason = String(reason || 'rate-limited');
     hardBreakerOpenedAt = hardBreakerOpenedAt || Date.now();
     resumeRequestedAt = 0;
-    writeMeta().catch(() => {});
+    persistMeta().catch(() => {});
   }
 
   function maybeClearHardBreaker(snapshot) {
@@ -198,7 +221,7 @@
     hardBreakerReason = '';
     hardBreakerOpenedAt = 0;
     resumeRequestedAt = 0;
-    writeMeta().catch(() => {});
+    persistMeta().catch(() => {});
     return true;
   }
 
@@ -261,8 +284,8 @@
           uncertain: false
         };
         pendingClaims.set(actionId, record);
-        putAction(record).catch(() => {});
-        writeMeta().catch(() => {});
+        queueActionWrite(actionId, () => putAction(record)).catch(() => {});
+        persistMeta().catch(() => {});
         return claimed;
       },
       finishAction(humanRun, incident, profile, result = {}, options = {}) {
