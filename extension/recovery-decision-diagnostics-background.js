@@ -5,6 +5,7 @@
 
   const base = globalThis.ChatGPTNotifierRecoveryModel;
   if (!base || typeof base !== 'object') return;
+  const incidentObservations = new Map();
 
   const suffix = (value) => {
     const text = String(value || '').trim();
@@ -21,6 +22,7 @@
       actionKind: String(kind || '').slice(0, 32),
       allowed: typeof fields.allowed === 'boolean' ? fields.allowed : undefined,
       decisionState: String(fields.decisionState || '').slice(0, 48),
+      uncertain: typeof fields.uncertain === 'boolean' ? fields.uncertain : undefined,
       conversationSuffix: suffix(observation.conversationId),
       chromeDocumentSuffix: suffix(observation.documentId),
       requestSuffix: suffix(observation.requestId),
@@ -44,11 +46,32 @@
     },
     claimAction(kind, humanRun, incident, profile, observation = {}, options = {}) {
       const result = base.claimAction(kind, humanRun, incident, profile, observation, options);
+      if (result?.allowed === true && incident?.incidentId) {
+        incidentObservations.set(String(incident.incidentId), {
+          conversationId: suffix(observation.conversationId),
+          documentId: suffix(observation.documentId),
+          requestId: suffix(observation.requestId)
+        });
+      }
       record(result?.allowed ? 'action-admitted' : 'action-blocked', kind, result?.reason || '', observation, incident, {
         allowed: result?.allowed === true,
         decisionState: result?.incident?.state || incident?.state || ''
       });
       return result;
+    },
+    finishAction(humanRun, incident, profile, result = {}, options = {}) {
+      const incidentId = String(incident?.incidentId || '');
+      const observation = incidentObservations.get(incidentId) || {};
+      const kind = String(incident?.inFlight?.kind || '');
+      const finished = base.finishAction(humanRun, incident, profile, result, options);
+      const uncertain = result?.uncertain === true;
+      record('action-finished', kind, uncertain ? 'action-interrupted-uncertain' : (result?.state || finished?.incident?.state || ''), observation, incident, {
+        allowed: true,
+        decisionState: finished?.incident?.state || '',
+        uncertain
+      });
+      if (incidentId) incidentObservations.delete(incidentId);
+      return finished;
     },
     postReloadDecision(observation = {}, expected = {}) {
       const result = base.postReloadDecision(observation, expected);
