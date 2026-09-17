@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 5;
+  const RUNTIME_VERSION = 6;
   try { globalThis.__chatgptNotifierMonitorRuntime?.dispose?.(); } catch {}
 
   const abortController = new AbortController();
@@ -244,13 +244,23 @@
     return true;
   }
 
-  function interruptionFromText(text) {
-    return [
-      ['connection-interrupted', /connection interrupted|network error|connection lost|failed to connect/],
-      ['systems-taking-longer', /systems? (?:are )?taking longer|taking longer than expected/],
-      ['timed-out', /message delivery timed out|timed out|request timeout|request timed out/],
-      ['generation-error', /failed to (?:generate|respond)|something went wrong|there was an error/]
-    ].find(([, pattern]) => pattern.test(text)) || null;
+  function classifyApplicationText(text) {
+    const classifier = globalThis.ChatGPTNotifierContinuationPolicy?.classifyApplicationText;
+    if (typeof classifier !== 'function') {
+      return { rateLimited: false, authRequired: false, approvalRequired: false, explicitInterruption: false, interruptionKind: '' };
+    }
+    try {
+      const result = classifier(text) || {};
+      return {
+        rateLimited: result.rateLimited === true,
+        authRequired: result.authRequired === true,
+        approvalRequired: result.approvalRequired === true,
+        explicitInterruption: result.explicitInterruption === true,
+        interruptionKind: String(result.interruptionKind || '')
+      };
+    } catch {
+      return { rateLimited: false, authRequired: false, approvalRequired: false, explicitInterruption: false, interruptionKind: '' };
+    }
   }
 
   function emptyApplicationState(turnState, reason = '') {
@@ -291,8 +301,6 @@
       if (!visibleApplicationNode(node)) continue;
       try { if (node.closest?.(EXCLUDED_ERROR_CONTEXT_SELECTOR)) continue; } catch {}
 
-      // Current-turn ownership is intentionally derived from node.closest(TURN_SELECTOR).
-      // The optional chain below is only defensive for synthetic test doubles.
       let ownerTurn = null;
       try { ownerTurn = node.closest?.(TURN_SELECTOR) || null; } catch {}
       let attribution = '';
@@ -305,18 +313,18 @@
         attribution = 'page-global';
       }
 
-      const text = normalize(node?.innerText || node?.textContent || '').toLowerCase();
+      const text = normalize(node?.innerText || node?.textContent || '');
       if (!text) continue;
-      if (/too many requests|rate limit|try again later/.test(text)) result.rateLimited = true;
-      if (/session expired|please log in|please sign in|authentication required/.test(text)) result.authRequired = true;
-      if (/approval required|requires approval|approve this action/.test(text)) result.approvalRequired = true;
+      const classification = classifyApplicationText(text);
+      result.rateLimited = result.rateLimited || classification.rateLimited;
+      result.authRequired = result.authRequired || classification.authRequired;
+      result.approvalRequired = result.approvalRequired || classification.approvalRequired;
 
-      const interruption = interruptionFromText(text);
-      if (!interruption) continue;
+      if (!classification.explicitInterruption) continue;
       if (attribution === 'page-global' && !freshGlobalRequestError) continue;
       if (!result.explicitInterruption) {
         result.explicitInterruption = true;
-        result.interruptionKind = interruption[0];
+        result.interruptionKind = classification.interruptionKind;
         result.interruptionAttribution = attribution === 'page-global' ? 'current-request-global' : attribution;
       }
     }

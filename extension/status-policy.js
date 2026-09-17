@@ -1,10 +1,10 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 8;
+  const RUNTIME_VERSION = 9;
   if (globalThis.ChatGPTNotifierContinuationPolicy?.runtimeVersion === RUNTIME_VERSION) return;
 
-  const MONITOR_POLICY_VERSION = 6;
+  const MONITOR_POLICY_VERSION = 7;
   const MISSING_FOOTER_GRACE_MS = 30_000;
   const SILENT_IDLE_FIRST_MS = 90_000;
   const SILENT_IDLE_CONFIRM_MS = 30_000;
@@ -28,6 +28,37 @@
   const CURRENT_INTERRUPTION_ATTRIBUTIONS = new Set(['current-turn', 'current-request-global']);
   const EXPLICIT_INTERRUPTION_STICKY_MS = 5 * 60_000;
   const explicitInterruptionMemory = new Map();
+  const APPLICATION_INTERRUPTION_PATTERNS = Object.freeze([
+    ['connection-interrupted', /connection interrupted|stream interrupted|response interrupted|network error|connection lost|disconnected|failed to connect/],
+    ['systems-taking-longer', /our systems? (?:are )?(?:taking longer|busy|experiencing|under (?:heavy )?load|at capacity|temporarily unavailable)|systems? (?:are )?taking longer|taking longer than expected|high demand|service temporarily unavailable/],
+    ['timed-out', /(?:message|response|request|generation)?\s*(?:delivery\s*)?(?:timed out|timeout)|took too long|taking too long/],
+    ['generation-error', /response failed|failed to (?:generate|respond|complete)|error (?:generating|while generating|during generation)|something went wrong|there was an error|unable to generate|could(?: not|n't) generate/]
+  ]);
+
+  function normalizeApplicationText(value) {
+    return String(value || '').replace(/\s+/g, ' ').trim().toLowerCase();
+  }
+
+  function classifyApplicationText(value) {
+    const text = normalizeApplicationText(value);
+    if (!text) {
+      return Object.freeze({
+        rateLimited: false,
+        authRequired: false,
+        approvalRequired: false,
+        explicitInterruption: false,
+        interruptionKind: ''
+      });
+    }
+    const interruption = APPLICATION_INTERRUPTION_PATTERNS.find(([, pattern]) => pattern.test(text)) || null;
+    return Object.freeze({
+      rateLimited: /too many requests|rate limit|try again later/.test(text),
+      authRequired: /session expired|please log in|please sign in|authentication required/.test(text),
+      approvalRequired: /approval required|requires approval|approve this action/.test(text),
+      explicitInterruption: Boolean(interruption),
+      interruptionKind: interruption?.[0] || ''
+    });
+  }
 
   function isAutoContinueStatusCode(value) {
     return AUTO_CONTINUE_STATUS_CODE_SET.has(String(value || ''));
@@ -213,6 +244,7 @@
     runtimeVersion: RUNTIME_VERSION,
     monitorPolicyVersion: MONITOR_POLICY_VERSION,
     autoContinueStatusCodes: AUTO_CONTINUE_STATUS_CODES,
+    classifyApplicationText,
     isAutoContinueStatusCode,
     isCurrentExplicitInterruption,
     withStickyExplicitInterruption,

@@ -218,6 +218,7 @@ test('compatibility repair keeps primary attribution and adds bounded global int
   const background = readText('extension/recovery-live-fix-background.js');
   const content = readText('extension/recovery-live-fix-content.js');
   const monitor = readText('extension/monitor-script.js');
+  const policy = readText('extension/status-policy.js');
   const control = readText('extension/recovery-control-background.js');
 
   assert.doesNotThrow(() => new vm.Script(background));
@@ -235,12 +236,17 @@ test('compatibility repair keeps primary attribution and adds bounded global int
   assert.match(content, /fallbackApplicationState/);
   assert.match(content, /MAX_FALLBACK_NODES/);
   assert.match(content, /current-request-global/);
-  assert.match(content, /our systems\?/);
+  assert.match(content, /classifyApplicationText/);
+  assert.match(content, /freshGlobalRequestError/);
+  assert.match(content, /requestSettledAt/);
   assert.match(content, /EXCLUDED_FALLBACK_SELECTOR/);
   assert.match(monitor, /SEMANTIC_UI_SELECTOR/);
-  assert.match(monitor, /message delivery timed out/);
+  assert.match(monitor, /classifyApplicationText/);
   assert.match(monitor, /current-request-global/);
   assert.match(monitor, /EXCLUDED_ERROR_CONTEXT_SELECTOR/);
+  assert.match(policy, /our systems\?/);
+  assert.match(policy, /response failed/);
+  assert.match(policy, /disconnected/);
   assert.match(content, /CHATGPT_MONITOR_STATE/);
   assert.match(control, /recovery-live-fix-background\.js/);
 });
