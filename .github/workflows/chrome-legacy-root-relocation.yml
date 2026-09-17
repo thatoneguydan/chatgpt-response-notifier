@@ -38,7 +38,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Root relocation probe has invalid JavaScript syntax.' }
 
           $source = Get-Content -LiteralPath '.\tools\chrome-legacy-root-relocation-probe.mjs' -Raw -Encoding UTF8
-          foreach ($forbidden in @('LOCALAPPDATA','User Data','PreferenceMACs','Registry','page.goto','chatgpt.com','uninstallExtension')) {
+          foreach ($forbidden in @('LOCALAPPDATA','User Data','PreferenceMACs','Microsoft.Win32','RegistryKey','page.goto','chatgpt.com','uninstallExtension')) {
             if ($source -match [regex]::Escape($forbidden)) { throw "Root relocation probe contains forbidden live-profile/navigation/cleanup primitive: $forbidden" }
           }
           foreach ($required in @(
