@@ -52,6 +52,15 @@ test('production worker loads the traffic guard before bounded recovery and norm
   assert.ok(trafficIndex < normalIndex);
 });
 
+test('traffic action evidence serializes initial records before request-result patches', () => {
+  const traffic = readText('extension/traffic-safety-background.js');
+  assert.match(traffic, /const actionWriteChains = new Map\(\)/);
+  assert.match(traffic, /function queueActionWrite\(actionId, writer\)/);
+  assert.match(traffic, /queueActionWrite\(actionId, \(\) => putAction\(record\)\)/);
+  assert.match(traffic, /return queueActionWrite\(actionId, \(\) => patchActionNow\(actionId, patch\)\)/);
+  assert.match(traffic, /metaWriteChain = metaWriteChain\.catch\(\(\) => \{\}\)\.then\(\(\) => writeMetaNow\(\)\)/);
+});
+
 test('page monitor treats literal too-many-requests UI as rate-limit evidence', () => {
   const monitor = readText('extension/monitor-script.js');
   assert.match(monitor, /too many requests\|rate limit\|try again later/);
