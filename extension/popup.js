@@ -7,6 +7,7 @@ const testButton = document.getElementById('test');
 const updateButton = document.getElementById('checkUpdate');
 const automationToggle = document.getElementById('automationToggle');
 const monitorDetail = document.getElementById('monitorDetail');
+const recoveryDetail = document.getElementById('recoveryDetail');
 const monitorError = document.getElementById('monitorError');
 const attentionSection = document.getElementById('attentionSection');
 const attentionRoot = document.getElementById('attention');
@@ -154,6 +155,18 @@ function recoveryPauseReason(overview) {
   return '';
 }
 
+function recoveryStatusText(overview) {
+  const summary = globalThis.ChatGPTNotifierRecoveryStatusSummary?.summarize?.(overview, Date.now());
+  if (!summary?.active) return '';
+  const parts = [
+    `Recovery: ${summary.reloads} reload${summary.reloads === 1 ? '' : 's'}, ${summary.continuations} Continue send${summary.continuations === 1 ? '' : 's'}`
+  ];
+  if (summary.nextDueAt > 0) parts.push(summary.nextDuePending ? `next ${formatTime(summary.nextDueAt)}` : 'due now');
+  parts.push(summary.governorHeld ? `governor until ${formatTime(summary.governorAt)}` : 'governor ready');
+  if (summary.blockedReason) parts.push(`blocked — ${humanizeReason(summary.blockedReason)}`);
+  return parts.join(' · ');
+}
+
 function detailForOverview(overview) {
   if (!Number.isInteger(overview?.activeTabId)) return 'Open ChatGPT';
   if (overview.pausedByUser === true) return 'Paused by you';
@@ -199,6 +212,8 @@ function renderAutomation(overview, { confirmed = true } = {}) {
   const state = overview || verifiedAutomation;
   if (!state) {
     monitorDetail.textContent = 'Build automation state unavailable';
+    recoveryDetail.textContent = '';
+    recoveryDetail.hidden = true;
     automationToggle.textContent = 'Monitor';
     automationToggle.disabled = true;
     automationToggle.classList.remove('enabled', 'warning');
@@ -207,7 +222,10 @@ function renderAutomation(overview, { confirmed = true } = {}) {
   }
 
   const mode = buttonMode(state);
+  const recoveryStatus = recoveryStatusText(state);
   monitorDetail.textContent = `${detailForOverview(state)}${confirmed ? '' : ' · state unconfirmed'}`;
+  recoveryDetail.textContent = recoveryStatus;
+  recoveryDetail.hidden = !recoveryStatus;
   automationToggle.textContent = mode.label;
   automationToggle.disabled = automationBusy || mode.disabled;
   automationToggle.classList.toggle('enabled', mode.enabledClass);
