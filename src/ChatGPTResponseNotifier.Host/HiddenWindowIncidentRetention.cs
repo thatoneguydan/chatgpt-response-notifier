@@ -187,15 +187,26 @@ internal sealed class HiddenWindowIncidentRetention
         var verdict = VerdictFor(match.id);
         var status = StringValue(diagnostic, "status", 96) ?? "decision";
         var reason = StringValue(diagnostic, "reason", 160) ?? string.Empty;
+        var decisionState = StringValue(diagnostic, "decisionState", 48) ?? string.Empty;
+        var uncertain = BooleanValue(diagnostic, "uncertain") == true;
         verdict.ActionState = status switch
         {
             "action-admitted" => "admitted",
             "action-blocked" => "blocked",
+            "action-finished" when uncertain => "uncertain",
+            "action-finished" => "finished",
+            "post-reload-decision" when decisionState == "attention" => "held",
             "post-reload-decision" => "post-reload",
             "candidate" => "candidate",
             _ => status
         };
         verdict.ActionReason = reason;
+        if (verdict.FirstMissingBoundary == "none")
+        {
+            if (verdict.ActionState == "blocked") verdict.FirstMissingBoundary = "recovery-veto";
+            else if (verdict.ActionState == "held") verdict.FirstMissingBoundary = "recovery-hold";
+            else if (verdict.ActionState == "uncertain") verdict.FirstMissingBoundary = "recovery-uncertain";
+        }
         verdict.CorrelationConfidence = match.confidence;
         verdict.UpdatedAtUtc = StringValue(diagnostic, "observedAt", 64) ?? DateTimeOffset.UtcNow.ToString("O");
     }
@@ -288,8 +299,11 @@ internal sealed class HiddenWindowIncidentRetention
         var existingCorrelationConfidence = verdict.CorrelationConfidence;
         var existingUpdatedAt = verdict.UpdatedAtUtc;
 
+        var existingFirstMissingBoundary = verdict.FirstMissingBoundary;
         var rawBoundary = StringValue(incident, "firstUnresolvedBoundary", 96) ?? string.Empty;
-        verdict.FirstMissingBoundary = string.IsNullOrWhiteSpace(rawBoundary) ? "none" : rawBoundary;
+        verdict.FirstMissingBoundary = string.IsNullOrWhiteSpace(rawBoundary)
+            ? preserveExternalState && existingFirstMissingBoundary != "none" ? existingFirstMissingBoundary : "none"
+            : rawBoundary;
         verdict.ObservationBoundary = ObservationBoundary(incident, rawBoundary);
 
         if (preserveExternalState)
