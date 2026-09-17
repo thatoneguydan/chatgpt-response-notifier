@@ -150,7 +150,7 @@ function createSchedulerRuntime() {
   });
 
   async function publish(value) {
-    for (const listener of runtimeListeners) listener({ type: 'CHATGPT_MONITOR_STATE', snapshot: value }, { tab: { id: 7 }, documentId: value.documentId }, () => {});
+    await scheduler.observe(value, { tab: { id: 7 }, documentId: value.documentId });
     await flush();
   }
 
@@ -258,12 +258,14 @@ test('worker scheduling is local-only, bounded, persistent, and loaded after bou
   assert.match(source, /tab\.discarded === true \|\| tab\.frozen === true/);
   assert.match(source, /state: 'deferred'/);
   assert.match(source, /CHATGPT_OBSERVATION_SYNTHETIC/);
+  assert.match(source, /CHATGPT_MONITOR_STATE/);
+  assert.match(source, /observe\(message\.snapshot, sender\)/);
   assert.doesNotMatch(source, /\bfetch\s*\(|XMLHttpRequest|backend-api/);
   const boundedIndex = background.indexOf("'bounded-recovery-background.js'");
   const schedulerIndex = background.indexOf("'observation-scheduler-background.js'");
   assert.ok(boundedIndex >= 0 && schedulerIndex > boundedIndex);
-  const firstContent = manifest.content_scripts[0].js;
-  assert.ok(firstContent.indexOf('observation-relay.js') > firstContent.indexOf('monitor-script.js'));
+  const relayEntry = manifest.content_scripts.find((entry) => Array.isArray(entry.js) && entry.js.includes('observation-relay.js'));
+  assert.deepEqual(relayEntry?.js, ['observation-relay.js']);
 });
 
 test('page relay rejects stale worker observations and republishes only exact live identity', async () => {
