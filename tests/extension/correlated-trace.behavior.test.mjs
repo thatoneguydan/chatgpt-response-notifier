@@ -83,8 +83,8 @@ test('recovery diagnostics report only bounded identity suffixes and decision re
   assert.deepEqual(diagnostics.map((item) => item.status), ['candidate', 'action-admitted']);
   assert.equal(diagnostics[0].reason, 'timed-out');
   assert.equal(diagnostics[0].actionKind, 'reload');
-  assert.equal(diagnostics[0].chromeDocumentSuffix, 'full-id');
-  assert.equal(diagnostics[0].requestSuffix, 'full-id');
+  assert.equal(diagnostics[0].chromeDocumentSuffix, observation.documentId.slice(-8));
+  assert.equal(diagnostics[0].requestSuffix, observation.requestId.slice(-8));
   for (const diagnostic of diagnostics) {
     const serialized = JSON.stringify(diagnostic);
     assert.doesNotMatch(serialized, /must-not-leak/);
@@ -152,10 +152,10 @@ test('retained trace joins recovery and delivery onto request incidents with nam
   assert.match(retentionSource, /tab-frozen/);
   assert.match(retentionSource, /page-frozen/);
   assert.match(retentionSource, /delivery-failure/);
-  assert.match(retentionSource, /actionState/);
-  assert.match(retentionSource, /actionReason/);
-  assert.match(retentionSource, /deliveryState/);
-  assert.match(retentionSource, /firstMissingBoundary/);
+  assert.match(retentionSource, /ActionState/);
+  assert.match(retentionSource, /ActionReason/);
+  assert.match(retentionSource, /DeliveryState/);
+  assert.match(retentionSource, /FirstMissingBoundary/);
   assert.match(retentionSource, /uncorrelatedBoundaryEvents/);
   assert.doesNotMatch(retentionSource, /promptText|assistantText|responseText|responseBody/);
 });
