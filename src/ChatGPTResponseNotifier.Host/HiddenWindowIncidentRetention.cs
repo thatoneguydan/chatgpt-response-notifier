@@ -12,6 +12,7 @@ internal sealed class HiddenWindowIncidentRetention
     private readonly Dictionary<string, TraceVerdict> _verdicts = new(StringComparer.Ordinal);
     private readonly HashSet<string> _pageBridgeDocuments = new(StringComparer.Ordinal);
     private readonly HashSet<string> _mainObserverDocuments = new(StringComparer.Ordinal);
+    private readonly HashSet<int> _attachmentFailureTabs = new();
     private readonly Dictionary<string, string> _deliveryCorrelationIndex = new(StringComparer.Ordinal);
     private int _hostEvictions;
     private int _uncorrelatedBoundaryEvents;
@@ -50,7 +51,7 @@ internal sealed class HiddenWindowIncidentRetention
                     _incidents.RemoveAt(index);
             }
             _incidents.Add(incident.Clone());
-            RefreshVerdict(incident);
+            RefreshVerdict(incident, preserveExternalState: true);
             Trim();
             return true;
         }
@@ -76,6 +77,7 @@ internal sealed class HiddenWindowIncidentRetention
         _verdicts.Clear();
         _pageBridgeDocuments.Clear();
         _mainObserverDocuments.Clear();
+        _attachmentFailureTabs.Clear();
         _deliveryCorrelationIndex.Clear();
         _hostEvictions = 0;
         _uncorrelatedBoundaryEvents = 0;
@@ -114,7 +116,11 @@ internal sealed class HiddenWindowIncidentRetention
                     _deliveryCorrelationIndex[verdict.DeliveryCorrelationSuffix] = id;
             }
         }
-        foreach (var incident in _incidents) RefreshVerdict(incident, preserveExternalState: true);
+        foreach (var incident in _incidents)
+        {
+            var id = StringValue(incident, "incidentId", 80);
+            if (!string.IsNullOrWhiteSpace(id) && !_verdicts.ContainsKey(id)) RefreshVerdict(incident);
+        }
         Trim();
     }
 
@@ -152,6 +158,13 @@ internal sealed class HiddenWindowIncidentRetention
 
     private void TrackAttachment(string status, JsonElement diagnostic)
     {
+        if (status == "existing-tab-diagnostics-attach-error")
+        {
+            var tabId = IntegerValue(diagnostic, "tabId");
+            if (tabId.HasValue && tabId.Value >= 0 && tabId.Value <= int.MaxValue) _attachmentFailureTabs.Add((int)tabId.Value);
+            return;
+        }
+
         var documentSuffix = StringValue(diagnostic, "chromeDocumentSuffix", 8) ?? string.Empty;
         if (string.IsNullOrWhiteSpace(documentSuffix)) return;
         if (status == "page-bridge-installed") _pageBridgeDocuments.Add(documentSuffix);
@@ -294,11 +307,9 @@ internal sealed class HiddenWindowIncidentRetention
     private string ObservationBoundary(JsonElement incident, string rawBoundary)
     {
         var documentSuffix = StringValue(incident, "chromeDocumentSuffix", 8) ?? string.Empty;
-        if (rawBoundary == "page-query-error" && !_pageBridgeDocuments.Contains(documentSuffix))
-            return "page-diagnostic-attachment-missing";
-        if (rawBoundary == "stream-final-not-observed" && !_mainObserverDocuments.Contains(documentSuffix))
-            return "main-stream-observer-missing";
-        if (rawBoundary == "page-query-deadline") return "page-query-deadline";
+        var tabId = IntegerValue(incident, "tabId");
+        var pageReplyObserved = false;
+        var streamObserved = false;
 
         if (incident.TryGetProperty("transitions", out var transitions) && transitions.ValueKind == JsonValueKind.Array)
         {
@@ -308,12 +319,26 @@ internal sealed class HiddenWindowIncidentRetention
                 if (BooleanValue(transition, "tabFrozen") == true) return "tab-frozen";
                 if (BooleanValue(transition, "pageFrozen") == true) return "page-frozen";
                 var stage = StringValue(transition, "stage", 64) ?? string.Empty;
+                if (stage == "page-query-replied" || stage.StartsWith("page-", StringComparison.Ordinal) && stage is not "page-query-error" and not "page-query-deadline")
+                    pageReplyObserved = true;
+                if (stage.StartsWith("stream-", StringComparison.Ordinal)) streamObserved = true;
                 if (stage == "page-query-deadline") return "page-query-deadline";
-                if (stage == "page-query-error") return _pageBridgeDocuments.Contains(documentSuffix)
-                    ? "page-query-error"
-                    : "page-diagnostic-attachment-missing";
             }
         }
+
+        if (rawBoundary == "page-query-error")
+        {
+            if (pageReplyObserved || _pageBridgeDocuments.Contains(documentSuffix)) return "page-query-error";
+            if (tabId.HasValue && tabId.Value >= 0 && tabId.Value <= int.MaxValue && _attachmentFailureTabs.Contains((int)tabId.Value))
+                return "page-diagnostic-attachment-failed";
+            return "page-runtime-or-attachment-unavailable";
+        }
+        if (rawBoundary == "stream-final-not-observed")
+        {
+            if (streamObserved || _mainObserverDocuments.Contains(documentSuffix)) return "stream-final-not-observed";
+            return "main-stream-observer-unconfirmed";
+        }
+        if (rawBoundary == "page-query-deadline") return "page-query-deadline";
         return string.IsNullOrWhiteSpace(rawBoundary) ? "none" : rawBoundary;
     }
 
