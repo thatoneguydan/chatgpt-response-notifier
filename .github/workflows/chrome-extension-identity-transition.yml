@@ -58,7 +58,8 @@ jobs:
             'userDataDir: profilePath',
             'fs.cpSync(extensionSource, extensionPath',
             'delete unkeyedManifest.key',
-            'writeJson(manifestPath, keyedManifest)',
+            'writeJson(experiment.manifestPath, keyedManifest)',
+            'chrome.runtime.reload()',
             'liveChromeProfileAccessed: false',
             'liveChromeRegistrationMutated: false'
           )) {
@@ -123,7 +124,7 @@ jobs:
           }
           "PACKAGE_ROOT=$packageRoot" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Reproduce identity transition in disposable profile
+      - name: Reproduce identity transition in disposable profiles
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -142,28 +143,38 @@ jobs:
 
           $raw = Get-Content -LiteralPath $output -Raw -Encoding UTF8
           $evidence = $raw | ConvertFrom-Json -ErrorAction Stop
-          if ([int]$evidence.schemaVersion -ne 1) { throw 'Unexpected identity-transition evidence schema.' }
-          if ([string]$evidence.capability -cne 'chrome-extension-identity-transition-disposable-v1') { throw 'Unexpected identity-transition evidence capability.' }
-          if ($evidence.disposableProfile -ne $true) { throw 'Identity transition did not use a disposable profile.' }
+          if ([int]$evidence.schemaVersion -ne 2) { throw 'Unexpected identity-transition evidence schema.' }
+          if ([string]$evidence.capability -cne 'chrome-extension-identity-transition-disposable-v2') { throw 'Unexpected identity-transition evidence capability.' }
+          if ($evidence.disposableProfile -ne $true) { throw 'Identity transition did not use disposable profiles.' }
           if ($evidence.liveChromeProfileAccessed -ne $false -or $evidence.liveChromeRegistrationMutated -ne $false) { throw 'Identity transition reported live Chrome access or mutation.' }
           if ($evidence.sourceExtensionMutated -ne $false -or $evidence.sourceManifestHashPreserved -ne $true) { throw 'Identity transition mutated canonical extension source.' }
           if ($evidence.chatGptNavigationPerformed -ne $false) { throw 'Identity transition navigated to ChatGPT.' }
           if ([string]$evidence.stableId -cne 'lciedmoiiapbgemklkpoadimhffaaaah') { throw 'Identity transition stable ID mismatch.' }
-          if ($evidence.legacyIdDifferentFromStable -ne $true) { throw 'Unkeyed first load did not produce a distinct legacy ID.' }
+          if ($evidence.cleanRestartControl.legacyIdDifferentFromStable -ne $true) { throw 'Clean control did not produce a distinct legacy ID.' }
+          if ([string]::IsNullOrWhiteSpace([string]$evidence.liveRuntimeReload.legacyId)) { throw 'Runtime reload experiment did not produce a legacy ID.' }
           foreach ($forbidden in @('C:\Users\dan','User Data','PreferenceMACs','cookie','history','sessionToken','accessToken','responseBody','responseText','conversationUrl')) {
             if ($raw -match [regex]::Escape($forbidden)) { throw "Identity-transition evidence leaked forbidden detail: $forbidden" }
           }
 
-          Write-Host ("IDENTITY_TRANSITION_RESULT browser={0}; legacy={1}; stable={2}; stableInstall={3}; legacyPresent={4}; legacyDisableReasons={5}; stablePresent={6}; sameRootResidue={7}; reproducedObservedShape={8}" -f `
-            $evidence.browserVersion,
-            $evidence.legacyId,
-            $evidence.stableId,
-            $evidence.phaseTwo.installId,
-            $evidence.phaseTwo.legacyRegistration.present,
-            (@($evidence.phaseTwo.legacyRegistration.disableReasonCodes) -join ','),
-            $evidence.phaseTwo.stableRegistration.present,
-            $evidence.sameRootResidue,
-            $evidence.reproducedObservedLegacyShape)
+          Write-Host ("IDENTITY_TRANSITION_CONTROL browser={0}; legacy={1}; stableInstall={2}; legacyPresent={3}; legacyDisableReasons={4}; stablePresent={5}; sameRootResidue={6}; reproducedObservedShape={7}" -f `
+            $evidence.cleanRestartControl.browserVersion,
+            $evidence.cleanRestartControl.legacyId,
+            $evidence.cleanRestartControl.stableInstallId,
+            $evidence.cleanRestartControl.phaseTwo.legacyRegistration.present,
+            (@($evidence.cleanRestartControl.phaseTwo.legacyRegistration.disableReasonCodes) -join ','),
+            $evidence.cleanRestartControl.phaseTwo.stableRegistration.present,
+            $evidence.cleanRestartControl.sameRootResidue,
+            $evidence.cleanRestartControl.reproducedObservedLegacyShape)
+          Write-Host ("IDENTITY_TRANSITION_RELOAD browser={0}; legacy={1}; stableRuntime={2}; invocation={3}; legacyPresent={4}; legacyDisableReasons={5}; stablePresent={6}; sameRootResidue={7}; reproducedObservedShape={8}" -f `
+            $evidence.liveRuntimeReload.browserVersion,
+            $evidence.liveRuntimeReload.legacyId,
+            $evidence.liveRuntimeReload.stableIdObservedInRuntime,
+            $evidence.liveRuntimeReload.reloadInvocation,
+            $evidence.liveRuntimeReload.legacyRegistration.present,
+            (@($evidence.liveRuntimeReload.legacyRegistration.disableReasonCodes) -join ','),
+            $evidence.liveRuntimeReload.stableRegistration.present,
+            $evidence.liveRuntimeReload.sameRootResidue,
+            $evidence.liveRuntimeReload.reproducedObservedLegacyShape)
 
       - name: Upload sanitized identity-transition evidence
         uses: actions/upload-artifact@v4
