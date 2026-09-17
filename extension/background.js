@@ -48,6 +48,7 @@ try {
     'monitor-background.js',
     'monitor-query-compat-background.js',
     'recovery-control-background.js',
+    'traffic-safety-background.js',
     'bounded-recovery-background.js',
     'bounded-recovery-attachment-background.js',
     'quick-prompts-attachment-background.js',

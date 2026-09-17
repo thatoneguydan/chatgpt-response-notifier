@@ -3,11 +3,18 @@ import path from 'node:path';
 import puppeteer from 'puppeteer';
 
 const EXPECTED_ID = 'lciedmoiiapbgemklkpoadimhffaaaah';
-const EXPECTED_VERSION = '0.9.28';
 
 const extensionPath = path.resolve(process.argv[2] ?? '');
 const profilePath = path.resolve(process.argv[3] ?? '');
 const browserExecutablePath = path.resolve(process.argv[4] ?? '');
+const expectedVersion = (() => {
+  try {
+    const manifest = JSON.parse(fs.readFileSync(path.join(extensionPath, 'manifest.json'), 'utf8'));
+    return String(manifest.version || '').trim();
+  } catch {
+    return '';
+  }
+})();
 
 function fail(message) {
   console.error(`PROBE_FAILURE ${message}`);
@@ -25,6 +32,8 @@ function summarizeExtensions(extensionMap) {
 
 if (!extensionPath || !fs.existsSync(path.join(extensionPath, 'manifest.json'))) {
   fail('extension-manifest-missing');
+} else if (!expectedVersion) {
+  fail('extension-version-missing');
 } else if (!profilePath) {
   fail('profile-path-missing');
 } else if (!browserExecutablePath || !fs.existsSync(browserExecutablePath)) {
@@ -65,7 +74,7 @@ if (!extensionPath || !fs.existsSync(path.join(extensionPath, 'manifest.json')))
     if (!installed.enabled) {
       throw new Error('extension-disabled');
     }
-    if (installed.version !== EXPECTED_VERSION) {
+    if (installed.version !== expectedVersion) {
       throw new Error(`version-mismatch:${installed.version}`);
     }
 
