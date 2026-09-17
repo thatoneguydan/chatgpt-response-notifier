@@ -101,7 +101,7 @@
       transaction.objectStore(storeName).delete(key);
       transaction.oncomplete = resolve;
       transaction.onerror = () => reject(transaction.error || new Error(`Could not delete ${storeName}.`));
-      transaction.onabort = () => reject(transaction.error || new Error(`${storeName} delete was aborted.`));
+      transaction.onabort = () => reject(transaction.error || new Error(`${storeName} write was aborted.`));
     });
   }
 
@@ -249,7 +249,10 @@
       authRequired: snapshot.authRequired === true,
       approvalRequired: snapshot.approvalRequired === true,
       explicitInterruption: snapshot.explicitInterruption === true,
-      interruptionKind: String(snapshot.interruptionKind || '')
+      interruptionKind: String(snapshot.interruptionKind || ''),
+      interruptionAttribution: String(snapshot.interruptionAttribution || ''),
+      applicationStateIdentityMatched: snapshot.applicationStateIdentityMatched !== false,
+      applicationStateReason: String(snapshot.applicationStateReason || '')
     };
   }
 
@@ -749,7 +752,7 @@
   }
 
   globalThis.__chatgptNotifierMonitorBackground = Object.freeze({
-    version: 2,
+    version: 3,
     automationSchemaVersion: AUTOMATION_SCHEMA_VERSION,
     getEnrollment,
     setEnrollment,
