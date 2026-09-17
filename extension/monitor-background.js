@@ -101,7 +101,7 @@
       transaction.objectStore(storeName).delete(key);
       transaction.oncomplete = resolve;
       transaction.onerror = () => reject(transaction.error || new Error(`Could not delete ${storeName}.`));
-      transaction.onabort = () => reject(transaction.error || new Error(`${storeName} write was aborted.`));
+      transaction.onabort = () => reject(transaction.error || new Error(`${storeName} delete was aborted.`));
     });
   }
 
