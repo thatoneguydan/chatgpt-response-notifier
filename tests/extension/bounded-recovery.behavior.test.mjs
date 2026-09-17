@@ -204,14 +204,14 @@ test('page recovery command distinguishes explicit interruption from silent stop
 test('post-refresh interruption fallback persists exact stalled response identity across reloads', () => {
   const content = readText('extension/recovery-live-fix-content.js');
   const background = readText('extension/recovery-live-fix-background.js');
-  assert.match(content, /const RUNTIME_VERSION = 4/);
+  assert.match(content, /const RUNTIME_VERSION = 5/);
   assert.match(content, /sessionStorage/);
   assert.match(content, /STALLED_RESPONSE_KEY/);
   assert.match(content, /stalledResponseAfterReload/);
   assert.match(content, /post-reload-response-unchanged/);
   assert.match(content, /assistantRevision/);
   assert.match(content, /prior\.documentId/);
-  assert.match(background, /const RUNTIME_VERSION = 4/);
+  assert.match(background, /const RUNTIME_VERSION = 5/);
 });
 
 test('normal coded continuation uses the same timestamp shape instead of plain post-refresh text', () => {
