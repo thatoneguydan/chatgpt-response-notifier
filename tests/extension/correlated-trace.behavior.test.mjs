@@ -139,19 +139,23 @@ test('bootstrap installs decision diagnostics without changing recovery authorit
   assert.match(recoveryDiagnosticsSource, /return base\.claimAction/);
 });
 
-test('retained trace joins recovery and delivery onto request incidents with named boundary categories', () => {
+test('retained trace joins recovery and delivery onto request incidents with evidence-qualified boundary categories', () => {
   assert.match(retentionSource, /source == "recovery-decision"/);
   assert.match(retentionSource, /source == "delivery-pipeline"/);
   assert.match(retentionSource, /request-suffix-exact/);
   assert.match(retentionSource, /delivery-correlation/);
   assert.match(retentionSource, /document-time-nearest/);
-  assert.match(retentionSource, /page-diagnostic-attachment-missing/);
-  assert.match(retentionSource, /main-stream-observer-missing/);
+  assert.match(retentionSource, /page-diagnostic-attachment-failed/);
+  assert.match(retentionSource, /page-runtime-or-attachment-unavailable/);
+  assert.match(retentionSource, /main-stream-observer-unconfirmed/);
+  assert.match(retentionSource, /stream-final-not-observed/);
   assert.match(retentionSource, /page-query-deadline/);
   assert.match(retentionSource, /tab-discarded/);
   assert.match(retentionSource, /tab-frozen/);
   assert.match(retentionSource, /page-frozen/);
   assert.match(retentionSource, /delivery-failure/);
+  assert.match(retentionSource, /existing-tab-diagnostics-attach-error/);
+  assert.match(retentionSource, /!_verdicts\.ContainsKey\(id\)/, 'persisted verdicts must survive helper restart without being re-inferred from empty current-process attachment sets');
   assert.match(retentionSource, /ActionState/);
   assert.match(retentionSource, /ActionReason/);
   assert.match(retentionSource, /DeliveryState/);
