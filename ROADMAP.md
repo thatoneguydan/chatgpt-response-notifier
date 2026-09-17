@@ -14,7 +14,7 @@ PR #73 reproduced the exact residue on installed Chrome 153.0.8010.48: a normal 
 
 PR #74 proved the smallest repair in a disposable profile on the same Chrome build: Chrome-native uninstall of only the stale ID removes it while preserving the intended fixed-ID registration, same root and live runtime. PR #72 separately repaired complete test discovery: validate/release now enumerate all 19 test files and pass 256/256. No real-profile cleanup has yet been performed.
 
-Roadmap change: retain **5 workstreams**. Workstream 3 retains **1 stage / 4 steps**. Step 1 diagnosis and Step 2 test-discovery/repair-mechanism proof are complete; the immediate live boundary is the explicitly approved one-time stale-registration cleanup, followed by normal restart and reboot acceptance. The existing other workstreams retain their reliability gates.
+Roadmap change: retain **5 workstreams**. Workstream 3 retains **1 stage / 4 steps**. Step 1 diagnosis and Step 2 test-discovery/repair-mechanism proof are complete; the immediate live boundary is the one-time stale-registration cleanup, followed by normal restart and reboot acceptance. The existing other workstreams retain their reliability gates.
 
 | Priority | Workstream | Immediate outcome |
 | --- | --- | --- |
@@ -31,7 +31,7 @@ Stage 1/1 — Restore and prove installation persistence. Owner: #443. Each step
 | Step | Gate 1/1 | Tasks |
 | --- | --- | --- |
 | Step 1/4 — Compare original, intended and legacy fork | Same-profile comparison explains the first effective-loading divergence or precisely identifies the missing observation | **Complete.** Task 1/3: consumed PR #70 evidence. Task 2/3: identified legacy same-root ID mismatch + exact `DISABLE_RELOAD` reason and Chromium startup path invalidation. Task 3/3: PR #73 reproduced the identity-changing reload mechanism on installed Chrome 153.0.8010.48. |
-| Step 2/4 — Repair the evidenced boundary | Exact candidate preserves identity/root/rollback and complete regression coverage | Task 1/3: **complete** via PR #72 — validate/release discover 19/19 files and pass 256/256. Task 2/3: **disposable proof complete** via PR #74; next apply Chrome-native uninstall to only `pbbmmjcakamllfpcglbhcpmbpegapgih` after explicit operator approval. Task 3/3: collect before/after registration + runtime receipts and confirm original control/intended ID/root remain unchanged. |
+| Step 2/4 — Repair the evidenced boundary | Exact candidate preserves identity/root/rollback and complete regression coverage | Task 1/3: **complete** via PR #72 — validate/release discover 19/19 files and pass 256/256. Task 2/3: **disposable proof complete** via PR #74; next remove only `pbbmmjcakamllfpcglbhcpmbpegapgih` through the narrowest Chrome-supported path. Use an interactive Chrome extension-management action only if Chrome exposes no safe noninteractive project-owned route. Task 3/3: collect before/after registration + runtime receipts and confirm original control/intended ID/root remain unchanged. |
 | Step 3/4 — Prove normal restart durability | Clean Chrome exit/reopen and Windows reboot/login retain the intended loaded extension and helper connection | After cleanup, perform clean Chrome exit/reopen first, then Windows reboot/login. Capture pre/post intended-ID/root/runtime evidence; no Load unpacked/re-registration may manufacture the pass. |
 | Step 4/4 — Release the acceptance dependency | Installed version/source, extension runtime, helper bridge and test readiness agree | Route #442 and the background/recovery matrix to that exact surviving runtime. Helper version alone is insufficient. |
 
@@ -92,4 +92,4 @@ v0.9.28's fallback already tries the existing tab then opens the same URL in a n
 - Complete-test gate: PR #72 made validation/release share deterministic discovery. Current exact-head validation discovers **19/19** extension test files and passes **256/256**. The earlier 11-file omission is historical and closed.
 - Registration evidence: PR #73 is the identity-changing reload reproduction; PR #74 is the isolated selective-cleanup proof. Neither changed the real Chrome profile.
 
-Implementation proceeds from this roadmap after reconciling owners/heads. Root-cause reproduction and disposable repair proof do not themselves authorize the live-profile mutation; #443 owns that explicit operator gate.
+Implementation proceeds from this roadmap after reconciling owners/heads. Root-cause reproduction and disposable repair proof define the exact bounded live mutation; #443 owns its execution and the transition to any genuine operator-only Chrome boundary.
