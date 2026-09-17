@@ -4,17 +4,21 @@ Program: **ChatGPT Response Notifier**. Runtime owners: [DevelopmentInfrastructu
 
 ## Immediate priority — 2026-09-16
 
-**Restore a durably loaded runtime, then complete recovery and click reliability before additional features.** Source-only recovery work can proceed in a separately claimed scope while #443 continues. Do not interrupt its helper/deployment lane. Physical acceptance requires a loaded extension.
+**Apply the evidenced one-time registration cleanup, prove restart/reboot durability, then complete recovery and click reliability before additional features.** Source-only recovery work can proceed in a separately claimed scope while #443 continues. Do not interrupt its helper/deployment lane. Physical acceptance requires a loaded extension.
 
-The original unpacked notifier survives reboot on Glass. Chrome Web Store migration is **paused**; [Store preparation](docs/CHROME-WEB-STORE-DURABLE-DISTRIBUTION.md) is contingency. Earlier instructions making Store registration/payment the immediate step are superseded.
+The original unpacked notifier survives reboot on Glass. Chrome Web Store migration is **paused**; [Store preparation](docs/CHROME-WEB-STORE-DURABLE-DISTRIBUTION.md) is contingency. Earlier instructions making Store registration/payment the immediate step remain superseded.
 
-Current source is v0.9.29. PR #70 [run 35135642109](https://github.com/thatoneguydan/chatgpt-response-notifier/actions/runs/35135642109) verified helper restart and a three-record registration comparison, not extension restoration/reboot durability. Distinguish original, intended fork and legacy fork before interpreting the comparison.
+Current source is v0.9.29. The reboot failure is now explained by a stale same-root legacy registration rather than by the unpacked architecture generally. PR #70 distinguished original control `omnikbipejdflnfjkppfdkkdhglepbam`, intended fork `lciedmoiiapbgemklkpoadimhffaaaah`, and legacy fork `pbbmmjcakamllfpcglbhcpmbpegapgih`. The legacy record points at the intended fork's stable root, no longer matches the current manifest-derived ID, and carries disable reason 4 (`DISABLE_RELOAD`).
 
-Roadmap change: retain **5 workstreams**. Workstream 3 retains **1 stage / 4 steps**, replacing the Store-first sequence with comparison, evidenced repair, restart proof and behavior-acceptance readiness. The existing other workstreams now have explicit reliability gates. No runtime repair is claimed by this documentation update.
+PR #73 reproduced the exact residue on installed Chrome 153.0.8010.48: a normal clean close/reinstall identity transition removes the old ID, while an identity change during live `chrome.runtime.reload()` leaves the old same-root ID disabled with `DISABLE_RELOAD` and loads the new fixed-key ID. Chromium's unpacked startup loader re-reads manifests and invalidates a path when a persisted registration ID does not match the manifest-derived ID; the stale record can therefore make startup skip the valid intended registration at the shared path.
+
+PR #74 proved the smallest repair in a disposable profile on the same Chrome build: Chrome-native uninstall of only the stale ID removes it while preserving the intended fixed-ID registration, same root and live runtime. PR #72 separately repaired complete test discovery: validate/release now enumerate all 19 test files and pass 256/256. No real-profile cleanup has yet been performed.
+
+Roadmap change: retain **5 workstreams**. Workstream 3 retains **1 stage / 4 steps**. Step 1 diagnosis and Step 2 test-discovery/repair-mechanism proof are complete; the immediate live boundary is the explicitly approved one-time stale-registration cleanup, followed by normal restart and reboot acceptance. The existing other workstreams retain their reliability gates.
 
 | Priority | Workstream | Immediate outcome |
 | --- | --- | --- |
-| 1 | Workstream 3/5 — Installation, Release, and Acceptance | Explain original/fork divergence; restore persistence; complete test discovery before the next behavior release. |
+| 1 | Workstream 3/5 — Installation, Release, and Acceptance | Remove only the evidenced stale legacy registration; prove persistence across Chrome restart and Windows reboot. |
 | 2 | Workstream 5/5 — Status Contract and Bounded Recovery | One request-owned error classifier with complete phrase/location coverage and safety vetoes. |
 | 3 | Workstream 4/5 — Reliable Background Automation | Recovery survives progress text, hidden-page delays and actual reload without losing incident identity. |
 | 4 | Workstream 1/5 — Foundation and Conversation Identity | Separately prove observation, notification and recovery across hidden-page states. |
@@ -26,12 +30,12 @@ Stage 1/1 — Restore and prove installation persistence. Owner: #443. Each step
 
 | Step | Gate 1/1 | Tasks |
 | --- | --- | --- |
-| Step 1/4 — Compare original, intended and legacy fork | Same-profile comparison explains the first effective-loading divergence or precisely identifies the missing observation | Task 1/3: consume PR #70 evidence already available. Task 2/3: compare bounded effective loading/provenance and exact disable reasons for the three identities. Task 3/3: checkpoint the evidence-selected repair or one discriminating experiment. |
-| Step 2/4 — Repair the evidenced boundary | Exact candidate preserves identity/root/rollback and complete regression coverage | Task 1/3: make validate/release run the same complete intended test discovery; 11 of 19 files were omitted at review. Task 2/3: implement only the proven repair through the owning lane. Task 3/3: validate and attach same-source installation/loading receipts. |
-| Step 3/4 — Prove normal restart durability | Clean Chrome exit/reopen and Windows reboot/login retain the intended loaded extension and helper connection | Prepare pre/post identity, file and effective-runtime evidence; keep the original control intact. No re-registration may manufacture the pass. |
-| Step 4/4 — Release the acceptance dependency | Installed version/source, extension runtime, helper bridge and test readiness agree | Route #442 and the background/recovery matrix to that exact candidate. Helper version alone is insufficient. |
+| Step 1/4 — Compare original, intended and legacy fork | Same-profile comparison explains the first effective-loading divergence or precisely identifies the missing observation | **Complete.** Task 1/3: consumed PR #70 evidence. Task 2/3: identified legacy same-root ID mismatch + exact `DISABLE_RELOAD` reason and Chromium startup path invalidation. Task 3/3: PR #73 reproduced the identity-changing reload mechanism on installed Chrome 153.0.8010.48. |
+| Step 2/4 — Repair the evidenced boundary | Exact candidate preserves identity/root/rollback and complete regression coverage | Task 1/3: **complete** via PR #72 — validate/release discover 19/19 files and pass 256/256. Task 2/3: **disposable proof complete** via PR #74; next apply Chrome-native uninstall to only `pbbmmjcakamllfpcglbhcpmbpegapgih` after explicit operator approval. Task 3/3: collect before/after registration + runtime receipts and confirm original control/intended ID/root remain unchanged. |
+| Step 3/4 — Prove normal restart durability | Clean Chrome exit/reopen and Windows reboot/login retain the intended loaded extension and helper connection | After cleanup, perform clean Chrome exit/reopen first, then Windows reboot/login. Capture pre/post intended-ID/root/runtime evidence; no Load unpacked/re-registration may manufacture the pass. |
+| Step 4/4 — Release the acceptance dependency | Installed version/source, extension runtime, helper bridge and test readiness agree | Route #442 and the background/recovery matrix to that exact surviving runtime. Helper version alone is insufficient. |
 
-Next implementation position: **ChatGPT Response Notifier → Workstream 3/5 → Stage 1/1 → Step 1/4 → Gate 1/1 → Task 2/3**, subject to current #443/#70 state. Existing Task 1 evidence should be reused. Do not speculatively remove the manifest key or delete a legacy registration. Store tooling from PR #67 remains contingency, not permission to migrate identity or publish now.
+Next implementation position: **ChatGPT Response Notifier → Workstream 3/5 → Stage 1/1 → Step 2/4 → Gate 1/1 → Task 2/3: one-time live cleanup of only legacy ID `pbbmmjcakamllfpcglbhcpmbpegapgih`, then Task 3/3 receipts.** Preserve original control `omnikbipejdflnfjkppfdkkdhglepbam`, intended fork `lciedmoiiapbgemklkpoadimhffaaaah`, stable root/key and rollback. Do not directly edit Chrome Preferences/Secure Preferences, remove the original control, remove/re-register the intended fork, or use recurring CDP `loadUnpacked`. Store tooling remains contingency, not permission to migrate identity or publish now.
 
 ## Workstream 5/5 — Status Contract and Bounded Recovery
 
@@ -85,6 +89,7 @@ v0.9.28's fallback already tries the existing tab then opens the same URL in a n
 - Initial silent-stop baseline: at least 90 seconds plus two observations 30 seconds apart. Long-thinking diagnostic: 15 minutes without forced retry. Missing-footer grace: 30 seconds; format-repair prompts: 0.
 - Reset budgets only for a genuinely new trusted human request or explicit Resume.
 - `docs/HIDDEN-WINDOW-*` retains historical evidence. #443 and PR #66 document the clone-control flaw; never reuse the real profile's external integrity-store basename for a clone.
-- Review verification: all 19 existing extension test files passed locally, **256/256**. This does not replace Windows installation/physical acceptance; normal CI omitted 11 files.
+- Complete-test gate: PR #72 made validation/release share deterministic discovery. Current exact-head validation discovers **19/19** extension test files and passes **256/256**. The earlier 11-file omission is historical and closed.
+- Registration evidence: PR #73 is the identity-changing reload reproduction; PR #74 is the isolated selective-cleanup proof. Neither changed the real Chrome profile.
 
-Implementation proceeds from the [handoff](docs/INDEPENDENT-FAILURE-REVIEW-2026-09-16.md) after reconciling owners/heads. This review's documentation publication does not claim that runtime repair is complete.
+Implementation proceeds from this roadmap after reconciling owners/heads. Root-cause reproduction and disposable repair proof do not themselves authorize the live-profile mutation; #443 owns that explicit operator gate.
