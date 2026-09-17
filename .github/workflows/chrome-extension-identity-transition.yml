@@ -1,0 +1,183 @@
+name: Reproduce unpacked extension identity transition
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/chrome-extension-identity-transition-probe.mjs'
+      - '.github/workflows/chrome-extension-identity-transition.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  reproduce:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.head.repo.owner.login == github.repository_owner) }}
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 10
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact source and isolation guards
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) {
+            throw "Exact-source checkout mismatch: expected $env:SOURCE_SHA, got $actual."
+          }
+
+          node --check .\tools\chrome-extension-identity-transition-probe.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Identity transition probe has invalid JavaScript syntax.' }
+
+          $source = Get-Content -LiteralPath '.\tools\chrome-extension-identity-transition-probe.mjs' -Raw -Encoding UTF8
+          foreach ($forbidden in @(
+            'LOCALAPPDATA',
+            'User Data',
+            'PreferenceMACs',
+            'Registry',
+            'Extensions.loadUnpacked',
+            'page.goto',
+            'chatgpt.com'
+          )) {
+            if ($source -match [regex]::Escape($forbidden)) {
+              throw "Identity transition probe contains forbidden live-profile/navigation primitive: $forbidden"
+            }
+          }
+          foreach ($required in @(
+            'userDataDir: profilePath',
+            'fs.cpSync(extensionSource, extensionPath',
+            'delete unkeyedManifest.key',
+            'writeJson(manifestPath, keyedManifest)',
+            'liveChromeProfileAccessed: false',
+            'liveChromeRegistrationMutated: false'
+          )) {
+            if ($source -notmatch [regex]::Escape($required)) {
+              throw "Identity transition probe is missing isolation guard: $required"
+            }
+          }
+
+      - name: Resolve installed system Chrome
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = [System.Collections.Generic.List[string]]::new()
+          if ($env:ProgramFiles) {
+            $candidates.Add((Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe'))
+          }
+          if (${env:ProgramFiles(x86)}) {
+            $candidates.Add((Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe'))
+          }
+          $chrome = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (-not $chrome) {
+            foreach ($registryPath in @(
+              'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe',
+              'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe'
+            )) {
+              try {
+                $key = Get-Item -LiteralPath $registryPath -ErrorAction Stop
+                $candidate = $key.GetValue('')
+                if ($candidate -and (Test-Path -LiteralPath $candidate -PathType Leaf)) {
+                  $chrome = [string]$candidate
+                  break
+                }
+              } catch { }
+            }
+          }
+          if (-not $chrome) { throw 'Installed system Chrome executable was not found.' }
+          $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($chrome).ProductVersion
+          if ([string]::IsNullOrWhiteSpace($version)) { throw 'Installed Chrome product version is unavailable.' }
+          $major = [int]($version.Split('.')[0])
+          if ($major -ne 153) { throw "Expected Chrome major 153 for the current persistence incident, observed $major." }
+          Write-Host "Installed Chrome product version: $version"
+          "SYSTEM_CHROME_EXE=$chrome" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install isolated Puppeteer package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $packageRoot = Join-Path $env:RUNNER_TEMP "notifier-identity-transition-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          Remove-Item -LiteralPath $packageRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+          Copy-Item -LiteralPath '.\tools\chrome-extension-identity-transition-probe.mjs' -Destination (Join-Path $packageRoot 'probe.mjs')
+          Push-Location $packageRoot
+          try {
+            npm init -y | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'npm init failed.' }
+            $env:PUPPETEER_SKIP_DOWNLOAD = 'true'
+            npm install puppeteer@25.11.0 --no-fund --no-audit
+            if ($LASTEXITCODE -ne 0) { throw 'Puppeteer install failed.' }
+          }
+          finally {
+            Pop-Location
+          }
+          "PACKAGE_ROOT=$packageRoot" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Reproduce identity transition in disposable profile
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $extension = (Resolve-Path '.\extension').Path
+          $experimentRoot = Join-Path $env:PACKAGE_ROOT 'experiment'
+          $output = Join-Path $env:RUNNER_TEMP 'chrome-extension-identity-transition-evidence.json'
+          Remove-Item -LiteralPath $output -Force -ErrorAction SilentlyContinue
+          Push-Location $env:PACKAGE_ROOT
+          try {
+            node .\probe.mjs $extension $experimentRoot $env:SYSTEM_CHROME_EXE $output
+            if ($LASTEXITCODE -ne 0) { throw "Identity transition probe failed with exit code $LASTEXITCODE." }
+          }
+          finally {
+            Pop-Location
+          }
+
+          $raw = Get-Content -LiteralPath $output -Raw -Encoding UTF8
+          $evidence = $raw | ConvertFrom-Json -ErrorAction Stop
+          if ([int]$evidence.schemaVersion -ne 1) { throw 'Unexpected identity-transition evidence schema.' }
+          if ([string]$evidence.capability -cne 'chrome-extension-identity-transition-disposable-v1') { throw 'Unexpected identity-transition evidence capability.' }
+          if ($evidence.disposableProfile -ne $true) { throw 'Identity transition did not use a disposable profile.' }
+          if ($evidence.liveChromeProfileAccessed -ne $false -or $evidence.liveChromeRegistrationMutated -ne $false) { throw 'Identity transition reported live Chrome access or mutation.' }
+          if ($evidence.sourceExtensionMutated -ne $false -or $evidence.sourceManifestHashPreserved -ne $true) { throw 'Identity transition mutated canonical extension source.' }
+          if ($evidence.chatGptNavigationPerformed -ne $false) { throw 'Identity transition navigated to ChatGPT.' }
+          if ([string]$evidence.stableId -cne 'lciedmoiiapbgemklkpoadimhffaaaah') { throw 'Identity transition stable ID mismatch.' }
+          if ($evidence.legacyIdDifferentFromStable -ne $true) { throw 'Unkeyed first load did not produce a distinct legacy ID.' }
+          foreach ($forbidden in @('C:\Users\dan','User Data','PreferenceMACs','cookie','history','sessionToken','accessToken','responseBody','responseText','conversationUrl')) {
+            if ($raw -match [regex]::Escape($forbidden)) { throw "Identity-transition evidence leaked forbidden detail: $forbidden" }
+          }
+
+          Write-Host ("IDENTITY_TRANSITION_RESULT browser={0}; legacy={1}; stable={2}; stableInstall={3}; legacyPresent={4}; legacyDisableReasons={5}; stablePresent={6}; sameRootResidue={7}; reproducedObservedShape={8}" -f `
+            $evidence.browserVersion,
+            $evidence.legacyId,
+            $evidence.stableId,
+            $evidence.phaseTwo.installId,
+            $evidence.phaseTwo.legacyRegistration.present,
+            (@($evidence.phaseTwo.legacyRegistration.disableReasonCodes) -join ','),
+            $evidence.phaseTwo.stableRegistration.present,
+            $evidence.sameRootResidue,
+            $evidence.reproducedObservedLegacyShape)
+
+      - name: Upload sanitized identity-transition evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-extension-identity-transition-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}\chrome-extension-identity-transition-evidence.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Cleanup disposable probe
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:PACKAGE_ROOT) {
+            Remove-Item -LiteralPath $env:PACKAGE_ROOT -Recurse -Force -ErrorAction SilentlyContinue
+          }
+          Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'chrome-extension-identity-transition-evidence.json') -Force -ErrorAction SilentlyContinue
