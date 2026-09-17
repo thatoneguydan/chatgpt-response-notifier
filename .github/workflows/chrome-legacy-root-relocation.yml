@@ -1,0 +1,136 @@
+name: Validate stale-ID root relocation
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'tools/chrome-legacy-root-relocation-probe.mjs'
+      - '.github/workflows/chrome-legacy-root-relocation.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate-relocation:
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.head.repo.owner.login == github.repository_owner) }}
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 10
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify isolation and proof scope
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) { throw "Exact-source checkout mismatch: expected $env:SOURCE_SHA, got $actual." }
+          node --check .\tools\chrome-legacy-root-relocation-probe.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Root relocation probe has invalid JavaScript syntax.' }
+
+          $source = Get-Content -LiteralPath '.\tools\chrome-legacy-root-relocation-probe.mjs' -Raw -Encoding UTF8
+          foreach ($forbidden in @('LOCALAPPDATA','User Data','PreferenceMACs','Microsoft.Win32','RegistryKey','page.goto','chatgpt.com','uninstallExtension')) {
+            if ($source -match [regex]::Escape($forbidden)) { throw "Root relocation probe contains forbidden live-profile/navigation/cleanup primitive: $forbidden" }
+          }
+          foreach ($required in @(
+            'userDataDir: profilePath',
+            'chrome.runtime.reload()',
+            'browser.installExtension(relocatedRoot)',
+            "testInstallProvenance: 'devtools-test-only'",
+            'restartDurabilityProven: false',
+            'realAcceptanceRequiresManualLoadUnpacked: true',
+            'postClosePreferenceResultInterpretable: false',
+            'devToolsTeardownMayPruneSyntheticRegistrations: true',
+            'cleanupAttempted: false',
+            'liveChromeProfileAccessed: false',
+            'liveChromeRegistrationMutated: false'
+          )) {
+            if ($source -notmatch [regex]::Escape($required)) { throw "Root relocation probe is missing isolation/scope guard: $required" }
+          }
+
+      - name: Resolve installed Chrome 153
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @()
+          if ($env:ProgramFiles) { $candidates += (Join-Path $env:ProgramFiles 'Google\Chrome\Application\chrome.exe') }
+          if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'Google\Chrome\Application\chrome.exe') }
+          $chrome = $candidates | Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } | Select-Object -First 1
+          if (-not $chrome) { throw 'Installed Chrome executable was not found.' }
+          $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($chrome).ProductVersion
+          if ([int]($version.Split('.')[0]) -ne 153) { throw "Expected Chrome major 153; observed $version." }
+          Write-Host "Installed Chrome product version: $version"
+          "SYSTEM_CHROME_EXE=$chrome" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install isolated Puppeteer package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $packageRoot = Join-Path $env:RUNNER_TEMP "notifier-root-relocation-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+          Remove-Item -LiteralPath $packageRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $packageRoot -Force | Out-Null
+          Copy-Item -LiteralPath '.\tools\chrome-legacy-root-relocation-probe.mjs' -Destination (Join-Path $packageRoot 'probe.mjs')
+          Push-Location $packageRoot
+          try {
+            npm init -y | Out-Null
+            $env:PUPPETEER_SKIP_DOWNLOAD = 'true'
+            npm install puppeteer@25.11.0 --no-fund --no-audit
+            if ($LASTEXITCODE -ne 0) { throw 'Puppeteer install failed.' }
+          } finally { Pop-Location }
+          "PACKAGE_ROOT=$packageRoot" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Prove distinct-root acceptance without claiming durability
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $extension = (Resolve-Path '.\extension').Path
+          $probeRoot = Join-Path $env:PACKAGE_ROOT 'probe-root'
+          $output = Join-Path $env:RUNNER_TEMP 'chrome-legacy-root-relocation-evidence.json'
+          Push-Location $env:PACKAGE_ROOT
+          try {
+            node .\probe.mjs $extension $probeRoot $env:SYSTEM_CHROME_EXE $output
+            if ($LASTEXITCODE -ne 0) { throw "Root relocation probe failed with exit code $LASTEXITCODE." }
+          } finally { Pop-Location }
+
+          $raw = Get-Content -LiteralPath $output -Raw -Encoding UTF8
+          $evidence = $raw | ConvertFrom-Json -ErrorAction Stop
+          if ([int]$evidence.schemaVersion -ne 1) { throw 'Unexpected root relocation evidence schema.' }
+          if ([string]$evidence.capability -cne 'chrome-legacy-root-relocation-disposable-v1') { throw 'Unexpected root relocation evidence capability.' }
+          if ($evidence.disposableProfile -ne $true -or $evidence.liveChromeProfileAccessed -ne $false -or $evidence.liveChromeRegistrationMutated -ne $false) { throw 'Root relocation isolation contract failed.' }
+          if ($evidence.chatGptNavigationPerformed -ne $false -or $evidence.cleanupAttempted -ne $false) { throw 'Root relocation probe performed a forbidden live/cleanup action.' }
+          if ([string]$evidence.stableId -cne 'lciedmoiiapbgemklkpoadimhffaaaah') { throw 'Stable ID mismatch.' }
+          if ($evidence.sourceManifestHashPreserved -ne $true) { throw 'Canonical extension source changed.' }
+          if ($evidence.legacyOrphan.present -ne $true -or $evidence.legacyOrphan.pointsAtLegacyRoot -ne $true) { throw 'Stale legacy orphan was not reproduced at the old root.' }
+          if ($evidence.legacyVisibleBeforeRelocation -ne $false -or $evidence.legacyVisibleAfterRelocation -ne $false) { throw 'Stale pref-only orphan unexpectedly became a live registry extension.' }
+          if ($evidence.relocatedRuntimePathMatches -ne $true -or $evidence.relocationAcceptanceProven -ne $true) { throw 'Stable fixed-key extension did not run from the distinct root.' }
+          if ([string]$evidence.testInstallProvenance -cne 'devtools-test-only') { throw 'Relocation proof lost its DevTools-test provenance disclosure.' }
+          if ($evidence.restartDurabilityProven -ne $false -or $evidence.realAcceptanceRequiresManualLoadUnpacked -ne $true) { throw 'Relocation proof overclaimed persistence.' }
+          if ($evidence.postClosePreferenceResultInterpretable -ne $false -or $evidence.devToolsTeardownMayPruneSyntheticRegistrations -ne $true) { throw 'Relocation proof overinterpreted DevTools teardown preference state.' }
+          foreach ($forbidden in @('C:\Users\dan','User Data','PreferenceMACs','cookie','history','sessionToken','accessToken','responseBody','responseText','conversationUrl')) {
+            if ($raw -match [regex]::Escape($forbidden)) { throw "Root relocation evidence leaked forbidden detail: $forbidden" }
+          }
+          Write-Host ("LEGACY_ROOT_RELOCATION_RESULT browser={0}; legacy={1}; stable={2}; legacyLiveBefore={3}; stableRelocatedPath={4}; legacyLiveAfter={5}; postCloseLegacyPresent={6}; postCloseInterpretable={7}; accepted={8}; durabilityProven={9}" -f $evidence.browserVersion,$evidence.legacyId,$evidence.stableId,$evidence.legacyVisibleBeforeRelocation,$evidence.relocatedRuntimePathMatches,$evidence.legacyVisibleAfterRelocation,$evidence.legacyPreferenceRetentionAfterDevToolsSession,$evidence.postClosePreferenceResultInterpretable,$evidence.relocationAcceptanceProven,$evidence.restartDurabilityProven)
+
+      - name: Upload sanitized root relocation evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: chrome-legacy-root-relocation-${{ github.event.pull_request.head.sha || github.sha }}
+          path: ${{ runner.temp }}\chrome-legacy-root-relocation-evidence.json
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Cleanup disposable probe
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:PACKAGE_ROOT) { Remove-Item -LiteralPath $env:PACKAGE_ROOT -Recurse -Force -ErrorAction SilentlyContinue }
+          Remove-Item -LiteralPath (Join-Path $env:RUNNER_TEMP 'chrome-legacy-root-relocation-evidence.json') -Force -ErrorAction SilentlyContinue
