@@ -23,6 +23,25 @@ if (!globalThis.__chatgptNotifierBootstrapFailure) {
   }
 
   try {
+    importScripts('recovery-decision-diagnostics-background.js');
+  } catch (error) {
+    try {
+      if (typeof sendNative === 'function') {
+        sendNative({
+          type: 'diagnostics.event',
+          diagnostic: {
+            source: 'recovery-decision',
+            status: 'diagnostics-import-failed',
+            observedAt: new Date().toISOString(),
+            extensionVersion: String(chrome.runtime.getManifest().version || ''),
+            reason: String(error?.message || error || 'import-failed').replace(/[\r\n\t]+/g, ' ').slice(0, 96)
+          }
+        });
+      }
+    } catch {}
+  }
+
+  try {
     importScripts('hidden-window-diagnostics-background.js');
   } catch (error) {
     try {
