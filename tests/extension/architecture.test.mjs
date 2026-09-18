@@ -172,6 +172,28 @@ test('build START scope is exact, assistant-only, fresh-request-bound and termin
   assert.match(monitor, /'work-start-signal'\s*:\s*'coded-turn'/);
 });
 
+
+test('monitored chats use a 30-minute local code watchdog with a three-send cap and incomplete-code reset', () => {
+  const status = text('extension/status-script.js');
+  const monitor = text('extension/monitor-background.js');
+  const policy = text('extension/status-policy.js');
+  assert.match(monitor, /CODE_WATCHDOG_DELAY_MS = 30 \* 60_000/);
+  assert.match(monitor, /CODE_WATCHDOG_MAX_SENDS = 3/);
+  assert.match(monitor, /chatgpt-notifier-code-watchdog:/);
+  assert.match(monitor, /chrome\.alarms\.create\(codeWatchdogAlarmName/);
+  assert.match(monitor, /CHATGPT_WATCHDOG_CONTINUE_COMMAND/);
+  assert.match(monitor, /retry-cap-reached/);
+  assert.match(monitor, /resetCodeWatchdogForIncomplete/);
+  assert.match(monitor, /isAutoContinueStatusCode/);
+  assert.match(status, /performWatchdogContinuation/);
+  assert.match(status, /terminal-status-observed/);
+  assert.match(status, /watchdog-continuation-user-turn-confirmed/);
+  assert.match(policy, /'INCOMPLETE_LIMIT'/);
+  assert.match(policy, /'INCOMPLETE_TOOL_FAILURE'/);
+  assert.match(policy, /'INCOMPLETE_CONTINUE'/);
+  assert.doesNotMatch(monitor, /\bfetch\s*\(/);
+});
+
 test('manual pre-conversation Monitor is provisional and binds only after the next observed request', () => {
   const monitor = text('extension/monitor-background.js');
   assert.match(monitor, /automation-provisional:/);
