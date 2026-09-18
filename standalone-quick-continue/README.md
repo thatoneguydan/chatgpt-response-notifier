@@ -11,6 +11,7 @@ It is intentionally independent from ChatGPT Response Notifier. It has no servic
 - Clicking a saved project immediately sends the configured Project template with `{project}` replaced by that title.
 - **Other project…** remains available for one-off names.
 - **Edit** opens the current raw JSON config directly inside the Project menu. **Save** validates and applies it immediately without reloading the extension or refreshing ChatGPT.
+- The Project menu normally opens upward. If that would cross the viewport top, it flips below the toolbar; if neither side fully fits, it uses the side with more room.
 
 The bundled `config.json` is the readable/default configuration:
 

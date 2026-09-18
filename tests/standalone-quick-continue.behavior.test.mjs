@@ -22,7 +22,7 @@ test('standalone extension stays background-free with only local storage permiss
   assert.equal(manifest.host_permissions, undefined);
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['prompt-format.js', 'config.js', 'content-script.js']);
-  assert.equal(manifest.version, '1.2.0');
+  assert.equal(manifest.version, '1.2.1');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -195,4 +195,17 @@ test('Project menu stays available for config editing when send controls are una
   assert.match(contentSource, /sendButtons\.push\(continueButton\)/);
   assert.doesNotMatch(contentSource, /sendButtons\.push\(projectButton\)/);
   assert.match(contentSource, /function canSendProject\(\)/);
+});
+
+test('project popover opens above when it fits, flips below near the top, and chooses the roomier side if neither fits', () => {
+  assert.match(contentSource, /function preferredPopoverDirection\(toolbarRect, popoverHeight, viewportHeight\)/);
+  assert.match(contentSource, /if \(upwardTop >= margin\) return 'above'/);
+  assert.match(contentSource, /if \(downwardBottom <= viewport - margin\) return 'below'/);
+  assert.match(contentSource, /spaceBelow > spaceAbove \? 'below' : 'above'/);
+  assert.match(contentSource, /projectPopover\.style\.top = 'calc\(100% \+ 6px\)'/);
+  assert.match(contentSource, /projectPopover\.style\.bottom = 'auto'/);
+  assert.match(contentSource, /projectPopover\.style\.top = 'auto'/);
+  assert.match(contentSource, /projectPopover\.style\.bottom = 'calc\(100% \+ 6px\)'/);
+  assert.match(contentSource, /root\.style\.visibility = 'visible';\s+positionProjectPopover\(\);/);
+  assert.match(contentSource, /setEditorMode\(true\);\s+positionProjectPopover\(\);/);
 });

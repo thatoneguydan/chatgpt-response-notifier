@@ -292,11 +292,48 @@
     }
   }
 
+  function preferredPopoverDirection(toolbarRect, popoverHeight, viewportHeight) {
+    const gap = 6;
+    const margin = 8;
+    const height = Math.max(0, Number(popoverHeight) || 0);
+    const top = Number(toolbarRect?.top || 0);
+    const bottom = Number(toolbarRect?.bottom || top);
+    const viewport = Math.max(0, Number(viewportHeight) || 0);
+    const upwardTop = top - gap - height;
+
+    if (upwardTop >= margin) return 'above';
+
+    const downwardBottom = bottom + gap + height;
+    if (downwardBottom <= viewport - margin) return 'below';
+
+    const spaceAbove = Math.max(0, top - margin);
+    const spaceBelow = Math.max(0, viewport - bottom - margin);
+    return spaceBelow > spaceAbove ? 'below' : 'above';
+  }
+
+  function positionProjectPopover() {
+    if (!projectPopover || projectPopover.hidden || !toolbar) return;
+    const direction = preferredPopoverDirection(
+      toolbar.getBoundingClientRect(),
+      projectPopover.offsetHeight,
+      window.innerHeight
+    );
+
+    if (direction === 'below') {
+      projectPopover.style.top = 'calc(100% + 6px)';
+      projectPopover.style.bottom = 'auto';
+    } else {
+      projectPopover.style.top = 'auto';
+      projectPopover.style.bottom = 'calc(100% + 6px)';
+    }
+  }
+
   function setEditorMode(editing) {
     if (!browsePanel || !editorPanel) return;
     browsePanel.hidden = Boolean(editing);
     editorPanel.hidden = !editing;
     if (!editing) setEditorError('');
+    positionProjectPopover();
   }
 
   function closeProjectPopover({ clear = false } = {}) {
@@ -389,6 +426,7 @@
     const config = await ensureConfig();
     if (config) renderProjectList(config.projects);
     updateProjectSendState();
+    positionProjectPopover();
   }
 
   async function openConfigEditor() {
@@ -397,6 +435,7 @@
     editorTextarea.value = configApi.serialize(config);
     setEditorError('');
     setEditorMode(true);
+    positionProjectPopover();
   }
 
   async function saveConfigEditor() {
@@ -811,6 +850,7 @@
     root.style.left = `${Math.round(left)}px`;
     root.style.top = `${Math.round(top)}px`;
     root.style.visibility = 'visible';
+    positionProjectPopover();
   }
 
   function scheduleSync() {
