@@ -12,7 +12,7 @@
   const VERIFY_ATTEMPTS = 6;
   const VERIFY_DELAY_MS = 100;
   const CLICK_DEADLINE_MS = 3500;
-  const MOVE_DEADLINE_MS = 3500;
+  const NATIVE_SWITCH_TIMEOUT_MS = 1600;
 
   const sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, Math.max(0, delayMs)));
 
@@ -53,6 +53,93 @@
         resolve(fallback);
       });
     });
+  }
+
+  function finiteWindowCoordinate(value) {
+    return Number.isFinite(value) ? Math.round(value) : null;
+  }
+
+  function nativeFailurePresentationState(state) {
+    const value = String(state || '');
+    if (value === 'unsupported-build') return 'desktop-switch-unsupported';
+    if (value === 'window-ambiguous') return 'desktop-switch-ambiguous';
+    if (value === 'missing-window-identity' || value === 'window-not-found' || value === 'window-bounds-mismatch') {
+      return 'desktop-switch-unverified';
+    }
+    return 'desktop-switch-failed';
+  }
+
+  async function requestNativeDesktopSwitch(tabId, windowId, clickContext = {}) {
+    if (!Number.isInteger(tabId) || !Number.isInteger(windowId)) {
+      return { success: false, state: 'missing-window-identity', presentationState: 'desktop-switch-unverified' };
+    }
+
+    await sleep(75);
+    const identity = await bounded((async () => {
+      try {
+        const [tabInfo, windowInfo] = await Promise.all([
+          chrome.tabs.get(tabId),
+          chrome.windows.get(windowId)
+        ]);
+        return {
+          title: String(tabInfo?.title || '').trim(),
+          left: finiteWindowCoordinate(windowInfo?.left),
+          top: finiteWindowCoordinate(windowInfo?.top),
+          width: finiteWindowCoordinate(windowInfo?.width),
+          height: finiteWindowCoordinate(windowInfo?.height)
+        };
+      } catch {
+        return null;
+      }
+    })(), PROBE_TIMEOUT_MS, null);
+
+    if (
+      !identity?.title ||
+      identity.left === null ||
+      identity.top === null ||
+      identity.width === null ||
+      identity.height === null
+    ) {
+      emit('cross-desktop-native-switch-unidentified', {
+        ...clickContext,
+        tabId,
+        reason: 'missing-window-identity'
+      });
+      return { success: false, state: 'missing-window-identity', presentationState: 'desktop-switch-unverified' };
+    }
+
+    if (typeof globalThis.sendNativeRequest !== 'function') {
+      emit('cross-desktop-native-switch-unavailable', {
+        ...clickContext,
+        tabId,
+        reason: 'native-request-unavailable'
+      });
+      return { success: false, state: 'native-request-unavailable', presentationState: 'desktop-switch-failed' };
+    }
+
+    const response = await globalThis.sendNativeRequest({
+      type: 'window.switchVirtualDesktop',
+      windowTitle: identity.title,
+      windowLeft: identity.left,
+      windowTop: identity.top,
+      windowWidth: identity.width,
+      windowHeight: identity.height
+    }, ['window.switchVirtualDesktopResult'], NATIVE_SWITCH_TIMEOUT_MS);
+
+    const state = String(response?.switchState || (response?.success === true ? 'switched' : 'native-timeout'));
+    const success = response?.success === true;
+    emit(success ? 'cross-desktop-native-switch-complete' : 'cross-desktop-native-switch-failed', {
+      ...clickContext,
+      tabId,
+      reason: state
+    });
+    return {
+      success,
+      state,
+      presentationState: success ? 'desktop-switched' : nativeFailurePresentationState(state),
+      osBuild: Number(response?.osBuild || 0),
+      candidateCount: Number(response?.candidateCount || 0)
+    };
   }
 
   async function pageFocusSnapshot(tabId) {
@@ -151,13 +238,55 @@
       return { ...primary, presented: false, presentationState: 'target-changed', reason: 'target-identity-changed' };
     }
 
-    const presentation = await waitForPresentation(primary.targetTabId);
+    let presentation = await waitForPresentation(primary.targetTabId);
     emit(`cross-desktop-click-${presentation.state}`, {
       ...clickContext,
       conversationId,
       tabId: primary.targetTabId,
       reason: presentation.state
     });
+
+    if (presentation.state === 'other-desktop') {
+      const switched = await requestNativeDesktopSwitch(
+        primary.targetTabId,
+        primary.targetWindowId,
+        { ...clickContext, conversationId, targetTabId: primary.targetTabId }
+      );
+      if (!switched.success) {
+        return {
+          ...primary,
+          presented: false,
+          presentationState: switched.presentationState,
+          reason: switched.state,
+          visibility: presentation.visibility,
+          hasFocus: false
+        };
+      }
+
+      if (Number.isInteger(primary.targetWindowId)) {
+        await bounded((async () => {
+          try {
+            const windowInfo = await chrome.windows.get(primary.targetWindowId);
+            if (windowInfo?.state === 'minimized') {
+              await chrome.windows.update(primary.targetWindowId, { state: 'normal' });
+            }
+            await chrome.windows.update(primary.targetWindowId, { focused: true });
+            return true;
+          } catch {
+            return false;
+          }
+        })(), PROBE_TIMEOUT_MS, false);
+      }
+
+      presentation = await waitForPresentation(primary.targetTabId);
+      emit(`cross-desktop-post-switch-${presentation.state}`, {
+        ...clickContext,
+        conversationId,
+        tabId: primary.targetTabId,
+        reason: presentation.state
+      });
+    }
+
     return {
       ...primary,
       presented: presentation.state === 'focused',
@@ -186,58 +315,21 @@
     );
   };
 
-  async function moveTabHere(conversationId, targetTabId, clickContext = {}) {
-    if (!conversationId || !Number.isInteger(targetTabId)) {
-      return { requested: false, presented: false, presentationState: 'invalid', reason: 'missing-target' };
-    }
-
-    const target = await bounded(chrome.tabs.get(targetTabId), PROBE_TIMEOUT_MS, null);
-    if (!target || conversationIdFromUrl(target.url) !== conversationId) {
-      emit('cross-desktop-move-target-changed', { ...clickContext, conversationId, tabId: targetTabId, reason: 'target-identity-changed' });
-      return { requested: false, presented: false, presentationState: 'target-changed', reason: 'target-identity-changed', targetTabId };
-    }
-
-    const moved = await bounded(
-      chrome.windows.create({ tabId: targetTabId, focused: true, type: 'normal' }),
-      MOVE_DEADLINE_MS,
-      null
-    );
-    if (!moved) {
-      emit('cross-desktop-move-failed', { ...clickContext, conversationId, tabId: targetTabId, reason: 'chrome-window-move-failed' });
-      return { requested: true, presented: false, presentationState: 'move-failed', reason: 'chrome-window-move-failed', targetTabId };
-    }
-
-    const presentation = await waitForPresentation(targetTabId);
-    emit(`cross-desktop-move-${presentation.state}`, {
-      ...clickContext,
-      conversationId,
-      tabId: targetTabId,
-      reason: presentation.state
-    });
-    return {
-      requested: true,
-      presented: presentation.state === 'focused',
-      presentationState: presentation.state,
-      reason: presentation.state,
-      targetTabId,
-      targetWindowId: Number.isInteger(moved.id) ? moved.id : null
-    };
-  }
-
   globalThis.__chatgptNotifierCrossDesktopClickFallback = Object.freeze({
-    version: 2,
+    version: 3,
     probeTimeoutMs: PROBE_TIMEOUT_MS,
     verifyAttempts: VERIFY_ATTEMPTS,
     verifyDelayMs: VERIFY_DELAY_MS,
     clickDeadlineMs: CLICK_DEADLINE_MS,
-    moveDeadlineMs: MOVE_DEADLINE_MS,
+    nativeSwitchTimeoutMs: NATIVE_SWITCH_TIMEOUT_MS,
     nativeForegroundUsed: false,
+    nativeVirtualDesktopSwitchUsed: true,
     automaticDuplicateWindowFallback: false,
-    explicitMoveExistingTabFallback: true,
+    explicitMoveExistingTabFallback: false,
     originalFocusOrOpenConversation,
     conversationIdFromUrl,
     pageFocusSnapshot,
     waitForPresentation,
-    moveTabHere
+    requestNativeDesktopSwitch
   });
 })();
