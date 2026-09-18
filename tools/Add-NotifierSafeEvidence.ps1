@@ -207,6 +207,18 @@ Write-Host ('Notifier safe evidence: state={0}; installed={1}; source={2}; curre
 # These bounded tails make field failures diagnosable from Actions logs without
 # exposing response text, prompts, titles, URLs, local paths, or raw payloads.
 $deliveryTail = @($result.deliveryDiagnostics | Select-Object -Last 48)
+$toastTail = @(
+    $result.deliveryDiagnostics |
+        Where-Object {
+            [string]$status = [string]$_.status
+            [string]$source = [string]$_.source
+            $source -eq 'host' -or
+            $source -eq 'host-click' -or
+            $status -match 'toast|helper-durable|outbox|notification'
+        } |
+        Select-Object -Last 24
+)
 $incidentTail = @($result.hiddenWindowDiagnostics.incidents | Select-Object -Last 6)
 Write-Host ('Notifier safe delivery tail: {0}' -f ($deliveryTail | ConvertTo-Json -Depth 6 -Compress))
+Write-Host ('Notifier safe toast tail: {0}' -f ($toastTail | ConvertTo-Json -Depth 6 -Compress))
 Write-Host ('Notifier safe incident tail: {0}' -f ($incidentTail | ConvertTo-Json -Depth 8 -Compress))
