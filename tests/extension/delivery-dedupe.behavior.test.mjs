@@ -287,18 +287,24 @@ test('delivery identity diagnostics retain same-request assistant remount eviden
     }
   );
 
-  const accepted = nativeMessages
+  const diagnostics = nativeMessages
     .map((item) => item.diagnostic)
-    .filter((item) => item?.source === 'delivery-identity' && item?.status === 'claim-accepted');
+    .filter((item) => item?.source === 'delivery-identity');
+  const observed = diagnostics.filter((item) => item?.status === 'claim-observed');
+  const accepted = diagnostics.filter((item) => item?.status === 'claim-accepted');
+  const suppressed = diagnostics.filter((item) => item?.status === 'claim-suppressed');
 
-  assert.equal(accepted.length, 2);
-  assert.equal(accepted[0].requestSuffix, '12345678');
-  assert.equal(accepted[1].requestSuffix, '12345678');
-  assert.notEqual(accepted[0].assistantSuffix, accepted[1].assistantSuffix);
-  assert.notEqual(accepted[0].notificationSuffix, accepted[1].notificationSuffix);
+  assert.equal(observed.length, 2);
+  assert.equal(accepted.length, 1);
+  assert.equal(suppressed.length, 1);
+  assert.equal(observed[0].requestSuffix, '12345678');
+  assert.equal(observed[1].requestSuffix, '12345678');
+  assert.notEqual(observed[0].assistantSuffix, observed[1].assistantSuffix);
+  assert.notEqual(observed[0].notificationSuffix, observed[1].notificationSuffix);
   assert.equal(accepted[0].claimSource, 'coded-completion');
-  assert.equal(accepted[1].claimSource, 'worker-observed-coded-completion');
-  for (const diagnostic of accepted) {
+  assert.equal(suppressed[0].claimSource, 'worker-observed-coded-completion');
+  assert.equal(suppressed[0].reason, 'already-delivered-logical-turn');
+  for (const diagnostic of diagnostics) {
     const serialized = JSON.stringify(diagnostic);
     assert.doesNotMatch(serialized, /request-sensitive-/);
     assert.doesNotMatch(serialized, /document-sensitive-/);
