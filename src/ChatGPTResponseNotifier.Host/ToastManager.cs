@@ -1,9 +1,10 @@
 using System.Windows;
+using System.Windows.Interop;
 using ChatGPTResponseNotifier.Core;
 
 namespace ChatGPTResponseNotifier.Host;
 
-internal readonly record struct ToastShowResult(bool Accepted, bool Presented, string PresentationState);
+internal readonly record struct ToastShowResult(bool Accepted, bool Presented, string PresentationState, string DesktopPlacementState);
 internal readonly record struct ToastDismissConversationResult(
     int RemovedCount,
     int RemainingCount,
@@ -47,17 +48,17 @@ internal sealed class ToastManager
         if (existing is not null)
         {
             _acceptedStore.Remember(record.Id);
-            return new ToastShowResult(true, false, "already-open");
+            return new ToastShowResult(true, false, "already-open", "not-applicable");
         }
 
         if (_acceptedStore.Contains(record.Id))
         {
-            return new ToastShowResult(true, false, "dismissed-tombstone");
+            return new ToastShowResult(true, false, "dismissed-tombstone", "not-applicable");
         }
 
-        AddWindow(record, persist: true);
+        var desktopPlacementState = AddWindow(record, persist: true);
         CompletionChime.Play();
-        return new ToastShowResult(true, true, "presented");
+        return new ToastShowResult(true, true, "presented", desktopPlacementState);
     }
 
     public ToastDismissConversationResult DismissConversation(string conversationId)
@@ -105,8 +106,9 @@ internal sealed class ToastManager
         Restack();
     }
 
-    private void AddWindow(NotificationRecord record, bool persist)
+    private string AddWindow(NotificationRecord record, bool persist)
     {
+        var desktopTarget = WindowsVirtualDesktopSwitcher.CaptureCurrentDesktop();
         var window = new ToastWindow(record);
         window.ToastClicked += async (_, _) =>
         {
@@ -143,6 +145,9 @@ internal sealed class ToastManager
         }
 
         window.Show();
+        var hwnd = new WindowInteropHelper(window).Handle;
+        var placement = WindowsVirtualDesktopSwitcher.PlaceWindowOnDesktop(hwnd, desktopTarget);
+        return placement.Reason;
     }
 
     private void RemoveWindow(ToastWindow window, bool persist)
