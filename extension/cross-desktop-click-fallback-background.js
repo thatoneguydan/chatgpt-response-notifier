@@ -5,13 +5,20 @@
 
   const originalFocusOrOpenConversation = globalThis.focusOrOpenConversation;
   if (typeof originalFocusOrOpenConversation !== 'function') {
-    throw new Error('Cross-desktop click fallback could not find primary click navigation.');
+    throw new Error('Cross-desktop click verifier could not find primary click navigation.');
   }
 
-  const VERIFY_ATTEMPTS = 8;
+  const PROBE_TIMEOUT_MS = 300;
+  const VERIFY_ATTEMPTS = 6;
   const VERIFY_DELAY_MS = 100;
+  const CLICK_DEADLINE_MS = 3500;
+  const MOVE_DEADLINE_MS = 3500;
 
   const sleep = (delayMs) => new Promise((resolve) => setTimeout(resolve, Math.max(0, delayMs)));
+
+  function emit(status, context = {}) {
+    try { globalThis.emitClickDiagnostic?.(status, context); } catch {}
+  }
 
   function conversationIdFromUrl(rawUrl) {
     try {
@@ -26,214 +33,209 @@
     return '';
   }
 
-  function canonicalConversationUrl(rawUrl) {
-    try {
-      const url = new URL(String(rawUrl || ''));
-      const id = conversationIdFromUrl(url.href);
-      if (!id) return '';
-      return `https://chatgpt.com${url.pathname.replace(/\/+$/, '')}`;
-    } catch {
-      return '';
-    }
-  }
-
-  function emit(status, context = {}) {
-    try {
-      if (typeof globalThis.emitClickDiagnostic === 'function') {
-        globalThis.emitClickDiagnostic(status, context);
-      }
-    } catch {}
-  }
-
-  async function findConversationTab(conversationId) {
-    if (!conversationId) return null;
-    try {
-      const tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] });
-      return tabs.find((tab) => conversationIdFromUrl(tab?.url) === conversationId && Number.isInteger(tab?.id)) || null;
-    } catch {
-      return null;
-    }
+  function bounded(promise, timeoutMs, fallback) {
+    return new Promise((resolve) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        resolve(fallback);
+      }, Math.max(1, Number(timeoutMs || 1)));
+      Promise.resolve(promise).then((value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(value);
+      }, () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(fallback);
+      });
+    });
   }
 
   async function pageFocusSnapshot(tabId) {
-    if (!Number.isInteger(tabId)) return { available: false, visibility: '', hasFocus: false };
-    try {
-      const results = await chrome.scripting.executeScript({
-        target: { tabId },
-        func: () => ({
-          visibility: String(document.visibilityState || ''),
-          hasFocus: document.hasFocus() === true
-        })
-      });
-      const value = results?.[0]?.result;
-      const visibility = String(value?.visibility || '');
-      if (visibility !== 'visible' && visibility !== 'hidden') {
-        return { available: false, visibility: '', hasFocus: false };
+    if (!Number.isInteger(tabId)) return { available: false, timedOut: false, visibility: '', hasFocus: false };
+    const fallback = { available: false, timedOut: true, visibility: '', hasFocus: false };
+    return await bounded((async () => {
+      try {
+        const results = await chrome.scripting.executeScript({
+          target: { tabId },
+          func: () => ({
+            visibility: String(document.visibilityState || ''),
+            hasFocus: document.hasFocus() === true
+          })
+        });
+        const value = results?.[0]?.result;
+        const visibility = String(value?.visibility || '');
+        if (visibility !== 'visible' && visibility !== 'hidden') {
+          return { available: false, timedOut: false, visibility: '', hasFocus: false };
+        }
+        return {
+          available: true,
+          timedOut: false,
+          visibility,
+          hasFocus: value?.hasFocus === true
+        };
+      } catch {
+        return { available: false, timedOut: false, visibility: '', hasFocus: false };
       }
-      return {
-        available: true,
-        visibility,
-        hasFocus: value?.hasFocus === true
-      };
-    } catch {
-      return { available: false, visibility: '', hasFocus: false };
-    }
+    })(), PROBE_TIMEOUT_MS, fallback);
   }
 
   async function waitForPresentation(tabId) {
-    let last = { available: false, visibility: '', hasFocus: false };
+    let last = { available: false, timedOut: false, visibility: '', hasFocus: false };
     let sawAvailable = false;
+    let sawTimeout = false;
     for (let attempt = 0; attempt < VERIFY_ATTEMPTS; attempt += 1) {
       if (attempt > 0) await sleep(VERIFY_DELAY_MS);
       last = await pageFocusSnapshot(tabId);
-      if (last.available) sawAvailable = true;
-      if (last.available && last.visibility === 'visible') {
-        return { ...last, sawAvailable, attempts: attempt + 1 };
+      sawAvailable ||= last.available === true;
+      sawTimeout ||= last.timedOut === true;
+      if (last.available && last.visibility === 'visible' && last.hasFocus) {
+        return { ...last, sawAvailable, sawTimeout, attempts: attempt + 1, state: 'focused' };
       }
     }
-    return { ...last, sawAvailable, attempts: VERIFY_ATTEMPTS };
+    if (last.available && last.visibility === 'visible') {
+      return { ...last, sawAvailable, sawTimeout, attempts: VERIFY_ATTEMPTS, state: 'visible-not-focused' };
+    }
+    if (last.available && last.visibility === 'hidden') {
+      return { ...last, sawAvailable, sawTimeout, attempts: VERIFY_ATTEMPTS, state: 'other-desktop' };
+    }
+    return {
+      ...last,
+      sawAvailable,
+      sawTimeout,
+      attempts: VERIFY_ATTEMPTS,
+      state: sawTimeout ? 'probe-timeout' : 'unverified'
+    };
   }
 
-  async function tabStillOwnsUserClick(tabId) {
-    try {
-      const tab = await chrome.tabs.get(tabId);
-      return tab?.active === true;
-    } catch {
-      return false;
+  async function verifyPrimary(conversationId, conversationUrl, clickContext) {
+    const primary = await bounded(
+      originalFocusOrOpenConversation(conversationId, conversationUrl, clickContext),
+      CLICK_DEADLINE_MS,
+      { requested: false, presented: false, presentationState: 'route-timeout', reason: 'primary-route-timeout', targetTabId: clickContext?.targetTabId ?? null }
+    );
+
+    if (!primary || primary.requested !== true || !Number.isInteger(primary.targetTabId)) {
+      const state = String(primary?.presentationState || 'unverified');
+      emit('cross-desktop-click-unverified', {
+        ...clickContext,
+        conversationId,
+        tabId: primary?.targetTabId,
+        reason: String(primary?.reason || state)
+      });
+      return {
+        ...(primary || {}),
+        requested: primary?.requested === true,
+        presented: false,
+        presentationState: state,
+        reason: String(primary?.reason || state)
+      };
     }
+
+    const current = await bounded(
+      chrome.tabs.get(primary.targetTabId),
+      PROBE_TIMEOUT_MS,
+      null
+    );
+    if (!current || conversationIdFromUrl(current.url) !== conversationId) {
+      emit('cross-desktop-click-target-changed', {
+        ...clickContext,
+        conversationId,
+        tabId: primary.targetTabId,
+        reason: 'target-identity-changed'
+      });
+      return { ...primary, presented: false, presentationState: 'target-changed', reason: 'target-identity-changed' };
+    }
+
+    const presentation = await waitForPresentation(primary.targetTabId);
+    emit(`cross-desktop-click-${presentation.state}`, {
+      ...clickContext,
+      conversationId,
+      tabId: primary.targetTabId,
+      reason: presentation.state
+    });
+    return {
+      ...primary,
+      presented: presentation.state === 'focused',
+      presentationState: presentation.state,
+      reason: presentation.state,
+      visibility: presentation.visibility,
+      hasFocus: presentation.hasFocus === true
+    };
   }
 
-  async function createCurrentDesktopFallback(conversationId, conversationUrl, clickContext, originalTabId) {
-    const safeUrl = canonicalConversationUrl(conversationUrl);
-    if (!safeUrl || conversationIdFromUrl(safeUrl) !== conversationId) {
-      emit('cross-desktop-fallback-rejected', {
-        ...clickContext,
-        conversationId,
-        tabId: originalTabId,
-        reason: 'conversation-url-invalid'
-      });
-      return false;
-    }
-
-    try {
-      const created = await chrome.windows.create({
-        url: safeUrl,
-        focused: true,
-        type: 'normal'
-      });
-      emit('cross-desktop-fallback-window-created', {
-        ...clickContext,
-        conversationId,
-        tabId: originalTabId
-      });
-
-      const windowId = Number.isInteger(created?.id) ? created.id : null;
-      if (windowId === null) return true;
-
-      let createdTabId = null;
-      try {
-        const tabs = await chrome.tabs.query({ windowId });
-        const createdTab = tabs.find((tab) => conversationIdFromUrl(tab?.url) === conversationId) || tabs[0];
-        if (Number.isInteger(createdTab?.id)) createdTabId = createdTab.id;
-      } catch {}
-
-      if (createdTabId === null) {
-        emit('cross-desktop-fallback-unverified', {
-          ...clickContext,
-          conversationId,
-          tabId: originalTabId,
-          reason: 'created-tab-unavailable'
-        });
-        return true;
-      }
-
-      const presented = await waitForPresentation(createdTabId);
-      emit(presented.available && presented.visibility === 'visible'
-        ? 'cross-desktop-fallback-visible'
-        : 'cross-desktop-fallback-unverified', {
-        ...clickContext,
-        conversationId,
-        tabId: createdTabId,
-        reason: presented.available ? presented.visibility : 'page-probe-unavailable'
-      });
-      return true;
-    } catch {
-      emit('cross-desktop-fallback-window-failed', {
-        ...clickContext,
-        conversationId,
-        tabId: originalTabId,
-        reason: 'chrome-window-create-failed'
-      });
-      return false;
-    }
-  }
-
-  globalThis.focusOrOpenConversation = async function focusOrOpenConversationWithCrossDesktopFallback(
+  globalThis.focusOrOpenConversation = async function focusOrOpenConversationWithVerifiedPresentation(
     conversationId,
     conversationUrl,
     clickContext = {}
   ) {
-    const primaryResult = await originalFocusOrOpenConversation(conversationId, conversationUrl, clickContext);
-    const target = await findConversationTab(conversationId);
-    if (!target || !Number.isInteger(target.id)) return primaryResult;
-
-    const presented = await waitForPresentation(target.id);
-    if (presented.available && presented.visibility === 'visible') {
-      emit('cross-desktop-focus-visible', {
-        ...clickContext,
-        conversationId,
-        tabId: target.id,
-        reason: presented.hasFocus ? 'focused' : 'visible'
-      });
-      return primaryResult;
-    }
-
-    if (!presented.sawAvailable) {
-      emit('cross-desktop-focus-verification-unavailable', {
-        ...clickContext,
-        conversationId,
-        tabId: target.id,
-        reason: 'page-probe-unavailable'
-      });
-      return primaryResult;
-    }
-
-    if (presented.visibility !== 'hidden') return primaryResult;
-    if (!await tabStillOwnsUserClick(target.id)) {
-      emit('cross-desktop-fallback-suppressed', {
-        ...clickContext,
-        conversationId,
-        tabId: target.id,
-        reason: 'target-tab-no-longer-active'
-      });
-      return primaryResult;
-    }
-
-    emit('cross-desktop-focus-hidden', {
-      ...clickContext,
-      conversationId,
-      tabId: target.id,
-      reason: 'page-remained-hidden-after-focus'
-    });
-
-    const fallbackCreated = await createCurrentDesktopFallback(
-      conversationId,
-      conversationUrl,
-      clickContext,
-      target.id
+    return await bounded(
+      verifyPrimary(conversationId, conversationUrl, clickContext),
+      CLICK_DEADLINE_MS,
+      {
+        requested: false,
+        presented: false,
+        presentationState: 'route-timeout',
+        reason: 'whole-click-timeout',
+        targetTabId: Number.isInteger(clickContext?.targetTabId) ? clickContext.targetTabId : null
+      }
     );
-    return fallbackCreated || primaryResult;
   };
 
+  async function moveTabHere(conversationId, targetTabId, clickContext = {}) {
+    if (!conversationId || !Number.isInteger(targetTabId)) {
+      return { requested: false, presented: false, presentationState: 'invalid', reason: 'missing-target' };
+    }
+
+    const target = await bounded(chrome.tabs.get(targetTabId), PROBE_TIMEOUT_MS, null);
+    if (!target || conversationIdFromUrl(target.url) !== conversationId) {
+      emit('cross-desktop-move-target-changed', { ...clickContext, conversationId, tabId: targetTabId, reason: 'target-identity-changed' });
+      return { requested: false, presented: false, presentationState: 'target-changed', reason: 'target-identity-changed', targetTabId };
+    }
+
+    const moved = await bounded(
+      chrome.windows.create({ tabId: targetTabId, focused: true, type: 'normal' }),
+      MOVE_DEADLINE_MS,
+      null
+    );
+    if (!moved) {
+      emit('cross-desktop-move-failed', { ...clickContext, conversationId, tabId: targetTabId, reason: 'chrome-window-move-failed' });
+      return { requested: true, presented: false, presentationState: 'move-failed', reason: 'chrome-window-move-failed', targetTabId };
+    }
+
+    const presentation = await waitForPresentation(targetTabId);
+    emit(`cross-desktop-move-${presentation.state}`, {
+      ...clickContext,
+      conversationId,
+      tabId: targetTabId,
+      reason: presentation.state
+    });
+    return {
+      requested: true,
+      presented: presentation.state === 'focused',
+      presentationState: presentation.state,
+      reason: presentation.state,
+      targetTabId,
+      targetWindowId: Number.isInteger(moved.id) ? moved.id : null
+    };
+  }
+
   globalThis.__chatgptNotifierCrossDesktopClickFallback = Object.freeze({
-    version: 1,
+    version: 2,
+    probeTimeoutMs: PROBE_TIMEOUT_MS,
     verifyAttempts: VERIFY_ATTEMPTS,
     verifyDelayMs: VERIFY_DELAY_MS,
+    clickDeadlineMs: CLICK_DEADLINE_MS,
+    moveDeadlineMs: MOVE_DEADLINE_MS,
     nativeForegroundUsed: false,
     originalFocusOrOpenConversation,
     conversationIdFromUrl,
-    canonicalConversationUrl,
     pageFocusSnapshot,
-    waitForPresentation
+    waitForPresentation,
+    moveTabHere
   });
 })();
