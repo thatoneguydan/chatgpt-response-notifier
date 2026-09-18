@@ -57,10 +57,10 @@ jobs:
           if ([string]$manifest.version -ne $expectedVersion) { throw "Installed extension version mismatch: $($manifest.version)" }
 
           $hostPath = [IO.Path]::GetFullPath([string]$state.hostExecutablePath)
-          $host = Get-Process -Name 'ChatGPTResponseNotifier.Host' -ErrorAction SilentlyContinue | Where-Object {
+          $hostProcess = Get-Process -Name 'ChatGPTResponseNotifier.Host' -ErrorAction SilentlyContinue | Where-Object {
             try { [IO.Path]::GetFullPath([string]$_.Path) -eq $hostPath } catch { $false }
           } | Select-Object -First 1
-          if (-not $host) { throw 'Verified installed notifier helper is not running.' }
+          if (-not $hostProcess) { throw 'Verified installed notifier helper is not running.' }
 
           $receipt = [ordered]@{
             schemaVersion = 1
