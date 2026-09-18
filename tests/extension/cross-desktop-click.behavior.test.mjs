@@ -20,7 +20,7 @@ function createRuntime({
   const context = vm.createContext({
     URL,
     console,
-    setTimeout: (fn, delay) => setTimeout(fn, Math.min(Number(delay || 0), 2)),
+    setTimeout: (fn, delay) => setTimeout(fn, Number(delay || 0) >= 3000 ? 100 : Math.min(Number(delay || 0), 2)),
     clearTimeout,
     globalThis: null,
     chrome: {
