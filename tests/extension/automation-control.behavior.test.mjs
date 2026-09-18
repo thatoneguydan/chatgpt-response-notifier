@@ -186,10 +186,17 @@ function loadMonitor({ initialTabs = [{ id: 1, url: 'https://chatgpt.com/c/conve
   const webBefore = eventHub();
   const webCompleted = eventHub();
   const webError = eventHub();
+  const alarmsOnAlarm = eventHub();
+  const alarmState = new Map();
   const indexedDB = fakeIndexedDb();
 
   const chrome = {
     runtime: { onMessage: runtimeOnMessage },
+    alarms: {
+      onAlarm: alarmsOnAlarm,
+      create(name, info = {}) { alarmState.set(String(name), clone(info)); },
+      async clear(name) { return alarmState.delete(String(name)); }
+    },
     webRequest: {
       onBeforeRequest: webBefore,
       onCompleted: webCompleted,
@@ -268,7 +275,7 @@ function loadMonitor({ initialTabs = [{ id: 1, url: 'https://chatgpt.com/c/conve
     api: context.__chatgptNotifierMonitorBackground,
     message,
     emit,
-    events: { tabsOnUpdated, tabsOnRemoved, webBefore, webCompleted, webError },
+    events: { tabsOnUpdated, tabsOnRemoved, webBefore, webCompleted, webError, alarmsOnAlarm },
     getTabs: () => tabs.map(clone),
     setTabs(next) { tabs = next.map(clone); },
     setActive(tabId) { activeTabId = tabId; }

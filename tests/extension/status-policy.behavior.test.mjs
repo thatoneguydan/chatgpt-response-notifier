@@ -141,6 +141,14 @@ test('v1 and v2 grammar fixtures are self-consistent and runtime advertises addi
     'INCOMPLETE_TOOL_FAILURE',
     'INCOMPLETE_CONTINUE'
   ]);
+  // The notifier intentionally extends the canonical v2 contract's automatic
+  // continuation set for the user's monitored-chat watchdog behavior.
+  assert.deepEqual(Array.from(loadPolicy().autoContinueStatusCodes), [
+    'INCOMPLETE_LIMIT',
+    'INCOMPLETE_TOOL_FAILURE',
+    'INCOMPLETE_CONTINUE',
+    'INCOMPLETE_HANDOFF'
+  ]);
   assert.deepEqual(contractV1Fixture.validCodes, contractV2Fixture.validCodes.filter((code) => code !== 'INCOMPLETE_CONTINUE'));
   assert.equal(contractV2Fixture.validCodes.includes('START'), false);
 });
@@ -208,7 +216,7 @@ test('observation classifier distinguishes active work, passive missing status, 
   assert.equal(policy.classifyObservation({ statusCode: 'INCOMPLETE_LIMIT' }).automaticActionAllowed, true);
   assert.equal(policy.classifyObservation({ statusCode: 'INCOMPLETE_TOOL_FAILURE' }).automaticActionAllowed, true);
   assert.equal(policy.classifyObservation({ statusCode: 'INCOMPLETE_CONTINUE' }).automaticActionAllowed, true);
-  assert.equal(policy.classifyObservation({ statusCode: 'INCOMPLETE_HANDOFF' }).automaticActionAllowed, false);
+  assert.equal(policy.classifyObservation({ statusCode: 'INCOMPLETE_HANDOFF' }).automaticActionAllowed, true);
   assert.equal(policy.classifyObservation({ stopGenerating: true }).state, 'working');
   assert.equal(policy.classifyObservation({ toolActivity: true }).reason, 'tool-activity');
   const missing = policy.classifyObservation({ assistantKey: 'a1', stableTerminal: true });
