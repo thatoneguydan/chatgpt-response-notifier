@@ -19,6 +19,7 @@ const outboundQueue = [];
 const nativeRequestWaiters = new Map();
 const continuationRequestWatchers = new Map();
 const activeTurnKeys = new Set();
+const activeToastClicks = new Set();
 let outboxFlushPromise = null;
 let reconcilePromise = null;
 
@@ -304,47 +305,87 @@ async function foregroundChromeWindow(windowId) {
   }
 }
 
-async function focusOrOpenConversation(conversationId, conversationUrl, clickContext = {}) {
+async function resolveClickTarget(conversationId, preferredTabId = null) {
+  if (Number.isInteger(preferredTabId)) {
+    try {
+      const exact = await chrome.tabs.get(preferredTabId);
+      if (conversationFromUrl(exact?.url || '')?.id === conversationId) {
+        return { tab: exact, reason: 'exact-target' };
+      }
+    } catch {}
+  }
+
   try {
     const tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] });
-    const existing = tabs.find((tab) => conversationFromUrl(tab.url)?.id === conversationId);
-    if (existing?.id !== undefined) {
-      emitClickDiagnostic('selected-existing-tab', { ...clickContext, conversationId, tabId: existing.id });
-      await chrome.tabs.update(existing.id, { active: true });
-      emitClickDiagnostic('chrome-tab-activated', { ...clickContext, conversationId, tabId: existing.id });
-      if (typeof existing.windowId === 'number') {
-        const focused = await foregroundChromeWindow(existing.windowId);
-        emitClickDiagnostic(focused ? 'chrome-window-focused' : 'chrome-window-focus-failed', {
-          ...clickContext,
-          conversationId,
-          tabId: existing.id,
-          reason: focused ? '' : 'chrome-api-focus-failed'
-        });
-      }
-      sendNative({ type: 'toast.dismissConversation', conversationId });
-      emitClickDiagnostic('click-navigation-complete', { ...clickContext, conversationId, tabId: existing.id });
-      return true;
-    }
+    const matches = tabs.filter((tab) => Number.isInteger(tab?.id) && conversationFromUrl(tab?.url || '')?.id === conversationId);
+    if (matches.length === 1) return { tab: matches[0], reason: 'unique-conversation-target' };
+    if (matches.length > 1) return { tab: null, reason: 'ambiguous-conversation-target' };
+  } catch {
+    return { tab: null, reason: 'tab-query-failed' };
+  }
+  return { tab: null, reason: 'conversation-target-missing' };
+}
 
-    emitClickDiagnostic('selected-new-tab', { ...clickContext, conversationId });
-    const created = await chrome.tabs.create({ url: conversationUrl, active: true });
-    const createdTabId = Number.isInteger(created?.id) ? created.id : null;
-    emitClickDiagnostic('chrome-tab-created', { ...clickContext, conversationId, tabId: createdTabId });
-    if (typeof created?.windowId === 'number') {
-      const focused = await foregroundChromeWindow(created.windowId);
-      emitClickDiagnostic(focused ? 'chrome-window-focused' : 'chrome-window-focus-failed', {
-        ...clickContext,
-        conversationId,
-        tabId: createdTabId,
-        reason: focused ? '' : 'chrome-api-focus-failed'
-      });
-    }
-    sendNative({ type: 'toast.dismissConversation', conversationId });
-    emitClickDiagnostic('click-navigation-complete', { ...clickContext, conversationId, tabId: createdTabId });
+async function foregroundChromeWindow(windowId) {
+  if (typeof windowId !== 'number') return false;
+  try {
+    const windowInfo = await chrome.windows.get(windowId);
+    if (windowInfo.state === 'minimized') await chrome.windows.update(windowId, { state: 'normal' });
+    await chrome.windows.update(windowId, { focused: true });
     return true;
   } catch {
-    emitClickDiagnostic('click-navigation-error', { ...clickContext, conversationId, reason: 'chrome-api-navigation-failed' });
     return false;
+  }
+}
+
+async function focusOrOpenConversation(conversationId, conversationUrl, clickContext = {}) {
+  try {
+    const preferredTabId = Number.isInteger(clickContext?.targetTabId) ? clickContext.targetTabId : null;
+    const resolved = await resolveClickTarget(conversationId, preferredTabId);
+    if (resolved.reason === 'ambiguous-conversation-target') {
+      emitClickDiagnostic('click-target-ambiguous', { ...clickContext, conversationId, reason: resolved.reason });
+      return { requested: false, presented: false, presentationState: 'ambiguous', reason: resolved.reason, targetTabId: null };
+    }
+
+    let target = resolved.tab;
+    let created = false;
+    if (!target) {
+      const safeIdentity = conversationFromUrl(conversationUrl);
+      if (!safeIdentity || safeIdentity.id !== conversationId) {
+        emitClickDiagnostic('click-target-invalid', { ...clickContext, conversationId, reason: 'conversation-url-invalid' });
+        return { requested: false, presented: false, presentationState: 'invalid', reason: 'conversation-url-invalid', targetTabId: null };
+      }
+      emitClickDiagnostic('selected-new-tab', { ...clickContext, conversationId });
+      target = await chrome.tabs.create({ url: safeIdentity.url, active: true });
+      created = true;
+      emitClickDiagnostic('chrome-tab-created', { ...clickContext, conversationId, tabId: target?.id });
+    } else {
+      emitClickDiagnostic('selected-existing-tab', { ...clickContext, conversationId, tabId: target.id, reason: resolved.reason });
+      await chrome.tabs.update(target.id, { active: true });
+      emitClickDiagnostic('chrome-tab-activated', { ...clickContext, conversationId, tabId: target.id });
+    }
+
+    const targetTabId = Number.isInteger(target?.id) ? target.id : null;
+    const targetWindowId = Number.isInteger(target?.windowId) ? target.windowId : null;
+    const focusRequested = targetWindowId !== null ? await foregroundChromeWindow(targetWindowId) : false;
+    emitClickDiagnostic(focusRequested ? 'chrome-window-focus-requested' : 'chrome-window-focus-failed', {
+      ...clickContext,
+      conversationId,
+      tabId: targetTabId,
+      reason: focusRequested ? '' : 'chrome-api-focus-failed'
+    });
+    return {
+      requested: true,
+      presented: false,
+      presentationState: 'requested',
+      reason: focusRequested ? 'focus-requested' : 'focus-request-failed',
+      targetTabId,
+      targetWindowId,
+      created
+    };
+  } catch {
+    emitClickDiagnostic('click-navigation-error', { ...clickContext, conversationId, reason: 'chrome-api-navigation-failed' });
+    return { requested: false, presented: false, presentationState: 'error', reason: 'chrome-api-navigation-failed', targetTabId: null };
   }
 }
 
@@ -539,6 +580,7 @@ function notificationFromTurnRecord(record) {
     title: record.notificationTitle || 'ChatGPT',
     preview: record.notificationPreview || truncateResponse(record.responseBody || record.responseText),
     statusCode: record.statusCode || '',
+    targetTabId: Number.isInteger(record.ownerTabId) ? record.ownerTabId : null,
     completedAt: new Date(Number(record.createdAt || Date.now())).toISOString()
   };
 }
@@ -813,9 +855,70 @@ async function handleNativeMessage(message) {
     const conversationUrl = String(message.conversationUrl || '');
     const notificationId = String(message.notificationId || '');
     const correlationId = String(message.correlationId || crypto.randomUUID());
-    if (!conversationId || !conversationUrl) return;
-    emitClickDiagnostic('worker-click-received', { conversationId, notificationId, correlationId });
-    await focusOrOpenConversation(conversationId, conversationUrl, { notificationId, correlationId });
+    const targetTabId = Number.isInteger(message.targetTabId) ? message.targetTabId : null;
+    if (!conversationId || !conversationUrl || !notificationId) return;
+    if (activeToastClicks.has(notificationId)) {
+      emitClickDiagnostic('click-duplicate-suppressed', { conversationId, notificationId, correlationId, tabId: targetTabId, reason: 'click-already-in-flight' });
+      return;
+    }
+    activeToastClicks.add(notificationId);
+    try {
+      emitClickDiagnostic('worker-click-received', { conversationId, notificationId, correlationId, tabId: targetTabId });
+      const result = await focusOrOpenConversation(conversationId, conversationUrl, { notificationId, correlationId, targetTabId });
+      if (result?.presented === true) {
+        sendNative({ type: 'toast.dismissConversation', conversationId });
+        emitClickDiagnostic('click-presentation-complete', { conversationId, notificationId, correlationId, tabId: result.targetTabId, reason: result.presentationState || 'focused' });
+      } else {
+        sendNative({
+          type: 'toast.clickResult',
+          notificationId,
+          clickState: String(result?.presentationState || 'unverified'),
+          targetTabId: Number.isInteger(result?.targetTabId) ? result.targetTabId : targetTabId
+        });
+        emitClickDiagnostic('click-presentation-incomplete', {
+          conversationId,
+          notificationId,
+          correlationId,
+          tabId: result?.targetTabId,
+          reason: String(result?.reason || result?.presentationState || 'unverified')
+        });
+      }
+    } finally {
+      activeToastClicks.delete(notificationId);
+    }
+    return;
+  }
+
+  if (message.type === 'toast.moveHere') {
+    const conversationId = String(message.conversationId || '');
+    const notificationId = String(message.notificationId || '');
+    const correlationId = String(message.correlationId || crypto.randomUUID());
+    const targetTabId = Number.isInteger(message.targetTabId) ? message.targetTabId : null;
+    if (!conversationId || !notificationId || !Number.isInteger(targetTabId)) return;
+    if (activeToastClicks.has(notificationId)) return;
+    activeToastClicks.add(notificationId);
+    try {
+      const result = await globalThis.__chatgptNotifierCrossDesktopClickFallback?.moveTabHere?.(
+        conversationId,
+        targetTabId,
+        { notificationId, correlationId, targetTabId }
+      );
+      if (result?.presented === true) {
+        sendNative({ type: 'toast.dismissConversation', conversationId });
+        emitClickDiagnostic('click-move-here-complete', { conversationId, notificationId, correlationId, tabId: targetTabId });
+      } else {
+        sendNative({ type: 'toast.clickResult', notificationId, clickState: String(result?.presentationState || 'unverified'), targetTabId });
+        emitClickDiagnostic('click-move-here-incomplete', {
+          conversationId,
+          notificationId,
+          correlationId,
+          tabId: targetTabId,
+          reason: String(result?.reason || 'move-here-unverified')
+        });
+      }
+    } finally {
+      activeToastClicks.delete(notificationId);
+    }
   }
 }
 
