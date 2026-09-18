@@ -15,6 +15,8 @@
   let projectPopover = null;
   let projectInput = null;
   let projectSend = null;
+  let status = null;
+  let statusTimer = null;
   let observer = null;
   let resizeObserver = null;
   let observedComposer = null;
@@ -163,32 +165,34 @@
     });
   }
 
-  function setTransientTitle(button, message) {
-    if (!button) return;
-    const original = button.dataset.defaultTitle || button.title || '';
-    button.title = message;
-    clearTimeout(Number(button.dataset.titleTimer || 0));
-    const timer = setTimeout(() => {
-      button.title = original;
-      delete button.dataset.titleTimer;
+  function setStatus(message) {
+    if (!status) return;
+    status.textContent = String(message || '');
+    status.hidden = !message;
+    if (statusTimer !== null) clearTimeout(statusTimer);
+    statusTimer = setTimeout(() => {
+      statusTimer = null;
+      if (status) {
+        status.textContent = '';
+        status.hidden = true;
+      }
     }, 2200);
-    button.dataset.titleTimer = String(timer);
   }
 
-  async function sendPrompt(text, sourceButton) {
+  async function sendPrompt(text) {
     if (busy) return false;
     const composer = composerElement();
     if (!composer) {
-      setTransientTitle(sourceButton, 'ChatGPT composer not found.');
+      setStatus('ChatGPT composer not found.');
       return false;
     }
     if (composerText(composer)) {
-      setTransientTitle(sourceButton, 'Clear the current draft before using Quick Continue.');
+      setStatus('Clear the current draft first.');
       scheduleSync();
       return false;
     }
     if (stopPresent()) {
-      setTransientTitle(sourceButton, 'Wait for the current response to stop before continuing.');
+      setStatus('Wait for the current response to stop.');
       return false;
     }
 
@@ -196,26 +200,26 @@
     updateAvailability(composer);
     try {
       if (!writeComposer(composer, text)) {
-        setTransientTitle(sourceButton, 'Could not write the prompt.');
+        setStatus('Could not write the prompt.');
         return false;
       }
 
       const sendButton = await waitForSendButton(composer);
       if (!sendButton) {
-        setTransientTitle(sourceButton, 'Send was not ready. The prompt was left in the composer.');
+        setStatus('Send not ready; prompt left in composer.');
         return false;
       }
       if (composerText(composer) !== cleanComposer(text) || stopPresent()) {
-        setTransientTitle(sourceButton, 'The composer changed before send. Nothing was clicked.');
+        setStatus('Composer changed; nothing sent.');
         return false;
       }
 
       try {
         sendButton.click();
-        setTransientTitle(sourceButton, 'Sent.');
+        setStatus('Sent.');
         return true;
       } catch {
-        setTransientTitle(sourceButton, 'Send click failed. The prompt was left in the composer.');
+        setStatus('Send failed; prompt left in composer.');
         return false;
       }
     } finally {
@@ -267,7 +271,7 @@
     const projectName = prompts.normalizeInline(projectInput.value);
     if (!projectName) return;
     const text = prompts.projectContinuePrompt(projectName, new Date());
-    const sent = await sendPrompt(text, projectSend);
+    const sent = await sendPrompt(text);
     if (sent) closeProjectPopover({ clear: true });
   }
 
@@ -297,13 +301,12 @@
     const continueButton = document.createElement('button');
     continueButton.type = 'button';
     continueButton.textContent = 'Continue';
-    continueButton.dataset.defaultTitle = 'Send a timestamped Continue prompt';
-    continueButton.title = continueButton.dataset.defaultTitle;
+    continueButton.setAttribute('aria-label', 'Send timestamped Continue');
     styleButton(continueButton);
     continueButton.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      sendPrompt(prompts.continuePrompt(new Date()), continueButton);
+      sendPrompt(prompts.continuePrompt(new Date()));
     });
     buttons.push(continueButton);
     root.append(continueButton);
@@ -311,8 +314,7 @@
     const projectButton = document.createElement('button');
     projectButton.type = 'button';
     projectButton.textContent = 'Project';
-    projectButton.dataset.defaultTitle = 'Send a timestamped project Continue prompt';
-    projectButton.title = projectButton.dataset.defaultTitle;
+    projectButton.setAttribute('aria-label', 'Project Continue');
     styleButton(projectButton);
     projectButton.addEventListener('click', (event) => {
       event.preventDefault();
@@ -325,7 +327,7 @@
     root.append(projectButton);
 
     const time = document.createElement('span');
-    time.title = 'Current local time';
+    time.setAttribute('aria-label', 'Current local time');
     Object.assign(time.style, {
       marginLeft: '2px',
       padding: '0 3px',
@@ -334,6 +336,20 @@
     });
     root.append(time);
     clock = time;
+
+    const statusNode = document.createElement('span');
+    statusNode.hidden = true;
+    statusNode.setAttribute('role', 'status');
+    Object.assign(statusNode.style, {
+      marginLeft: '2px',
+      maxWidth: '180px',
+      overflow: 'hidden',
+      textOverflow: 'ellipsis',
+      whiteSpace: 'nowrap',
+      opacity: '.72'
+    });
+    root.append(statusNode);
+    status = statusNode;
 
     const popover = document.createElement('div');
     popover.hidden = true;
@@ -388,8 +404,7 @@
     const send = document.createElement('button');
     send.type = 'button';
     send.textContent = 'Send';
-    send.dataset.defaultTitle = 'Send Project Continue';
-    send.title = send.dataset.defaultTitle;
+    send.setAttribute('aria-label', 'Send Project Continue');
     styleButton(send);
     send.disabled = true;
     send.addEventListener('click', (event) => {
@@ -462,8 +477,16 @@
     }
   }
 
+  function suppressLegacyNotifierToolbar() {
+    try {
+      const legacy = document.getElementById('chatgpt-notifier-quick-prompts');
+      if (legacy) legacy.remove();
+    } catch {}
+  }
+
   function syncToolbar() {
     scheduled = null;
+    suppressLegacyNotifierToolbar();
     const composer = composerElement();
     const anchor = composerAnchor(composer);
     const root = toolbar || buildToolbar();
