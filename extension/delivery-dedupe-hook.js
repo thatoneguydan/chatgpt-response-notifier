@@ -191,38 +191,43 @@
   }
 
   async function claimTurn(snapshot, owner = {}) {
-    const deliveryKey = logicalDeliveryKey(snapshot, owner);
+    const baseSnapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
+    const requestId = String(baseSnapshot?.requestId || owner?.requestId || '');
+    const claimSnapshot = requestId && !baseSnapshot?.requestId
+      ? { ...baseSnapshot, requestId }
+      : baseSnapshot;
+    const deliveryKey = logicalDeliveryKey(claimSnapshot, owner);
     if (!deliveryKey) {
-      emitClaimDiagnostic('claim-unkeyed', snapshot, owner, 'missing-logical-delivery-key');
-      return await originalClaimTurn(snapshot, owner);
+      emitClaimDiagnostic('claim-unkeyed', claimSnapshot, owner, 'missing-logical-delivery-key');
+      return await originalClaimTurn(claimSnapshot, owner);
     }
 
     const settledOwner = await settleOwnerTitle(owner);
-    emitClaimDiagnostic('claim-observed', snapshot, settledOwner, 'logical-turn-observed');
-    const reservation = await reserveDelivery(deliveryKey, snapshot, settledOwner);
+    emitClaimDiagnostic('claim-observed', claimSnapshot, settledOwner, 'logical-turn-observed');
+    const reservation = await reserveDelivery(deliveryKey, claimSnapshot, settledOwner);
     if (!reservation.reserved) {
       emitClaimDiagnostic('claim-suppressed', snapshot, settledOwner, reservation.reason);
       return { claimed: false, reason: reservation.reason, record: null };
     }
 
     try {
-      const result = await originalClaimTurn(snapshot, settledOwner);
+      const result = await originalClaimTurn(claimSnapshot, settledOwner);
       if (result?.claimed === true || result?.reason === 'already-claimed') {
         await finalizeReservation(deliveryKey, 'commit');
         emitClaimDiagnostic(
           result?.claimed === true ? 'claim-accepted' : 'claim-coordinator-existing',
-          snapshot,
+          claimSnapshot,
           settledOwner,
           result?.reason || 'claimed'
         );
         return result;
       }
       await finalizeReservation(deliveryKey, 'release');
-      emitClaimDiagnostic('claim-released', snapshot, settledOwner, result?.reason || 'claim-not-owned');
+      emitClaimDiagnostic('claim-released', claimSnapshot, settledOwner, result?.reason || 'claim-not-owned');
       return result;
     } catch (error) {
       await finalizeReservation(deliveryKey, 'release').catch(() => {});
-      emitClaimDiagnostic('claim-error', snapshot, settledOwner, error?.message || error);
+      emitClaimDiagnostic('claim-error', claimSnapshot, settledOwner, error?.message || error);
       throw error;
     }
   }
