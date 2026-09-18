@@ -352,7 +352,7 @@ test('native toast renders persisted completion time, keeps failed clicks retrya
   assert.match(record, /public int\? TargetTabId/);
   assert.match(app, /case "toast\.clickResult"/);
   assert.doesNotMatch(app, /click-shell-fallback/);
-  assert.equal(version, '0.9.29');
+  assert.equal(version, '0.9.29.1');
   assert.equal(manifest.version, version);
 });
 
