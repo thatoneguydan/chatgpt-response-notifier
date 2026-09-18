@@ -141,6 +141,7 @@ function snapshot(overrides = {}) {
 
 function loadHook() {
   const originalClaims = [];
+  const nativeMessages = [];
   const originalCoordinator = {
     async claimTurn(current, owner) {
       originalClaims.push({ snapshot: clone(current), owner: clone(owner) });
@@ -153,6 +154,7 @@ function loadHook() {
     __chatgptNotifierCoordinator: originalCoordinator,
     indexedDB: fakeIndexedDb(),
     chrome: {
+      runtime: { getManifest: () => ({ version: '0.9.29' }) },
       tabs: {
         async get(tabId) {
           assert.equal(tabId, 7);
@@ -160,6 +162,7 @@ function loadHook() {
         }
       }
     },
+    sendNative: (message) => nativeMessages.push(clone(message)),
     structuredClone: clone,
     setTimeout,
     clearTimeout,
@@ -175,7 +178,7 @@ function loadHook() {
     console
   });
   vm.runInContext(source, context);
-  return { context, originalClaims };
+  return { context, originalClaims, nativeMessages };
 }
 
 test('one logical assistant turn produces one coordinator claim across DOM revision changes', async () => {
@@ -214,4 +217,48 @@ test('a different assistant turn remains independently notifiable', async () => 
 
   assert.equal(second.claimed, true);
   assert.equal(originalClaims.length, 2);
+});
+
+
+test('delivery identity diagnostics retain same-request assistant remount evidence', async () => {
+  const { context, nativeMessages } = loadHook();
+  const coordinator = context.__chatgptNotifierCoordinator;
+  const base = snapshot({ requestId: 'request-sensitive-12345678' });
+
+  await coordinator.claimTurn(base, {
+    tabId: 7,
+    documentId: 'document-sensitive-abcdefgh',
+    notificationId: 'notification-sensitive-11111111',
+    notificationTitle: 'Build chat',
+    claimSource: 'coded-completion'
+  });
+  await coordinator.claimTurn(
+    { ...base, assistantKey: 'assistant-sensitive-22222222', revision: '200:remounted' },
+    {
+      tabId: 7,
+      documentId: 'document-sensitive-abcdefgh',
+      notificationId: 'notification-sensitive-33333333',
+      notificationTitle: 'Build chat',
+      claimSource: 'worker-observed-coded-completion'
+    }
+  );
+
+  const accepted = nativeMessages
+    .map((item) => item.diagnostic)
+    .filter((item) => item?.source === 'delivery-identity' && item?.status === 'claim-accepted');
+
+  assert.equal(accepted.length, 2);
+  assert.equal(accepted[0].requestSuffix, '12345678');
+  assert.equal(accepted[1].requestSuffix, '12345678');
+  assert.notEqual(accepted[0].assistantSuffix, accepted[1].assistantSuffix);
+  assert.notEqual(accepted[0].notificationSuffix, accepted[1].notificationSuffix);
+  assert.equal(accepted[0].claimSource, 'coded-completion');
+  assert.equal(accepted[1].claimSource, 'worker-observed-coded-completion');
+  for (const diagnostic of accepted) {
+    const serialized = JSON.stringify(diagnostic);
+    assert.doesNotMatch(serialized, /request-sensitive-/);
+    assert.doesNotMatch(serialized, /document-sensitive-/);
+    assert.doesNotMatch(serialized, /notification-sensitive-/);
+    assert.doesNotMatch(serialized, /assistant-sensitive-/);
+  }
 });
