@@ -911,37 +911,7 @@ async function handleNativeMessage(message) {
     return;
   }
 
-  if (message.type === 'toast.moveHere') {
-    const conversationId = String(message.conversationId || '');
-    const notificationId = String(message.notificationId || '');
-    const correlationId = String(message.correlationId || crypto.randomUUID());
-    const targetTabId = Number.isInteger(message.targetTabId) ? message.targetTabId : null;
-    if (!conversationId || !notificationId || !Number.isInteger(targetTabId)) return;
-    if (activeToastClicks.has(notificationId)) return;
-    activeToastClicks.add(notificationId);
-    try {
-      const result = await globalThis.__chatgptNotifierCrossDesktopClickFallback?.moveTabHere?.(
-        conversationId,
-        targetTabId,
-        { notificationId, correlationId, targetTabId }
-      );
-      if (result?.presented === true) {
-        sendNative({ type: 'toast.dismissConversation', conversationId });
-        emitClickDiagnostic('click-move-here-complete', { conversationId, notificationId, correlationId, tabId: targetTabId });
-      } else {
-        sendNative({ type: 'toast.clickResult', notificationId, clickState: String(result?.presentationState || 'unverified'), targetTabId });
-        emitClickDiagnostic('click-move-here-incomplete', {
-          conversationId,
-          notificationId,
-          correlationId,
-          tabId: targetTabId,
-          reason: String(result?.reason || 'move-here-unverified')
-        });
-      }
-    } finally {
-      activeToastClicks.delete(notificationId);
-    }
-  }
+
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
