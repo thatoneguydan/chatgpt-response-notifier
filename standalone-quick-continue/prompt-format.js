@@ -22,14 +22,20 @@
     return `[${formatTimestamp(date)}] ${normalizeInline(message)}`;
   }
 
-  function continuePrompt(date = new Date()) {
-    return timestamped('Continue until you finish or need something from me.', date);
+  function continuePrompt(continueText, date = new Date()) {
+    return timestamped(continueText, date);
   }
 
-  function projectContinuePrompt(projectName, date = new Date()) {
+  function renderProjectText(projectText, projectName) {
     const project = normalizeInline(projectName);
-    if (!project) return '';
-    return timestamped(`Continue ${project} from canonical GitHub state until you finish or need me.`, date);
+    const template = normalizeInline(projectText);
+    if (!project || !template || !template.includes('{project}')) return '';
+    return template.split('{project}').join(project);
+  }
+
+  function projectContinuePrompt(projectName, projectText, date = new Date()) {
+    const message = renderProjectText(projectText, projectName);
+    return message ? timestamped(message, date) : '';
   }
 
   globalThis.ChatGPTQuickContinuePrompts = Object.freeze({
@@ -37,6 +43,7 @@
     formatTimestamp,
     timestamped,
     continuePrompt,
+    renderProjectText,
     projectContinuePrompt
   });
 })();
