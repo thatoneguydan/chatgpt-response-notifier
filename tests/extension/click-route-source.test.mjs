@@ -17,10 +17,48 @@ test('production click route contains no outgoing native foreground request', ()
   assert.match(worker, /chrome\.tabs\.update\(/);
   assert.match(worker, /chrome\.windows\.update\(/);
   assert.match(worker, /emitClickDiagnostic\(['"]worker-click-received['"]/);
-  assert.match(worker, /emitClickDiagnostic\(['"]click-navigation-complete['"]/);
+  assert.match(worker, /emitClickDiagnostic\(['"]click-presentation-complete['"]/);
 
   assert.match(background, /Retired native foreground path is present in production runtime/);
   assert.match(safety, /typeof globalThis\.requestNativeChromeForeground !== ['"]function['"]/);
+});
+
+test('toast click routing is bounded, exact-targeted, and never silently duplicates an existing chat', () => {
+  const worker = readText('extension/service-worker.js');
+  const click = readText('extension/cross-desktop-click-fallback-background.js');
+  const manager = readText('src/ChatGPTResponseNotifier.Host/ToastManager.cs');
+  const window = readText('src/ChatGPTResponseNotifier.Host/ToastWindow.cs');
+  const app = readText('src/ChatGPTResponseNotifier.Host/NativeHostApplication.cs');
+  const record = readText('src/ChatGPTResponseNotifier.Core/NotificationRecord.cs');
+
+  assert.match(worker, /targetTabId: Number\.isInteger\(record\.ownerTabId\)/);
+  assert.match(worker, /resolveClickTarget\(conversationId, preferredTabId/);
+  assert.match(worker, /ambiguous-conversation-target/);
+  assert.match(worker, /activeToastClicks/);
+  assert.match(worker, /click-duplicate-suppressed/);
+  assert.match(worker, /type: 'toast\.clickResult'/);
+  assert.match(worker, /message\.type === 'toast\.moveHere'/);
+
+  assert.match(click, /PROBE_TIMEOUT_MS = 300/);
+  assert.match(click, /CLICK_DEADLINE_MS = 3500/);
+  assert.match(click, /Promise\.resolve\(promise\)/);
+  assert.match(click, /state: 'other-desktop'/);
+  assert.match(click, /chrome\.windows\.create\(\{ tabId: targetTabId, focused: true, type: 'normal' \}\)/);
+  assert.doesNotMatch(click, /windows\.create\(\{\s*url:/);
+
+  const clicked = manager.slice(manager.indexOf('window.ToastClicked'), manager.indexOf('window.ToastMoveHereRequested'));
+  assert.doesNotMatch(clicked, /RemoveWindow/);
+  assert.match(clicked, /targetTabId = window\.TargetTabId/);
+  assert.match(manager, /ReportClickResult/);
+  assert.match(manager, /window\.SetClickState\("pending", window\.TargetTabId\)/);
+  assert.match(manager, /ToastMoveHereRequested/);
+  assert.match(window, /Content = "Move this tab here"/);
+  assert.match(window, /ToastMoveHereRequested/);
+  assert.match(record, /TargetTabId/);
+
+  assert.match(app, /case "toast\.clickResult"/);
+  assert.doesNotMatch(app, /click-shell-fallback/);
+  assert.doesNotMatch(app, /Process\.Start\(new ProcessStartInfo\(uri\.AbsoluteUri/);
 });
 
 test('status verification preserves prompt revision identity across monitor fallback', () => {

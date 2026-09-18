@@ -80,12 +80,20 @@ internal sealed class ToastManager
         Persist();
     }
 
+    public void ReportClickResult(string notificationId, string clickState, int? targetTabId)
+    {
+        var window = _windows.FirstOrDefault(item => item.Record.Id == notificationId);
+        if (window is null) return;
+        window.SetClickState(clickState, targetTabId);
+        Restack();
+    }
+
     private void AddWindow(NotificationRecord record, bool persist)
     {
         var window = new ToastWindow(record);
         window.ToastClicked += async (_, _) =>
         {
-            RemoveWindow(window, persist: true);
+            window.SetClickState("pending", window.TargetTabId);
             Restack();
             await _sendEvent(new
             {
@@ -93,6 +101,22 @@ internal sealed class ToastManager
                 notificationId = record.Id,
                 conversationId = record.ConversationId,
                 conversationUrl = record.ConversationUrl,
+                targetTabId = window.TargetTabId,
+                correlationId = Guid.NewGuid().ToString("N")
+            });
+        };
+        window.ToastMoveHereRequested += async (_, _) =>
+        {
+            if (window.TargetTabId is not >= 0) return;
+            window.SetClickState("pending", window.TargetTabId);
+            Restack();
+            await _sendEvent(new
+            {
+                type = "toast.moveHere",
+                notificationId = record.Id,
+                conversationId = record.ConversationId,
+                conversationUrl = record.ConversationUrl,
+                targetTabId = window.TargetTabId,
                 correlationId = Guid.NewGuid().ToString("N")
             });
         };

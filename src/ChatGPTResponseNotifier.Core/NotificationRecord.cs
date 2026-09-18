@@ -12,6 +12,7 @@ public sealed record NotificationRecord(
     // by older builds deserialize with legacy-safe defaults and survive update.
     public string StatusCode { get; init; } = string.Empty;
     public string Kind { get; init; } = "coded-result";
+    public int? TargetTabId { get; init; }
 
     public void Validate()
     {
@@ -27,6 +28,7 @@ public sealed record NotificationRecord(
         // The browser tab title is intentionally preserved in full. Preview data
         // remains bounded because it is retained for popup/future toast layouts.
         if (Preview.Length > 2000) throw new InvalidDataException("Notification preview is too long.");
+        if (TargetTabId is < 0) throw new InvalidDataException("Notification target tab id is invalid.");
         if (StatusCode.Length > 64 || StatusCode.Any(character =>
             !(character is >= 'A' and <= 'Z') &&
             !(character is >= '0' and <= '9') &&

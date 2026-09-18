@@ -11,13 +11,18 @@ internal sealed class ToastWindow : Window
 {
     public NotificationRecord Record { get; }
     public bool SuppressCloseEvent { get; set; }
+    private Button? _moveHereButton;
+    private TextBlock? _clickStateText;
+    public int? TargetTabId { get; private set; }
 
     public event EventHandler? ToastClicked;
+    public event EventHandler? ToastMoveHereRequested;
     public event EventHandler? ToastDismissed;
 
     public ToastWindow(NotificationRecord record)
     {
         Record = record;
+        TargetTabId = record.TargetTabId;
         Width = 350;
         SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.None;
@@ -105,6 +110,33 @@ internal sealed class ToastWindow : Window
             });
         }
 
+        _clickStateText = new TextBlock
+        {
+            Visibility = Visibility.Collapsed,
+            Margin = new Thickness(0, 6, 0, 0),
+            Foreground = new SolidColorBrush(Color.FromRgb(92, 92, 92)),
+            FontSize = 10.5,
+            TextWrapping = TextWrapping.Wrap
+        };
+        stack.Children.Add(_clickStateText);
+
+        _moveHereButton = new Button
+        {
+            Content = "Move this tab here",
+            Visibility = Visibility.Collapsed,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 7, 0, 0),
+            Padding = new Thickness(9, 3, 9, 3),
+            FontSize = 10.5,
+            Cursor = Cursors.Hand
+        };
+        _moveHereButton.Click += (_, e) =>
+        {
+            e.Handled = true;
+            ToastMoveHereRequested?.Invoke(this, EventArgs.Empty);
+        };
+        stack.Children.Add(_moveHereButton);
+
         // Preview remains persisted in NotificationRecord for popup history and
         // future toast layouts, but is intentionally not rendered here.
         var border = new Border
@@ -132,6 +164,48 @@ internal sealed class ToastWindow : Window
             ToastClicked?.Invoke(this, EventArgs.Empty);
         };
         return border;
+    }
+
+    public void SetClickState(string state, int? targetTabId = null)
+    {
+        if (targetTabId is >= 0) TargetTabId = targetTabId;
+        if (_moveHereButton is null || _clickStateText is null) return;
+
+        switch (state)
+        {
+            case "other-desktop":
+                _clickStateText.Text = "This chat is on another Windows desktop.";
+                _clickStateText.Visibility = Visibility.Visible;
+                _moveHereButton.Visibility = TargetTabId is >= 0 ? Visibility.Visible : Visibility.Collapsed;
+                break;
+            case "move-failed":
+                _clickStateText.Text = "Could not move the existing tab here. Click the notification to retry.";
+                _clickStateText.Visibility = Visibility.Visible;
+                _moveHereButton.Visibility = TargetTabId is >= 0 ? Visibility.Visible : Visibility.Collapsed;
+                break;
+            case "probe-timeout":
+            case "route-timeout":
+            case "unverified":
+            case "visible-not-focused":
+            case "target-changed":
+            case "ambiguous":
+            case "invalid":
+            case "error":
+                _clickStateText.Text = "Could not confirm the existing tab was shown. Click the notification to retry.";
+                _clickStateText.Visibility = Visibility.Visible;
+                _moveHereButton.Visibility = Visibility.Collapsed;
+                break;
+            case "pending":
+                _clickStateText.Text = "Opening existing tab…";
+                _clickStateText.Visibility = Visibility.Visible;
+                _moveHereButton.Visibility = Visibility.Collapsed;
+                break;
+            default:
+                _clickStateText.Text = string.Empty;
+                _clickStateText.Visibility = Visibility.Collapsed;
+                _moveHereButton.Visibility = Visibility.Collapsed;
+                break;
+        }
     }
 
     private static string FormatCompletedAt(DateTimeOffset value)
