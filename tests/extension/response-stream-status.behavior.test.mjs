@@ -6,6 +6,7 @@ import test from 'node:test';
 const mainSource = readFileSync(new URL('../../extension/response-stream-status-main.js', import.meta.url), 'utf8');
 const bridgeSource = readFileSync(new URL('../../extension/response-stream-status-bridge.js', import.meta.url), 'utf8');
 const backgroundSource = readFileSync(new URL('../../extension/response-stream-status-background.js', import.meta.url), 'utf8');
+const serviceWorkerSource = readFileSync(new URL('../../extension/service-worker.js', import.meta.url), 'utf8');
 
 function streamResponse(chunks, onClone = () => {}) {
   return {
@@ -38,6 +39,7 @@ test('response-stream sources are valid JavaScript', () => {
   assert.doesNotThrow(() => new vm.Script(mainSource));
   assert.doesNotThrow(() => new vm.Script(bridgeSource));
   assert.doesNotThrow(() => new vm.Script(backgroundSource));
+  assert.doesNotThrow(() => new vm.Script(serviceWorkerSource));
 });
 
 test('MAIN-world observer tees the existing fetch once and emits only the terminal status token', async () => {
@@ -219,6 +221,22 @@ test('stream dedupe carries exact request identity when page prompt identity is 
   assert.match(backgroundSource, /getEarlyDelivery\(\{ conversationId, requestId, promptKey \}\)/);
   assert.match(backgroundSource, /ACTIVE_CONTEXT_TTL_MS = 60 \* 60 \* 1000/);
   assert.match(backgroundSource, /SETTLED_CONTEXT_TTL_MS = 10 \* 60 \* 1000/);
+});
+
+test('request completion arms durable worker DOM fallback without generating ChatGPT traffic', () => {
+  assert.match(backgroundSource, /__chatgptNotifierObservationScheduler\?\.observeRequestCompletion\?\.\(details\)/);
+  assert.match(serviceWorkerSource, /__chatgptNotifierWorkerTerminalFallback/);
+  assert.match(serviceWorkerSource, /handleWorkerObservedTerminalStatus/);
+  assert.match(serviceWorkerSource, /queryImmediateTerminalStatus/);
+  assert.match(serviceWorkerSource, /timeoutMs: 1/);
+  assert.match(serviceWorkerSource, /request-identity-mismatch/);
+  assert.match(serviceWorkerSource, /prompt-identity-mismatch/);
+  assert.match(serviceWorkerSource, /assistant-identity-mismatch/);
+  assert.match(serviceWorkerSource, /processCodedCompletion/);
+  assert.doesNotMatch(serviceWorkerSource.slice(
+    serviceWorkerSource.indexOf('async function handleWorkerObservedTerminalStatus'),
+    serviceWorkerSource.indexOf('globalThis.__chatgptNotifierWorkerTerminalFallback')
+  ), /\bfetch\s*\(|XMLHttpRequest|backend-api/);
 });
 
 test('MAIN observer does not poll ChatGPT or use extension privileges', () => {
