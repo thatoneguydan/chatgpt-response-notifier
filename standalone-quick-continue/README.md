@@ -8,10 +8,11 @@ It is intentionally independent from ChatGPT Response Notifier. It has no servic
 
 - **Continue** immediately sends:
   - `[Sep 18, 9:20 AM] Continue until you finish or need something from me.`
-- **Project** opens a small non-modal project-name field. It does not focus-trap or block the page. Enter or **Send** immediately sends:
+- **Project** opens a compact non-modal project picker. Saved project titles come from `projects.json`; clicking one immediately sends:
   - `[Sep 18, 9:20 AM] Continue campaign desk from canonical GitHub state until you finish or need me.`
+- A blank **Other project…** field remains at the bottom for one-off project names. Enter or **Send** submits it.
 
-The project name is inserted as plain text exactly as typed after whitespace normalization.
+Project names are inserted as plain text after whitespace normalization. Edit `projects.json` to change the saved list without modifying the UI code.
 
 ## Safety behavior
 
@@ -29,6 +30,6 @@ Run the included installer from PowerShell with a temporary execution-policy byp
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
 ```
 
-It copies the extension to the stable path `%LOCALAPPDATA%\ChatGPTQuickContinue\Extension` and prints the one-time **Load unpacked** steps for `chrome://extensions`. It does not open Chrome, change Chrome policy, write the registry, or install any background service.
+It copies the extension and `projects.json` to the stable path `%LOCALAPPDATA%\ChatGPTQuickContinue\Extension` and prints the one-time **Load unpacked** steps for `chrome://extensions`. It does not open Chrome, change Chrome policy, write the registry, or install any background service.
 
 Because this is a separate extension, it can stay enabled while ChatGPT Response Notifier is disabled or under repair. If the notifier is later enabled too, Quick Continue suppresses the notifier's older quick-prompt toolbar so only the standalone controls are shown.

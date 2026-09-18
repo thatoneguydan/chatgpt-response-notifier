@@ -9,10 +9,13 @@
 
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const SEND_READY_TIMEOUT_MS = 1800;
+  const MAX_PROJECTS = 40;
   const buttons = [];
+  const projectButtons = [];
   let toolbar = null;
   let clock = null;
   let projectPopover = null;
+  let projectList = null;
   let projectInput = null;
   let projectSend = null;
   let status = null;
@@ -25,6 +28,9 @@
   let scheduledWithAnimationFrame = false;
   let clockTimer = null;
   let busy = false;
+  let savedProjects = [];
+  let projectsLoaded = false;
+  let projectsLoadPromise = null;
 
   const cleanComposer = (value) => String(value || '')
     .replace(/[\u200B-\u200D\uFEFF]/g, '')
@@ -228,6 +234,44 @@
     }
   }
 
+  function normalizeProjectList(value) {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set();
+    const result = [];
+    for (const entry of value) {
+      const title = prompts.normalizeInline(entry);
+      const key = title.toLocaleLowerCase();
+      if (!title || seen.has(key)) continue;
+      seen.add(key);
+      result.push(title);
+      if (result.length >= MAX_PROJECTS) break;
+    }
+    return result;
+  }
+
+  async function loadProjects() {
+    if (projectsLoaded) return savedProjects;
+    if (projectsLoadPromise) return projectsLoadPromise;
+
+    projectsLoadPromise = (async () => {
+      try {
+        const url = chrome.runtime.getURL('projects.json');
+        const response = await fetch(url, { cache: 'no-store' });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        savedProjects = normalizeProjectList(await response.json());
+      } catch {
+        savedProjects = [];
+        setStatus('Could not load project list.');
+      } finally {
+        projectsLoaded = true;
+        projectsLoadPromise = null;
+      }
+      return savedProjects;
+    })();
+
+    return projectsLoadPromise;
+  }
+
   function formatClock(date = new Date()) {
     try {
       return new Intl.DateTimeFormat(undefined, {
@@ -256,23 +300,85 @@
     updateProjectSendState();
   }
 
-  function updateProjectSendState() {
-    if (!projectSend || !projectInput) return;
+  function canSendProject() {
     const composer = composerElement();
-    projectSend.disabled = busy
-      || !prompts.normalizeInline(projectInput.value)
-      || !composer
-      || Boolean(composerText(composer))
-      || stopPresent();
+    return !busy
+      && Boolean(composer)
+      && !composerText(composer)
+      && !stopPresent();
   }
 
-  async function sendProject() {
-    if (!projectInput) return;
-    const projectName = prompts.normalizeInline(projectInput.value);
-    if (!projectName) return;
-    const text = prompts.projectContinuePrompt(projectName, new Date());
-    const sent = await sendPrompt(text);
+  function updateProjectSendState() {
+    if (projectSend && projectInput) {
+      projectSend.disabled = !canSendProject() || !prompts.normalizeInline(projectInput.value);
+    }
+    for (const button of projectButtons) {
+      button.disabled = !canSendProject();
+      button.style.opacity = button.disabled ? '.45' : '1';
+      button.style.cursor = button.disabled ? 'default' : 'pointer';
+    }
+  }
+
+  async function sendProjectName(projectName) {
+    const normalized = prompts.normalizeInline(projectName);
+    if (!normalized) return;
+    const sent = await sendPrompt(prompts.projectContinuePrompt(normalized, new Date()));
     if (sent) closeProjectPopover({ clear: true });
+  }
+
+  async function sendCustomProject() {
+    if (!projectInput) return;
+    await sendProjectName(projectInput.value);
+  }
+
+  function renderProjectList(projects) {
+    if (!projectList) return;
+    projectList.replaceChildren();
+    projectButtons.length = 0;
+
+    if (!projects.length) {
+      const empty = document.createElement('div');
+      empty.textContent = 'No saved projects';
+      Object.assign(empty.style, {
+        padding: '4px 2px',
+        opacity: '.6'
+      });
+      projectList.append(empty);
+      return;
+    }
+
+    for (const project of projects) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = project;
+      button.setAttribute('aria-label', `Continue ${project}`);
+      styleButton(button);
+      Object.assign(button.style, {
+        width: '100%',
+        textAlign: 'left'
+      });
+      button.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        sendProjectName(project);
+      });
+      projectButtons.push(button);
+      projectList.append(button);
+    }
+    updateProjectSendState();
+  }
+
+  async function openProjectPopover() {
+    if (!projectPopover) return;
+    projectPopover.hidden = false;
+    if (projectList && !projectsLoaded) {
+      projectList.textContent = 'Loading projects…';
+      const projects = await loadProjects();
+      renderProjectList(projects);
+    } else {
+      renderProjectList(savedProjects);
+    }
+    updateProjectSendState();
   }
 
   function buildToolbar() {
@@ -320,8 +426,8 @@
       event.preventDefault();
       event.stopPropagation();
       if (!projectPopover) return;
-      projectPopover.hidden = !projectPopover.hidden;
-      updateProjectSendState();
+      if (projectPopover.hidden) openProjectPopover();
+      else closeProjectPopover();
     });
     buttons.push(projectButton);
     root.append(projectButton);
@@ -360,9 +466,12 @@
       right: '0',
       bottom: 'calc(100% + 6px)',
       display: 'flex',
-      alignItems: 'center',
-      gap: '5px',
-      padding: '6px',
+      flexDirection: 'column',
+      alignItems: 'stretch',
+      gap: '6px',
+      minWidth: '220px',
+      maxWidth: '280px',
+      padding: '7px',
       border: '1px solid var(--border-light, rgba(127,127,127,.28))',
       borderRadius: '9px',
       background: 'var(--main-surface-primary, #fff)',
@@ -370,14 +479,49 @@
       boxShadow: '0 4px 18px rgba(0,0,0,.14)'
     });
 
+    const savedLabel = document.createElement('div');
+    savedLabel.textContent = 'Projects';
+    Object.assign(savedLabel.style, {
+      padding: '1px 2px',
+      opacity: '.62',
+      fontWeight: '600'
+    });
+    popover.append(savedLabel);
+
+    const list = document.createElement('div');
+    Object.assign(list.style, {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '3px',
+      maxHeight: '190px',
+      overflowY: 'auto'
+    });
+    popover.append(list);
+    projectList = list;
+
+    const divider = document.createElement('div');
+    Object.assign(divider.style, {
+      height: '1px',
+      background: 'var(--border-light, rgba(127,127,127,.20))'
+    });
+    popover.append(divider);
+
+    const customRow = document.createElement('div');
+    Object.assign(customRow.style, {
+      display: 'flex',
+      alignItems: 'center',
+      gap: '5px'
+    });
+
     const input = document.createElement('input');
     input.type = 'text';
-    input.placeholder = 'Project name…';
+    input.placeholder = 'Other project…';
     input.autocomplete = 'off';
     input.spellcheck = false;
-    input.setAttribute('aria-label', 'Project name');
+    input.setAttribute('aria-label', 'Other project name');
     Object.assign(input.style, {
-      width: '170px',
+      flex: '1',
+      minWidth: '0',
       height: '27px',
       padding: '0 7px',
       border: '1px solid var(--border-light, rgba(127,127,127,.30))',
@@ -392,28 +536,29 @@
       if (event.key === 'Enter') {
         event.preventDefault();
         event.stopPropagation();
-        sendProject();
+        sendCustomProject();
       } else if (event.key === 'Escape') {
         event.preventDefault();
         closeProjectPopover();
       }
     });
-    popover.append(input);
+    customRow.append(input);
     projectInput = input;
 
     const send = document.createElement('button');
     send.type = 'button';
     send.textContent = 'Send';
-    send.setAttribute('aria-label', 'Send Project Continue');
+    send.setAttribute('aria-label', 'Send custom Project Continue');
     styleButton(send);
     send.disabled = true;
     send.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      sendProject();
+      sendCustomProject();
     });
-    popover.append(send);
+    customRow.append(send);
     projectSend = send;
+    popover.append(customRow);
 
     root.append(popover);
     projectPopover = popover;
@@ -533,7 +678,7 @@
   clockTimer = setInterval(scheduleSync, 30_000);
 
   globalThis.__chatgptQuickContinueRuntime = Object.freeze({
-    version: 1,
+    version: 2,
     dispose() {
       try { observer?.disconnect(); } catch {}
       try { resizeObserver?.disconnect(); } catch {}
@@ -544,6 +689,7 @@
         }
       } catch {}
       try { if (clockTimer !== null) clearInterval(clockTimer); } catch {}
+      try { if (statusTimer !== null) clearTimeout(statusTimer); } catch {}
       try { toolbar?.remove(); } catch {}
     }
   });
