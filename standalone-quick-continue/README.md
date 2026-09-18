@@ -40,7 +40,7 @@ Editing that physical file changes the defaults used by a fresh/reset configurat
 
 - Existing ChatGPT drafts are never overwritten.
 - The Project menu remains available for config editing even when sending is unavailable.
-- Actual send controls are disabled while ChatGPT is generating or when the composer already has text.
+- Actual send controls remain available while ChatGPT is generating, so Continue/Project can be queued as follow-up messages; they are disabled when the composer already has text.
 - Auto-send uses ChatGPT's real enabled Send button.
 - Each operator action causes at most one Send-button click. There are no automatic retries.
 - If the Send button does not become ready, the generated prompt is left in the composer for inspection/manual sending.
