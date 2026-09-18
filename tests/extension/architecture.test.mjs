@@ -186,6 +186,9 @@ test('monitored chats use a 30-minute local code watchdog with a three-send cap 
   assert.match(monitor, /resetCodeWatchdogForIncomplete/);
   assert.match(monitor, /isAutoContinueStatusCode/);
   assert.match(status, /performWatchdogContinuation/);
+  assert.match(status, /function waitForWatchdogSendButton/);
+  assert.match(status, /waitUntil\(\(\) => enabledSend\(node\)/);
+  assert.match(monitor, /lastAutomaticPromptKey/);
   assert.match(status, /terminal-status-observed/);
   assert.match(status, /watchdog-continuation-user-turn-confirmed/);
   assert.match(policy, /'INCOMPLETE_LIMIT'/);
