@@ -151,10 +151,10 @@
     return false;
   }
 
-  // The primary service-worker now owns Chrome-only click navigation directly.
-  // This compatibility layer intentionally does not replace it; replacing the
-  // function would discard primary click-stage diagnostics and could regress the
-  // exact route this layer originally existed to protect.
+  // The primary service-worker owns exact Chrome tab selection directly. A
+  // user-click-only native adapter may switch Windows virtual desktops after the
+  // exact target is proven hidden, but native foregrounding remains retired.
+  // This compatibility layer intentionally does not replace the primary route.
   function verifyPrimaryClickPath() {
     return typeof globalThis.requestNativeChromeForeground !== 'function';
   }
