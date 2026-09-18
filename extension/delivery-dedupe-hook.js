@@ -32,7 +32,7 @@
       claimSource: String(owner?.claimSource || '').slice(0, 64),
       tabId: Number.isInteger(owner?.tabId) ? owner.tabId : undefined,
       conversationSuffix: suffix(snapshot?.conversationId),
-      requestSuffix: suffix(snapshot?.requestId),
+      requestSuffix: suffix(snapshot?.requestId || owner?.requestId),
       promptSuffix: suffix(snapshot?.promptKey),
       assistantSuffix: suffix(snapshot?.assistantKey),
       revisionSuffix: suffix(snapshot?.revision),
@@ -44,12 +44,23 @@
     } catch {}
   }
 
-  function logicalDeliveryKey(snapshot) {
+  function requestDeliveryKey(snapshot, owner = {}) {
+    const conversationId = String(snapshot?.conversationId || '');
+    const requestId = String(snapshot?.requestId || owner?.requestId || '');
+    const documentId = String(owner?.documentId || snapshot?.documentId || '');
+    if (!conversationId || !requestId || !documentId) return '';
+    return `request|${conversationId}|${documentId}|${requestId}`;
+  }
+
+  function logicalDeliveryKey(snapshot, owner = {}) {
+    const requestKey = requestDeliveryKey(snapshot, owner);
+    if (requestKey) return requestKey;
+
     const conversationId = String(snapshot?.conversationId || '');
     const promptKey = String(snapshot?.promptKey || '');
     const assistantKey = String(snapshot?.assistantKey || '');
     if (!conversationId || !promptKey || !assistantKey) return '';
-    return `${conversationId}|${promptKey}|${assistantKey}`;
+    return `turn|${conversationId}|${promptKey}|${assistantKey}`;
   }
 
   function meaningfulTitle(value) {
@@ -120,6 +131,8 @@
           promptKey: String(snapshot?.promptKey || ''),
           assistantKey: String(snapshot?.assistantKey || ''),
           revision: String(snapshot?.revision || ''),
+          requestId: String(snapshot?.requestId || owner?.requestId || ''),
+          documentId: String(owner?.documentId || snapshot?.documentId || ''),
           fingerprint: String(owner?.fingerprint || ''),
           state: 'pending',
           createdAt: existing?.createdAt || now,
@@ -178,7 +191,7 @@
   }
 
   async function claimTurn(snapshot, owner = {}) {
-    const deliveryKey = logicalDeliveryKey(snapshot);
+    const deliveryKey = logicalDeliveryKey(snapshot, owner);
     if (!deliveryKey) {
       emitClaimDiagnostic('claim-unkeyed', snapshot, owner, 'missing-logical-delivery-key');
       return await originalClaimTurn(snapshot, owner);
@@ -220,7 +233,8 @@
   });
 
   globalThis.__chatgptNotifierDeliveryDedupeHook = Object.freeze({
-    version: 2,
+    version: 3,
+    requestDeliveryKey,
     logicalDeliveryKey,
     meaningfulTitle,
     pruneOldClaims
