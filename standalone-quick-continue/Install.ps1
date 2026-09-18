@@ -9,8 +9,9 @@ $sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $requiredFiles = @(
     'manifest.json',
     'prompt-format.js',
-    'content-script.js',
-    'projects.json'
+    'config.js',
+    'config.json',
+    'content-script.js'
 )
 
 foreach ($file in $requiredFiles) {
@@ -25,8 +26,9 @@ New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
 $managedFiles = @(
     'manifest.json',
     'prompt-format.js',
+    'config.js',
+    'config.json',
     'content-script.js',
-    'projects.json',
     'README.md'
 )
 
@@ -35,6 +37,11 @@ foreach ($file in $managedFiles) {
     if (Test-Path -LiteralPath $sourcePath -PathType Leaf) {
         Copy-Item -LiteralPath $sourcePath -Destination (Join-Path $InstallRoot $file) -Force
     }
+}
+
+$legacyProjects = Join-Path $InstallRoot 'projects.json'
+if (Test-Path -LiteralPath $legacyProjects -PathType Leaf) {
+    Remove-Item -LiteralPath $legacyProjects -Force
 }
 
 $manifest = Get-Content -LiteralPath (Join-Path $InstallRoot 'manifest.json') -Raw | ConvertFrom-Json
@@ -52,4 +59,4 @@ Write-Host '  2. Enable Developer mode'
 Write-Host '  3. Choose Load unpacked'
 Write-Host "  4. Select: $InstallRoot"
 Write-Host ''
-Write-Host 'Future updates can reuse this installer; the stable install path does not change.'
+Write-Host 'After installation, use Project > Edit to change the live JSON config without reloading Chrome or ChatGPT.'
