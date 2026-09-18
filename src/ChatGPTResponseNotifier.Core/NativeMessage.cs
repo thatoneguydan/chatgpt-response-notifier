@@ -9,6 +9,8 @@ public sealed class NativeMessage
     public string? ConversationId { get; init; }
     public string? ConversationUrl { get; init; }
     public string? NotificationId { get; init; }
+    public int? TargetTabId { get; init; }
+    public string? ClickState { get; init; }
     public string? WindowTitle { get; init; }
     public int? WindowLeft { get; init; }
     public int? WindowTop { get; init; }
@@ -53,6 +55,8 @@ public sealed class NativeMessage
             ConversationId = ReadString("conversationId"),
             ConversationUrl = ReadString("conversationUrl"),
             NotificationId = ReadString("notificationId"),
+            TargetTabId = ReadInt32("targetTabId"),
+            ClickState = ReadString("clickState"),
             WindowTitle = ReadString("windowTitle"),
             WindowLeft = ReadInt32("windowLeft"),
             WindowTop = ReadInt32("windowTop"),
