@@ -17,7 +17,7 @@ test('production click route contains no outgoing native foreground request', ()
   assert.match(worker, /chrome\.tabs\.update\(/);
   assert.match(worker, /chrome\.windows\.update\(/);
   assert.match(worker, /emitClickDiagnostic\(['"]worker-click-received['"]/);
-  assert.match(worker, /emitClickDiagnostic\(['"]click-navigation-complete['"]/);
+  assert.match(worker, /emitClickDiagnostic\(['"]click-presentation-complete['"]/);
 
   assert.match(background, /Retired native foreground path is present in production runtime/);
   assert.match(safety, /typeof globalThis\.requestNativeChromeForeground !== ['"]function['"]/);
@@ -50,7 +50,7 @@ test('toast click routing is bounded, exact-targeted, and never silently duplica
   assert.doesNotMatch(clicked, /RemoveWindow/);
   assert.match(clicked, /targetTabId = window\.TargetTabId/);
   assert.match(manager, /ReportClickResult/);
-  assert.match(manager, /window\\.SetClickState\\(\"pending\", window\\.TargetTabId\\)/);
+  assert.match(manager, /window\.SetClickState\("pending", window\.TargetTabId\)/);
   assert.match(manager, /ToastMoveHereRequested/);
   assert.match(window, /Content = "Move this tab here"/);
   assert.match(window, /ToastMoveHereRequested/);
