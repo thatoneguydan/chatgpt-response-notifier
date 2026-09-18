@@ -207,12 +207,12 @@ test('stream early notification uses shared request delivery authority before du
   const sharedLookup = queueSource.indexOf('__chatgptNotifierDeliveryDedupeHook');
   const sharedReserve = queueSource.indexOf('reserveRequestDelivery');
   const durableQueue = queueSource.indexOf("state.queueNotification('', notification, fingerprint)");
-  const sharedCommit = queueSource.indexOf('commitRequestDelivery');
+  const sharedCommitAfterQueue = queueSource.indexOf('commitRequestDelivery', durableQueue);
 
   assert.ok(sharedLookup >= 0);
   assert.ok(sharedReserve > sharedLookup);
   assert.ok(durableQueue > sharedReserve, 'shared request ownership must be reserved before the stream path enters the durable outbox');
-  assert.ok(sharedCommit > durableQueue, 'shared ownership commits only after durable queueing succeeds');
+  assert.ok(sharedCommitAfterQueue > durableQueue, 'shared ownership commits only after durable queueing succeeds');
   assert.match(queueSource, /response-stream-shared-delivery-suppressed/);
   assert.match(queueSource, /shared-request-delivery-authority-unavailable/);
   assert.match(queueSource, /releaseRequestDelivery/);
