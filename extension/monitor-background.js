@@ -348,7 +348,7 @@
     });
   }
 
-  async function resetCodeWatchdogForIncomplete(clean, sender, existingValue = null, automaticSentAt = 0) {
+  async function resetCodeWatchdogForIncomplete(clean, sender, existingValue = null, automaticSentAt = 0, automaticPromptKey = '') {
     const conversationId = String(clean?.conversationId || existingValue?.conversationId || '');
     if (!conversationId) return null;
     await cancelCodeWatchdogAlarm(conversationId);
@@ -363,6 +363,7 @@
       resetAt: Date.now(),
       lastStatusCode: String(clean?.statusCode || ''),
       lastAutomaticSentAt: Math.max(0, Number(automaticSentAt || 0)),
+      lastAutomaticPromptKey: String(automaticPromptKey || ''),
       deadlineAt: 0
     });
   }
@@ -398,8 +399,9 @@
 
     if (current?.stopped === true) {
       const sameRequest = requestStartedAt === Number(current.lastRequestStartedAt || 0);
-      const followsAutomaticSend = Number(current.lastAutomaticSentAt || 0) > 0
-        && Math.abs(requestStartedAt - Number(current.lastAutomaticSentAt || 0)) <= CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS;
+      const followsAutomaticSend = (current.lastAutomaticPromptKey && String(clean.promptKey || '') === String(current.lastAutomaticPromptKey))
+        || (Number(current.lastAutomaticSentAt || 0) > 0
+          && Math.abs(requestStartedAt - Number(current.lastAutomaticSentAt || 0)) <= CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS);
       if (sameRequest || followsAutomaticSend) {
         if (!sameRequest) {
           current = await putCodeWatchdog(conversationId, {
@@ -417,8 +419,9 @@
     let sendCount = Math.max(0, Number(current?.sendCount || 0));
     const requestChanged = requestStartedAt !== Number(current?.lastRequestStartedAt || 0);
     if (requestChanged && current) {
-      const followsAutomaticSend = Number(current.lastAutomaticSentAt || 0) > 0
-        && Math.abs(requestStartedAt - Number(current.lastAutomaticSentAt || 0)) <= CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS;
+      const followsAutomaticSend = (current.lastAutomaticPromptKey && String(clean.promptKey || '') === String(current.lastAutomaticPromptKey))
+        || (Number(current.lastAutomaticSentAt || 0) > 0
+          && Math.abs(requestStartedAt - Number(current.lastAutomaticSentAt || 0)) <= CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS);
       if (!followsAutomaticSend) sendCount = 0;
     }
 
@@ -522,7 +525,7 @@
         return;
       }
       const result = await sendCodeWatchdogContinuation(tab.id, conversationId);
-      record = await resetCodeWatchdogForIncomplete(live, { tab }, record, result?.ok === true ? Date.now() : 0);
+      record = await resetCodeWatchdogForIncomplete(live, { tab }, record, result?.ok === true ? Date.now() : 0, result?.continuationUserKey || '');
       if (result?.ok !== true) await scheduleCodeWatchdog(record, Date.now() + CODE_WATCHDOG_RETRY_MS);
       return;
     }
@@ -543,7 +546,8 @@
           { ...live, statusCode: racedStatusCode },
           { tab },
           record,
-          result?.ok === true ? Date.now() : 0
+          result?.ok === true ? Date.now() : 0,
+          result?.continuationUserKey || ''
         );
         if (result?.ok !== true) await scheduleCodeWatchdog(record, Date.now() + CODE_WATCHDOG_RETRY_MS);
       } else {
@@ -564,6 +568,7 @@
       ownerTabId: tab.id,
       sendCount: nextCount,
       lastAutomaticSentAt: sentAt,
+      lastAutomaticPromptKey: String(result?.continuationUserKey || ''),
       waitingForRequestStart: false,
       deadlineAt: 0
     });
