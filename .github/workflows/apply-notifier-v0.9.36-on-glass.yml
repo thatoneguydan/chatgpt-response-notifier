@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   apply:
-    if: github.event.head_commit.message == 'Apply notifier v0.9.36 on Glass'
+    if: startsWith(github.event.head_commit.message, 'Apply notifier v0.9.36 on Glass')
     runs-on: [self-hosted, Windows, X64, glass-builder]
     timeout-minutes: 20
     steps:
