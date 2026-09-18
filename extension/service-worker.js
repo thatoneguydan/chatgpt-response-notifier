@@ -796,11 +796,19 @@ async function showCompletionFromUpstream(message, sender) {
   if (!globalThis.ChatGPTNotifierStatusCode?.isStatusCode(statusCode)) return null;
   if (!statusBoundToCompletion(status, originIdentity, message?.response)) return null;
 
+  const requestOwner = globalThis.__chatgptNotifierResponseStreamStatus?.requestOwnerForTurn?.({
+    tabId,
+    chromeDocumentId: senderDocumentId,
+    conversationId: status.conversationId,
+    promptKey: status.promptKey
+  }) || null;
+  const requestId = String(message?.requestId || requestOwner?.requestId || '');
+
   return await processCodedCompletion(status, {
     tabId,
     chromeDocumentId: senderDocumentId,
     fingerprint: String(message?.fingerprint || ''),
-    requestId: String(message?.requestId || ''),
+    requestId,
     notificationTitle: fullTabTitle(sender, message),
     notificationPreview: truncateResponse(status?.responseBody || message?.response),
     reason: 'coded-completion'
