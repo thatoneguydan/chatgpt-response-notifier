@@ -80,19 +80,40 @@ internal sealed class ToastManager
         Persist();
     }
 
+    public void ReportClickResult(string notificationId, string clickState)
+    {
+        var window = _windows.FirstOrDefault(item => item.Record.Id == notificationId);
+        if (window is null) return;
+        window.SetClickState(clickState);
+        Restack();
+    }
+
     private void AddWindow(NotificationRecord record, bool persist)
     {
         var window = new ToastWindow(record);
         window.ToastClicked += async (_, _) =>
         {
-            RemoveWindow(window, persist: true);
-            Restack();
+            window.SetClickState(string.Empty);
             await _sendEvent(new
             {
                 type = "toast.clicked",
                 notificationId = record.Id,
                 conversationId = record.ConversationId,
                 conversationUrl = record.ConversationUrl,
+                targetTabId = record.TargetTabId,
+                correlationId = Guid.NewGuid().ToString("N")
+            });
+        };
+        window.ToastMoveHereRequested += async (_, _) =>
+        {
+            window.SetClickState(string.Empty);
+            await _sendEvent(new
+            {
+                type = "toast.moveHere",
+                notificationId = record.Id,
+                conversationId = record.ConversationId,
+                conversationUrl = record.ConversationUrl,
+                targetTabId = record.TargetTabId,
                 correlationId = Guid.NewGuid().ToString("N")
             });
         };
