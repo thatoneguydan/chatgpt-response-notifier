@@ -153,7 +153,16 @@ internal sealed class NativeHostApplication : Application
                 break;
             }
             case "toast.clickResult" when !string.IsNullOrWhiteSpace(message.NotificationId):
-                _toastManager!.ReportClickResult(message.NotificationId, message.ClickState ?? "unverified");
+                _toastManager!.ReportClickResult(message.NotificationId, message.ClickState ?? "unverified", message.TargetTabId);
+                _diagnosticsStore?.AppendHost(new
+                {
+                    source = "host-click",
+                    status = "click-result-applied",
+                    observedAt = DateTimeOffset.UtcNow,
+                    notificationSuffix = Suffix(message.NotificationId),
+                    clickState = message.ClickState ?? "unverified",
+                    targetTabId = message.TargetTabId
+                });
                 break;
             case "toast.dismissConversation" when !string.IsNullOrWhiteSpace(message.ConversationId):
                 _toastManager!.DismissConversation(message.ConversationId);
