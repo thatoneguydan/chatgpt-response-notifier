@@ -4,6 +4,10 @@ using ChatGPTResponseNotifier.Core;
 namespace ChatGPTResponseNotifier.Host;
 
 internal readonly record struct ToastShowResult(bool Accepted, bool Presented, string PresentationState);
+internal readonly record struct ToastDismissConversationResult(
+    int RemovedCount,
+    int RemainingCount,
+    IReadOnlyList<string> RemovedNotificationIds);
 
 internal sealed class ToastManager
 {
@@ -56,14 +60,27 @@ internal sealed class ToastManager
         return new ToastShowResult(true, true, "presented");
     }
 
-    public void DismissConversation(string conversationId)
+    public ToastDismissConversationResult DismissConversation(string conversationId)
     {
-        foreach (var window in _windows.Where(window => window.Record.ConversationId == conversationId).ToArray())
+        var matches = _windows
+            .Where(window => window.Record.ConversationId == conversationId)
+            .ToArray();
+        var removedNotificationIds = matches
+            .Select(window => window.Record.Id)
+            .Where(id => !string.IsNullOrWhiteSpace(id))
+            .ToArray();
+
+        foreach (var window in matches)
         {
             RemoveWindow(window, persist: false);
         }
         Persist();
         Restack();
+
+        return new ToastDismissConversationResult(
+            RemovedCount: matches.Length,
+            RemainingCount: _windows.Count,
+            RemovedNotificationIds: removedNotificationIds);
     }
 
     public void DismissEvent(string notificationId)

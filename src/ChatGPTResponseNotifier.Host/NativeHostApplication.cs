@@ -166,8 +166,23 @@ internal sealed class NativeHostApplication : Application
                 });
                 break;
             case "toast.dismissConversation" when !string.IsNullOrWhiteSpace(message.ConversationId):
-                _toastManager!.DismissConversation(message.ConversationId);
+            {
+                var dismissResult = _toastManager!.DismissConversation(message.ConversationId);
+                _diagnosticsStore?.AppendHost(new
+                {
+                    source = "host",
+                    status = "toast-dismiss-conversation-applied",
+                    observedAt = DateTimeOffset.UtcNow,
+                    conversationSuffix = Suffix(message.ConversationId),
+                    removedCount = dismissResult.RemovedCount,
+                    remainingCount = dismissResult.RemainingCount,
+                    removedNotificationSuffixes = dismissResult.RemovedNotificationIds
+                        .Take(8)
+                        .Select(Suffix)
+                        .ToArray()
+                });
                 break;
+            }
             case "toast.dismissEvent" when !string.IsNullOrWhiteSpace(message.NotificationId):
                 _toastManager!.DismissEvent(message.NotificationId);
                 break;
