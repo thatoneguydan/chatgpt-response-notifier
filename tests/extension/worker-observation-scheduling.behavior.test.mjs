@@ -67,6 +67,7 @@ function createSchedulerRuntime() {
   const removedListeners = [];
   const alarms = [];
   const synthetic = [];
+  const terminalFallback = [];
   let querySnapshot = null;
   let tabState = { id: 7, discarded: false, frozen: false, active: false };
 
@@ -97,6 +98,7 @@ function createSchedulerRuntime() {
   };
 
   const policyContext = vm.createContext({ Date: FakeDate, Number, String, Set, Object, Math });
+  vm.runInContext(readText('extension/status-code.js'), policyContext);
   vm.runInContext(readText('extension/status-policy.js'), policyContext);
 
   const context = vm.createContext({
@@ -107,6 +109,8 @@ function createSchedulerRuntime() {
     Set,
     Object,
     Math,
+    URL,
+    decodeURIComponent,
     structuredClone,
     queueMicrotask,
     setTimeout,
@@ -114,7 +118,14 @@ function createSchedulerRuntime() {
     crypto: { randomUUID: (() => { let id = 0; return () => `token-${++id}`; })() },
     indexedDB: db.indexedDB,
     chrome,
-    ChatGPTNotifierContinuationPolicy: policyContext.ChatGPTNotifierContinuationPolicy
+    ChatGPTNotifierStatusCode: policyContext.ChatGPTNotifierStatusCode,
+    ChatGPTNotifierContinuationPolicy: policyContext.ChatGPTNotifierContinuationPolicy,
+    __chatgptNotifierWorkerTerminalFallback: {
+      async handle(payload) {
+        terminalFallback.push(structuredClone(payload));
+        return { handled: true, notificationId: 'notification-worker' };
+      }
+    }
   });
   vm.runInContext(readText('extension/observation-scheduler-background.js'), context);
 
@@ -160,6 +171,7 @@ function createSchedulerRuntime() {
     publish,
     deadlineStore,
     synthetic,
+    terminalFallback,
     alarms,
     setNow(value) { now = value; },
     setQuery(value) { querySnapshot = value; },
@@ -210,6 +222,71 @@ test('silent-stop worker deadline waits 90 seconds then another 30 seconds befor
   assert.equal(runtime.deadlineStore().size, 0);
 });
 
+test('completed request immediately routes a proven coded DOM status through the worker fallback', async () => {
+  const runtime = createSchedulerRuntime();
+  const coded = runtime.snapshot({
+    statusCode: 'COMPLETE_NO_CHANGES',
+    hasStatusEvidence: true,
+    requestId: 'request-1',
+    requestPhase: 'completed'
+  });
+  runtime.setQuery(coded);
+
+  await runtime.scheduler.observeRequestCompletion({
+    tabId: 7,
+    documentId: 'chrome-document-1',
+    requestId: 'request-1',
+    documentUrl: 'https://chatgpt.com/c/conversation-1',
+    statusCode: 200
+  });
+  await flush();
+
+  assert.equal(runtime.terminalFallback.length, 1);
+  assert.equal(runtime.terminalFallback[0].owner.requestId, 'request-1');
+  assert.equal(runtime.terminalFallback[0].owner.chromeDocumentId, 'chrome-document-1');
+  assert.equal(runtime.terminalFallback[0].monitorSnapshot.statusCode, 'COMPLETE_NO_CHANGES');
+  assert.equal(runtime.deadlineStore().size, 0);
+});
+
+test('completed request persists bounded local reinspection until coded DOM status appears', async () => {
+  const runtime = createSchedulerRuntime();
+  runtime.setQuery(runtime.snapshot({
+    statusCode: '',
+    hasStatusEvidence: false,
+    requestId: 'request-2',
+    requestPhase: 'completed'
+  }));
+
+  await runtime.scheduler.observeRequestCompletion({
+    tabId: 7,
+    documentId: 'chrome-document-2',
+    requestId: 'request-2',
+    documentUrl: 'https://chatgpt.com/c/conversation-1',
+    statusCode: 200
+  });
+  await flush();
+
+  let record = [...runtime.deadlineStore().values()][0];
+  assert.equal(record.kind, 'coded-completion-check');
+  assert.equal(record.attempt, 1);
+  assert.equal(record.dueAt, 11_000);
+  assert.equal(runtime.terminalFallback.length, 0);
+
+  runtime.setQuery(runtime.snapshot({
+    statusCode: 'COMPLETE_NO_CHANGES',
+    hasStatusEvidence: true,
+    requestId: 'request-2',
+    requestPhase: 'completed'
+  }));
+  runtime.setNow(11_000);
+  await runtime.scheduler.processDue();
+  await flush();
+
+  assert.equal(runtime.terminalFallback.length, 1);
+  assert.equal(runtime.terminalFallback[0].owner.requestId, 'request-2');
+  assert.equal(runtime.deadlineStore().size, 0);
+});
+
 test('frozen page defers without manufacturing a failure and resumes on lifecycle activity', async () => {
   const runtime = createSchedulerRuntime();
   const state = runtime.snapshot();
@@ -254,6 +331,10 @@ test('worker scheduling is local-only, bounded, persistent, and loaded after bou
   assert.match(source, /indexedDB\.open\(DB_NAME, DB_VERSION\)/);
   assert.match(source, /chrome\.alarms\.create/);
   assert.match(source, /QUERY_TIMEOUT_MS = 5_000/);
+  assert.match(source, /COMPLETION_RECHECK_DELAYS_MS = Object\.freeze\(\[1_000, 3_000, 10_000, 30_000\]\)/);
+  assert.match(source, /codedCompletion: 'coded-completion-check'/);
+  assert.match(source, /observeRequestCompletion/);
+  assert.match(source, /__chatgptNotifierWorkerTerminalFallback/);
   assert.match(source, /Promise\.resolve\(promise\)/);
   assert.match(source, /tab\.discarded === true \|\| tab\.frozen === true/);
   assert.match(source, /state: 'deferred'/);
