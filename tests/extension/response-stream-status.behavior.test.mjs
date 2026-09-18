@@ -198,6 +198,26 @@ test('stream delivery remains notification-only while automatic Continue stays D
 });
 
 
+test('stream early notification uses shared request delivery authority before durable queueing', () => {
+  const start = backgroundSource.indexOf('async function queueEarlyNotification');
+  const end = backgroundSource.indexOf('async function handleTerminalStatus', start);
+  assert.ok(start >= 0 && end > start);
+  const queueSource = backgroundSource.slice(start, end);
+
+  const sharedLookup = queueSource.indexOf('__chatgptNotifierDeliveryDedupeHook');
+  const sharedReserve = queueSource.indexOf('reserveRequestDelivery');
+  const durableQueue = queueSource.indexOf("state.queueNotification('', notification, fingerprint)");
+  const sharedCommit = queueSource.indexOf('commitRequestDelivery');
+
+  assert.ok(sharedLookup >= 0);
+  assert.ok(sharedReserve > sharedLookup);
+  assert.ok(durableQueue > sharedReserve, 'shared request ownership must be reserved before the stream path enters the durable outbox');
+  assert.ok(sharedCommit > durableQueue, 'shared ownership commits only after durable queueing succeeds');
+  assert.match(queueSource, /response-stream-shared-delivery-suppressed/);
+  assert.match(queueSource, /shared-request-delivery-authority-unavailable/);
+  assert.match(queueSource, /releaseRequestDelivery/);
+});
+
 test('terminal stream routing never waits on a live page reply', () => {
   assert.match(backgroundSource, /PAGE_QUERY_TIMEOUT_MS = 1500/);
   assert.match(backgroundSource, /Promise\.race\(\[query, deadline\]\)/);
