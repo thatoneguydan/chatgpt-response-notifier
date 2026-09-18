@@ -22,7 +22,8 @@ function Copy-SafeDiagnostic {
     foreach ($name in @(
         'source','status','observedAt','extensionVersion','correlationId','tabId','statusCode','attempt','elapsedMs','queuedMessages',
         'eventSequence','frozen','discarded','deliveredNow','presented','triggerPath','reason','captureSource','presentationState',
-        'conversationSuffix','notificationSuffix','chromeDocumentSuffix','requestSuffix','workerInstanceSuffix','statusRuntimeSuffix','monitorRuntimeSuffix'
+        'conversationSuffix','notificationSuffix','chromeDocumentSuffix','requestSuffix','promptSuffix','assistantSuffix','revisionSuffix','claimSource',
+        'workerInstanceSuffix','statusRuntimeSuffix','monitorRuntimeSuffix'
     )) {
         $value = Get-PropertyValue -InputObject $Record -Name $name
         if ($null -ne $value) { $safe[$name] = $value }
@@ -120,6 +121,7 @@ $result = [ordered]@{
     loadedExtensionVersion = $null
     extensionRuntimeSuffix = $null
     hiddenWindowDiagnostics = (Copy-SafeHiddenWindowDiagnostics -InputObject $null)
+    deliveryDiagnostics = @()
     diagnostics = @()
 }
 
@@ -138,6 +140,12 @@ try {
         if ($null -ne $value) { $result[$name] = $value }
     }
     $result.hiddenWindowDiagnostics = Copy-SafeHiddenWindowDiagnostics -InputObject (Get-PropertyValue -InputObject $runtime -Name 'hiddenWindowDiagnostics')
+    $safeDeliveryDiagnostics = @()
+    foreach ($record in @(Get-PropertyValue -InputObject $runtime -Name 'deliveryDiagnostics') | Select-Object -Last 128) {
+        $safe = Copy-SafeDiagnostic -Record $record
+        if ($null -ne $safe) { $safeDeliveryDiagnostics += $safe }
+    }
+    $result.deliveryDiagnostics = $safeDeliveryDiagnostics
     $safeDiagnostics = @()
     foreach ($record in @(Get-PropertyValue -InputObject $runtime -Name 'diagnostics') | Select-Object -Last 200) {
         $safe = Copy-SafeDiagnostic -Record $record
@@ -184,7 +192,7 @@ $evidence.chrome | Add-Member -NotePropertyName currentExtensionVersion -NotePro
 $evidence.chrome | Add-Member -NotePropertyName extensionConnectionLive -NotePropertyValue $runtimeFresh -Force
 $evidence | ConvertTo-Json -Depth 16 | Set-Content -LiteralPath $EvidencePath -Encoding UTF8
 
-Write-Host ('Notifier safe evidence: state={0}; installed={1}; source={2}; currentExtension={3}; historicalExtension={4}; live={5}; diagnostics={6}; incidents={7}' -f `
+Write-Host ('Notifier safe evidence: state={0}; installed={1}; source={2}; currentExtension={3}; historicalExtension={4}; live={5}; diagnostics={6}; incidents={7}; deliveryDiagnostics={8}' -f `
     $result.state,
     $result.installedVersion,
     $result.sourceCommit,
@@ -192,4 +200,5 @@ Write-Host ('Notifier safe evidence: state={0}; installed={1}; source={2}; curre
     $result.historicalExtensionVersion,
     $runtimeFresh,
     @($result.diagnostics).Count,
-    @($result.hiddenWindowDiagnostics.incidents).Count)
+    @($result.hiddenWindowDiagnostics.incidents).Count,
+    @($result.deliveryDiagnostics).Count)

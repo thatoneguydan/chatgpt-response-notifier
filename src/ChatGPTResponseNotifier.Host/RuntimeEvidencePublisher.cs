@@ -8,11 +8,13 @@ namespace ChatGPTResponseNotifier.Host;
 internal sealed class RuntimeEvidencePublisher
 {
     private const int MaxDiagnostics = 200;
+    private const int MaxDeliveryDiagnostics = 128;
     private static readonly TimeSpan LiveFreshness = TimeSpan.FromSeconds(60);
     private readonly object _sync = new();
     private readonly string _root;
     private readonly string _path;
     private readonly List<JsonElement> _diagnostics = new();
+    private readonly List<JsonElement> _deliveryDiagnostics = new();
     private readonly HiddenWindowIncidentRetention _hiddenWindowIncidents = new();
     private string? _historicalExtensionVersion;
     private string? _historicalExtensionRuntimeSuffix;
@@ -77,6 +79,11 @@ internal sealed class RuntimeEvidencePublisher
 
                 var source = StringValue(diagnostic, "source", 40);
                 var status = StringValue(diagnostic, "status", 96);
+                if (IsPriorityDeliveryDiagnostic(source, status))
+                {
+                    _deliveryDiagnostics.Add(safe);
+                    while (_deliveryDiagnostics.Count > MaxDeliveryDiagnostics) _deliveryDiagnostics.RemoveAt(0);
+                }
                 if (source == "extension-runtime" && status is "worker-connected" or "worker-alive")
                 {
                     var version = StringValue(diagnostic, "extensionVersion", 32);
@@ -160,6 +167,7 @@ internal sealed class RuntimeEvidencePublisher
             extensionRuntimeSuffix = extensionConnectionLive ? _currentExtensionRuntimeSuffix : null,
             extensionSourceCommitSuffix = extensionConnectionLive ? _currentExtensionSourceCommitSuffix : null,
             hiddenWindowDiagnostics = _hiddenWindowIncidents.Snapshot(),
+            deliveryDiagnostics = _deliveryDiagnostics,
             diagnostics = _diagnostics
         };
 
@@ -246,6 +254,14 @@ internal sealed class RuntimeEvidencePublisher
             _bridgeClientCount = 0;
             _hiddenWindowIncidents.Load(root);
 
+            if (root.TryGetProperty("deliveryDiagnostics", out var deliveryDiagnostics) && deliveryDiagnostics.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in deliveryDiagnostics.EnumerateArray().TakeLast(MaxDeliveryDiagnostics))
+                {
+                    if (item.ValueKind == JsonValueKind.Object) _deliveryDiagnostics.Add(item.Clone());
+                }
+            }
+
             if (!root.TryGetProperty("diagnostics", out var diagnostics) || diagnostics.ValueKind != JsonValueKind.Array) return;
             foreach (var item in diagnostics.EnumerateArray().TakeLast(MaxDiagnostics))
             {
@@ -256,6 +272,13 @@ internal sealed class RuntimeEvidencePublisher
         {
             _diagnostics.Clear();
         }
+    }
+
+    private static bool IsPriorityDeliveryDiagnostic(string? source, string? status)
+    {
+        if (source is "delivery-identity" or "delivery-pipeline") return true;
+        if (source == "host" && !string.IsNullOrWhiteSpace(status) && status.StartsWith("toast-", StringComparison.Ordinal)) return true;
+        return false;
     }
 
     private static JsonElement ProjectDiagnostic(JsonElement input)
@@ -284,6 +307,11 @@ internal sealed class RuntimeEvidencePublisher
             conversationSuffix = StringValue(input, "conversationSuffix", 8),
             notificationSuffix = StringValue(input, "notificationSuffix", 8),
             chromeDocumentSuffix = StringValue(input, "chromeDocumentSuffix", 8),
+            requestSuffix = StringValue(input, "requestSuffix", 8),
+            promptSuffix = StringValue(input, "promptSuffix", 8),
+            assistantSuffix = StringValue(input, "assistantSuffix", 8),
+            revisionSuffix = StringValue(input, "revisionSuffix", 8),
+            claimSource = StringValue(input, "claimSource", 64),
             statusRuntimeSuffix = StringValue(input, "statusRuntimeSuffix", 8),
             monitorRuntimeSuffix = StringValue(input, "monitorRuntimeSuffix", 8)
         };

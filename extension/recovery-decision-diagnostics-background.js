@@ -1,16 +1,43 @@
 'use strict';
 
 (() => {
-  if (globalThis.__chatgptNotifierRecoveryDecisionDiagnostics?.version === 1) return;
+  if (Number(globalThis.__chatgptNotifierRecoveryDecisionDiagnostics?.version || 0) >= 2) return;
 
   const base = globalThis.ChatGPTNotifierRecoveryModel;
   if (!base || typeof base !== 'object') return;
   const incidentObservations = new Map();
+  const noisyCandidateState = new Map();
+  const NOISY_CANDIDATE_WINDOW_MS = 10_000;
 
   const suffix = (value) => {
     const text = String(value || '').trim();
     return text.length <= 8 ? text : text.slice(-8);
   };
+
+  function noisyCandidateKey(kind, reason, observation = {}) {
+    if (String(reason || '') !== 'generation-active') return '';
+    return [
+      suffix(observation.conversationId),
+      suffix(observation.documentId),
+      suffix(observation.requestId),
+      String(kind || ''),
+      String(reason || '')
+    ].join('|');
+  }
+
+  function shouldRecordCandidate(kind, reason, observation = {}) {
+    const key = noisyCandidateKey(kind, reason, observation);
+    if (!key) return true;
+    const now = Date.now();
+    const previous = noisyCandidateState.get(key);
+    if (!previous || now - previous.at >= NOISY_CANDIDATE_WINDOW_MS) {
+      noisyCandidateState.set(key, { at: now, suppressed: 0 });
+      return true;
+    }
+    previous.suppressed += 1;
+    noisyCandidateState.set(key, previous);
+    return false;
+  }
 
   function record(status, kind, reason, observation = {}, incident = null, fields = {}) {
     const diagnostic = {
@@ -38,10 +65,13 @@
     ...base,
     recoveryCandidate(classification = {}, observation = {}, incident = {}) {
       const result = base.recoveryCandidate(classification, observation, incident);
-      record('candidate', result?.kind || '', result?.reason || classification?.reason || incident?.reason || '', observation, incident, {
-        allowed: Boolean(result?.kind),
-        decisionState: classification?.state || ''
-      });
+      const reason = result?.reason || classification?.reason || incident?.reason || '';
+      if (shouldRecordCandidate(result?.kind || '', reason, observation)) {
+        record('candidate', result?.kind || '', reason, observation, incident, {
+          allowed: Boolean(result?.kind),
+          decisionState: classification?.state || ''
+        });
+      }
       return result;
     },
     claimAction(kind, humanRun, incident, profile, observation = {}, options = {}) {
@@ -83,5 +113,5 @@
     }
   });
 
-  globalThis.__chatgptNotifierRecoveryDecisionDiagnostics = Object.freeze({ version: 1 });
+  globalThis.__chatgptNotifierRecoveryDecisionDiagnostics = Object.freeze({ version: 2, noisyCandidateWindowMs: NOISY_CANDIDATE_WINDOW_MS });
 })();

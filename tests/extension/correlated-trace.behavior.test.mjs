@@ -108,6 +108,25 @@ test('recovery diagnostics report only bounded identity suffixes and decision re
   }
 });
 
+test('repetitive generation-active recovery candidates are coalesced', () => {
+  const runtime = recoveryHarness();
+  const observation = {
+    conversationId: 'conversation-1',
+    documentId: 'document-1',
+    requestId: 'request-1'
+  };
+
+  for (let index = 0; index < 25; index += 1) {
+    runtime.model.recoveryCandidate({ state: 'working', reason: 'generation-active' }, observation, {});
+  }
+
+  const candidates = runtime.nativeMessages
+    .map((item) => item.diagnostic)
+    .filter((item) => item?.source === 'recovery-decision' && item?.status === 'candidate' && item?.reason === 'generation-active');
+
+  assert.equal(candidates.length, 1, 'high-frequency generation-active observations must not evict delivery evidence');
+});
+
 test('blocked recovery admission retains the exact named veto reason', () => {
   const runtime = recoveryHarness();
   const observation = {
@@ -183,6 +202,9 @@ test('retained trace joins recovery and delivery onto request incidents with evi
 
 test('existing evidence distinguishes runtime, attachment, stale page, lifecycle and delivery boundaries without new traffic', () => {
   assert.match(publisherSource, /extensionConnectionLive/);
+  assert.match(publisherSource, /deliveryDiagnostics/);
+  assert.match(publisherSource, /MaxDeliveryDiagnostics = 128/);
+  assert.match(publisherSource, /source is "delivery-identity" or "delivery-pipeline"/);
   assert.match(publisherSource, /bridgeConnected/);
   assert.match(hiddenSource, /main-observer-installed/);
   assert.match(hiddenSource, /page-bridge-installed/);
