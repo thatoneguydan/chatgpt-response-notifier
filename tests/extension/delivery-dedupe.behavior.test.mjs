@@ -242,8 +242,27 @@ test('one Chrome request remains one delivery across assistant identity remounts
   assert.equal(duplicate.claimed, false);
   assert.equal(duplicate.reason, 'already-delivered-logical-turn');
   assert.equal(originalClaims.length, 1, 'assistant remount under one network request must not produce a second claim');
+  assert.equal(originalClaims[0].snapshot.requestId, 'request-1', 'request identity must persist into the coordinator turn record');
 });
 
+test('request-key migration respects an already committed legacy logical-turn claim', async () => {
+  const { context, originalClaims } = loadHook();
+  const coordinator = context.__chatgptNotifierCoordinator;
+
+  const legacy = await coordinator.claimTurn(snapshot(), { tabId: 7, notificationTitle: 'ChatGPT', notificationId: 'legacy-notification' });
+  const requestOwned = await coordinator.claimTurn(snapshot(), {
+    tabId: 7,
+    documentId: 'document-1',
+    requestId: 'request-1',
+    notificationTitle: 'ChatGPT',
+    notificationId: 'request-notification'
+  });
+
+  assert.equal(legacy.claimed, true);
+  assert.equal(requestOwned.claimed, false);
+  assert.equal(requestOwned.reason, 'already-delivered-logical-turn');
+  assert.equal(originalClaims.length, 1, 'activation must not replay an already delivered legacy claim');
+});
 test('a new Chrome request remains independently notifiable even with the same DOM identity', async () => {
   const { context, originalClaims } = loadHook();
   const coordinator = context.__chatgptNotifierCoordinator;
@@ -260,6 +279,7 @@ test('a new Chrome request remains independently notifiable even with the same D
 test('request identity is propagated from Chrome completion into both delivery claim paths', () => {
   assert.match(serviceWorkerSource, /signalConversationRequestCompleted\(\s*details\.tabId,\s*String\(details\.requestId \|\| ''\),\s*String\(details\.documentId \|\| ''\)/);
   assert.match(serviceWorkerSource, /requestId:\s*String\(message\?\.requestId \|\| ''\)/);
+  assert.match(serviceWorkerSource, /__chatgptNotifierResponseStreamStatus\?\.requestOwnerForTurn/);
   assert.match(serviceWorkerSource, /fingerprint:\s*`worker\|\$\{status\.conversationId\}\|\$\{requestId\}\|\$\{status\.statusCode\}`,\s*requestId,/);
   assert.match(contentScriptSource, /requestId:\s*requestIdentity/);
   assert.match(contentScriptSource, /armForCurrentPrompt\(String\(message\?\.requestId \|\| ''\)\)/);
