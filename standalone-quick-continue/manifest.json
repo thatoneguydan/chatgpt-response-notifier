@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Quick Continue",
-  "version": "1.1.0",
-  "description": "Adds timestamped one-click Continue and JSON-backed Project Continue controls to ChatGPT.",
+  "version": "1.2.0",
+  "description": "Adds timestamped one-click Continue and live-editable JSON Project Continue controls to ChatGPT.",
   "minimum_chrome_version": "116",
   "content_scripts": [
     {
@@ -11,6 +11,7 @@
       ],
       "js": [
         "prompt-format.js",
+        "config.js",
         "content-script.js"
       ],
       "run_at": "document_idle"
@@ -19,11 +20,14 @@
   "web_accessible_resources": [
     {
       "resources": [
-        "projects.json"
+        "config.json"
       ],
       "matches": [
         "https://chatgpt.com/*"
       ]
     }
+  ],
+  "permissions": [
+    "storage"
   ]
 }
