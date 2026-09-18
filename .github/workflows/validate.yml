@@ -134,7 +134,7 @@ jobs:
           }
           $candidateManifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $artifactRoot 'candidate-manifest.json') -Encoding UTF8
 
-      - name: Prove isolated Setup, root-preserving replacement, and localhost helper handshake
+      - name: Prove isolated Setup, legacy-root preservation, stable-root replacement, and localhost helper handshake
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -143,10 +143,16 @@ jobs:
           $candidateRoot = Join-Path $env:RUNNER_TEMP 'chatgpt-response-notifier-candidate'
           $candidateSetup = Join-Path (Join-Path $candidateRoot 'artifacts') "ChatGPT-Response-Notifier-Setup-$version-candidate-$shortSha.exe"
           $testInstallRoot = Join-Path $env:RUNNER_TEMP ('chatgpt-response-notifier-install-' + [Guid]::NewGuid().ToString('N'))
-          $extensionRoot = Join-Path $testInstallRoot 'extension'
+          $legacyExtensionRoot = Join-Path $testInstallRoot 'Extension'
+          $extensionRoot = Join-Path $testInstallRoot 'Extension-v2'
+          $legacySentinel = Join-Path $legacyExtensionRoot '.legacy-root-must-remain-untouched'
           $rootSentinel = Join-Path $extensionRoot '.root-preservation-sentinel'
-          $sentinelValue = 'registered-unpacked-extension-root-must-survive'
+          $legacySentinelValue = 'stale-registration-root-preserved-for-rollback'
+          $sentinelValue = 'new-registered-unpacked-extension-root-must-survive'
           $runnerSetupLog = Join-Path $env:LOCALAPPDATA 'ChatGPTResponseNotifier\Data\setup.log'
+
+          New-Item -ItemType Directory -Path $legacyExtensionRoot -Force | Out-Null
+          Set-Content -LiteralPath $legacySentinel -Value $legacySentinelValue -Encoding ASCII -NoNewline
 
           $listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
           $listener.Start()
@@ -169,17 +175,27 @@ jobs:
                 throw "Setup.exe isolated acceptance attempt $attempt failed with exit code $($setupProcess.ExitCode)."
               }
 
+              if (-not (Test-Path -LiteralPath $legacySentinel -PathType Leaf)) {
+                throw "Setup attempt $attempt removed the legacy extension root sentinel."
+              }
+              if ((Get-Content -LiteralPath $legacySentinel -Raw -Encoding ASCII) -cne $legacySentinelValue) {
+                throw "Setup attempt $attempt changed the legacy extension root sentinel."
+              }
+              if (Test-Path -LiteralPath (Join-Path $legacyExtensionRoot 'manifest.json') -PathType Leaf) {
+                throw "Setup attempt $attempt wrote the notifier payload into the legacy extension root."
+              }
+
               if ($attempt -eq 1) {
-                if (-not (Test-Path -LiteralPath $extensionRoot -PathType Container)) { throw 'Extension root is missing after first isolated install.' }
+                if (-not (Test-Path -LiteralPath $extensionRoot -PathType Container)) { throw 'New stable extension root is missing after first isolated install.' }
                 Set-Content -LiteralPath $rootSentinel -Value $sentinelValue -Encoding ASCII -NoNewline
               }
             }
 
             if (-not (Test-Path -LiteralPath $rootSentinel -PathType Leaf)) {
-              throw 'Second install replaced the registered unpacked extension root instead of updating it in place.'
+              throw 'Second install replaced the new registered unpacked extension root instead of updating it in place.'
             }
             if ((Get-Content -LiteralPath $rootSentinel -Raw -Encoding ASCII) -cne $sentinelValue) {
-              throw 'Root-preservation sentinel changed during same-version replacement.'
+              throw 'New-root preservation sentinel changed during same-version replacement.'
             }
 
             $statePath = Join-Path $testInstallRoot 'Data\install-state.json'
@@ -187,6 +203,9 @@ jobs:
             $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
             if ($state.version -ne $version) { throw "Isolated install version mismatch: $($state.version)" }
             if ($state.sourceCommit -ne $env:SOURCE_SHA) { throw "Isolated install source mismatch: $($state.sourceCommit)" }
+            if ([IO.Path]::GetFullPath([string]$state.extensionPath) -cne [IO.Path]::GetFullPath($extensionRoot)) {
+              throw "Isolated install-state extension path did not move to the new stable root: $($state.extensionPath)"
+            }
 
             $evidencePath = Join-Path $testInstallRoot 'Evidence\runtime-evidence.json'
             if (-not (Test-Path -LiteralPath $evidencePath -PathType Leaf)) { throw 'Bounded runtime evidence was not published by the isolated helper.' }
