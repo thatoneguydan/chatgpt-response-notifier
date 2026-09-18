@@ -221,6 +221,13 @@ test('stream dedupe carries exact request identity when page prompt identity is 
   assert.match(backgroundSource, /getEarlyDelivery\(\{ conversationId, requestId, promptKey \}\)/);
   assert.match(backgroundSource, /ACTIVE_CONTEXT_TTL_MS = 60 \* 60 \* 1000/);
   assert.match(backgroundSource, /SETTLED_CONTEXT_TTL_MS = 10 \* 60 \* 1000/);
+  assert.match(backgroundSource, /function requestOwnerForTurn/);
+  assert.match(backgroundSource, /exactPrompt\.length === 1/);
+  assert.match(backgroundSource, /exactPrompt\.length > 1\) return null/);
+  assert.match(backgroundSource, /requestOwnerForTurn,/);
+  assert.match(serviceWorkerSource, /__chatgptNotifierResponseStreamStatus\?\.requestOwnerForTurn/);
+  assert.match(serviceWorkerSource, /message\?\.requestId \|\| requestOwner\?\.requestId/);
+  assert.match(serviceWorkerSource, /if \(!requestId\) return null;/);
 });
 
 test('request completion arms durable worker DOM fallback without generating ChatGPT traffic', () => {

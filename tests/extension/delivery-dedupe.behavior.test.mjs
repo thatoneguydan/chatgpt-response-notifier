@@ -5,6 +5,8 @@ import test from 'node:test';
 
 const root = new URL('../../', import.meta.url);
 const source = readFileSync(new URL('extension/delivery-dedupe-hook.js', root), 'utf8');
+const serviceWorkerSource = readFileSync(new URL('extension/service-worker.js', root), 'utf8');
+const contentScriptSource = readFileSync(new URL('extension/content-script.js', root), 'utf8');
 
 function clone(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
@@ -204,7 +206,7 @@ test('one logical assistant turn produces one coordinator claim across DOM revis
   assert.equal(originalClaims.length, 1, 'rerendered revision must not create a second notification claim');
 });
 
-test('a different assistant turn remains independently notifiable', async () => {
+test('a different assistant turn remains independently notifiable when request identity is unavailable', async () => {
   const { context, originalClaims } = loadHook();
   const coordinator = context.__chatgptNotifierCoordinator;
 
@@ -220,6 +222,69 @@ test('a different assistant turn remains independently notifiable', async () => 
 });
 
 
+test('one Chrome request remains one delivery across assistant identity remounts', async () => {
+  const { context, originalClaims } = loadHook();
+  const coordinator = context.__chatgptNotifierCoordinator;
+  const owner = {
+    tabId: 7,
+    documentId: 'document-1',
+    requestId: 'request-1',
+    notificationTitle: 'ChatGPT'
+  };
+
+  const first = await coordinator.claimTurn(snapshot(), { ...owner, notificationId: 'notification-1' });
+  const duplicate = await coordinator.claimTurn(
+    snapshot({ assistantKey: 'assistant-2', revision: '200:remounted' }),
+    { ...owner, notificationId: 'notification-2' }
+  );
+
+  assert.equal(first.claimed, true);
+  assert.equal(duplicate.claimed, false);
+  assert.equal(duplicate.reason, 'already-delivered-logical-turn');
+  assert.equal(originalClaims.length, 1, 'assistant remount under one network request must not produce a second claim');
+  assert.equal(originalClaims[0].snapshot.requestId, 'request-1', 'request identity must persist into the coordinator turn record');
+});
+
+test('request-key migration respects an already committed legacy logical-turn claim', async () => {
+  const { context, originalClaims } = loadHook();
+  const coordinator = context.__chatgptNotifierCoordinator;
+
+  const legacy = await coordinator.claimTurn(snapshot(), { tabId: 7, notificationTitle: 'ChatGPT', notificationId: 'legacy-notification' });
+  const requestOwned = await coordinator.claimTurn(snapshot(), {
+    tabId: 7,
+    documentId: 'document-1',
+    requestId: 'request-1',
+    notificationTitle: 'ChatGPT',
+    notificationId: 'request-notification'
+  });
+
+  assert.equal(legacy.claimed, true);
+  assert.equal(requestOwned.claimed, false);
+  assert.equal(requestOwned.reason, 'already-delivered-logical-turn');
+  assert.equal(originalClaims.length, 1, 'activation must not replay an already delivered legacy claim');
+});
+test('a new Chrome request remains independently notifiable even with the same DOM identity', async () => {
+  const { context, originalClaims } = loadHook();
+  const coordinator = context.__chatgptNotifierCoordinator;
+  const owner = { tabId: 7, documentId: 'document-1', notificationTitle: 'ChatGPT' };
+
+  const first = await coordinator.claimTurn(snapshot(), { ...owner, requestId: 'request-1', notificationId: 'notification-1' });
+  const second = await coordinator.claimTurn(snapshot(), { ...owner, requestId: 'request-2', notificationId: 'notification-2' });
+
+  assert.equal(first.claimed, true);
+  assert.equal(second.claimed, true);
+  assert.equal(originalClaims.length, 2, 'a genuine retry/regenerate request must remain independently notifiable');
+});
+
+test('request identity is propagated from Chrome completion into both delivery claim paths', () => {
+  assert.match(serviceWorkerSource, /signalConversationRequestCompleted\(\s*details\.tabId,\s*String\(details\.requestId \|\| ''\),\s*String\(details\.documentId \|\| ''\)/);
+  assert.match(serviceWorkerSource, /__chatgptNotifierResponseStreamStatus\?\.requestOwnerForTurn/);
+  assert.match(serviceWorkerSource, /const requestId = String\(message\?\.requestId \|\| requestOwner\?\.requestId \|\| ''\)/);
+  assert.match(serviceWorkerSource, /fingerprint:\s*String\(message\?\.fingerprint \|\| ''\),\s*requestId,/);
+  assert.match(serviceWorkerSource, /fingerprint:\s*`worker\|\$\{status\.conversationId\}\|\$\{requestId\}\|\$\{status\.statusCode\}`,\s*requestId,/);
+  assert.match(contentScriptSource, /requestId:\s*requestIdentity/);
+  assert.match(contentScriptSource, /armForCurrentPrompt\(String\(message\?\.requestId \|\| ''\)\)/);
+});
 test('delivery identity diagnostics retain same-request assistant remount evidence', async () => {
   const { context, nativeMessages } = loadHook();
   const coordinator = context.__chatgptNotifierCoordinator;
@@ -243,18 +308,24 @@ test('delivery identity diagnostics retain same-request assistant remount eviden
     }
   );
 
-  const accepted = nativeMessages
+  const diagnostics = nativeMessages
     .map((item) => item.diagnostic)
-    .filter((item) => item?.source === 'delivery-identity' && item?.status === 'claim-accepted');
+    .filter((item) => item?.source === 'delivery-identity');
+  const observed = diagnostics.filter((item) => item?.status === 'claim-observed');
+  const accepted = diagnostics.filter((item) => item?.status === 'claim-accepted');
+  const suppressed = diagnostics.filter((item) => item?.status === 'claim-suppressed');
 
-  assert.equal(accepted.length, 2);
-  assert.equal(accepted[0].requestSuffix, '12345678');
-  assert.equal(accepted[1].requestSuffix, '12345678');
-  assert.notEqual(accepted[0].assistantSuffix, accepted[1].assistantSuffix);
-  assert.notEqual(accepted[0].notificationSuffix, accepted[1].notificationSuffix);
+  assert.equal(observed.length, 2);
+  assert.equal(accepted.length, 1);
+  assert.equal(suppressed.length, 1);
+  assert.equal(observed[0].requestSuffix, '12345678');
+  assert.equal(observed[1].requestSuffix, '12345678');
+  assert.notEqual(observed[0].assistantSuffix, observed[1].assistantSuffix);
+  assert.notEqual(observed[0].notificationSuffix, observed[1].notificationSuffix);
   assert.equal(accepted[0].claimSource, 'coded-completion');
-  assert.equal(accepted[1].claimSource, 'worker-observed-coded-completion');
-  for (const diagnostic of accepted) {
+  assert.equal(suppressed[0].claimSource, 'worker-observed-coded-completion');
+  assert.equal(suppressed[0].reason, 'already-delivered-logical-turn');
+  for (const diagnostic of diagnostics) {
     const serialized = JSON.stringify(diagnostic);
     assert.doesNotMatch(serialized, /request-sensitive-/);
     assert.doesNotMatch(serialized, /document-sensitive-/);

@@ -213,25 +213,28 @@
     });
   }
 
-  function sendCompletion(snapshot) {
+  function sendCompletion(snapshot, requestId = '') {
+    const requestIdentity = String(requestId || '');
     const fingerprint = `${snapshot.promptKey}|${snapshot.assistantKey}|${snapshot.response.slice(0, 1000)}`;
-    if (fingerprint === lastSentFingerprint) return;
+    const localFingerprint = `${requestIdentity}|${fingerprint}`;
+    if (localFingerprint === lastSentFingerprint) return;
 
-    lastSentFingerprint = fingerprint;
+    lastSentFingerprint = localFingerprint;
     chrome.runtime.sendMessage({
       type: 'CHATGPT_RESPONSE_COMPLETE',
       sessionTitle: document.title,
       response: snapshot.response,
+      requestId: requestIdentity,
       fingerprint,
       dismissOnReturn: !pageIsActive()
     }).catch(() => {});
   }
 
-  function armForCurrentPrompt() {
+  function armForCurrentPrompt(requestId = '') {
     if (Date.now() < suppressUntilEpoch) return;
     const snapshot = latestPromptSnapshot();
     if (snapshot?.response) {
-      sendCompletion(snapshot);
+      sendCompletion(snapshot, requestId);
       return;
     }
 
@@ -241,13 +244,13 @@
         if (token !== watchToken) return;
         const resolved = latestPromptSnapshot();
         if (resolved?.response) {
-          sendCompletion(resolved);
+          sendCompletion(resolved, requestId);
         } else {
           sendCompletion({
             promptKey: '',
             assistantKey: '',
             response: text
-          });
+          }, requestId);
         }
       });
   }
@@ -267,7 +270,7 @@
 
   chrome.runtime.onMessage.addListener((message) => {
     if (message?.type === 'CHATGPT_CONVERSATION_REQUEST_COMPLETED') {
-      armForCurrentPrompt();
+      armForCurrentPrompt(String(message?.requestId || ''));
     }
   });
 })();

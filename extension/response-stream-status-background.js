@@ -309,6 +309,49 @@
     return context;
   }
 
+  function requestOwnerForTurn({ tabId, chromeDocumentId = '', conversationId = '', promptKey = '' } = {}) {
+    const documentId = String(chromeDocumentId || '');
+    if (!Number.isInteger(tabId) || !documentId) return null;
+
+    pruneContexts();
+    const conversation = String(conversationId || '');
+    const prompt = String(promptKey || '');
+    const candidates = Array.from(requestContexts.values())
+      .filter((context) => context?.tabId === tabId)
+      .filter((context) => String(context?.chromeDocumentId || '') === documentId)
+      .filter((context) => context?.failed !== true && Number(context?.completedAt || 0) > 0)
+      .filter((context) => Boolean(String(context?.requestId || '')))
+      .filter((context) => !conversation || !context?.conversationId || String(context.conversationId) === conversation)
+      .sort((left, right) => Number(right?.completedAt || 0) - Number(left?.completedAt || 0));
+
+    if (!candidates.length) return null;
+
+    let context = null;
+    if (prompt) {
+      const exactPrompt = candidates.filter((candidate) => String(candidate?.snapshot?.promptKey || '') === prompt);
+      if (exactPrompt.length === 1) context = exactPrompt[0];
+      else if (exactPrompt.length > 1) return null;
+    }
+
+    if (!context) {
+      const latestKey = latestRequestByDocument.get(contextKey(tabId, documentId));
+      const latest = latestKey ? requestContexts.get(latestKey) : null;
+      if (!latest || latest.failed === true || Number(latest.completedAt || 0) <= 0 || !latest.requestId) return null;
+      if (conversation && latest.conversationId && String(latest.conversationId) !== conversation) return null;
+      const latestPrompt = String(latest?.snapshot?.promptKey || '');
+      if (prompt && latestPrompt && latestPrompt !== prompt) return null;
+      context = latest;
+    }
+
+    return {
+      requestId: String(context.requestId || ''),
+      chromeDocumentId: String(context.chromeDocumentId || ''),
+      conversationId: String(context.conversationId || ''),
+      promptKey: String(context?.snapshot?.promptKey || ''),
+      completedAt: Number(context.completedAt || 0)
+    };
+  }
+
   async function identityForStreamEvent(message, sender) {
     const context = currentContext(sender);
     if (!context) return null;
@@ -552,6 +595,7 @@
   globalThis.__chatgptNotifierResponseStreamStatus = Object.freeze({
     version: 1,
     getEarlyDelivery,
+    requestOwnerForTurn,
     handleTerminalStatus,
     pruneDeliveries,
     attachExistingTabs

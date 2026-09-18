@@ -414,15 +414,20 @@ function isAnswerStreamRequest(details) {
   return path === '/backend-api/f/conversation' || path === '/backend-api/conversation';
 }
 
-async function signalConversationRequestCompleted(tabId) {
-  const message = { type: 'CHATGPT_CONVERSATION_REQUEST_COMPLETED' };
+async function signalConversationRequestCompleted(tabId, requestId = '', chromeDocumentId = '') {
+  const message = {
+    type: 'CHATGPT_CONVERSATION_REQUEST_COMPLETED',
+    requestId: String(requestId || '')
+  };
+  const documentId = String(chromeDocumentId || '');
   try {
-    await chrome.tabs.sendMessage(tabId, message);
+    await sendTabMessage(tabId, message, documentId);
     return;
   } catch {}
   try {
-    await chrome.scripting.executeScript({ target: { tabId }, files: ['attachment-script.js', 'content-script.js'] });
-    await chrome.tabs.sendMessage(tabId, message);
+    const target = documentId ? { tabId, documentIds: [documentId] } : { tabId };
+    await chrome.scripting.executeScript({ target, files: ['attachment-script.js', 'content-script.js'] });
+    await sendTabMessage(tabId, message, documentId);
   } catch (error) {
     console.warn('Prompt-Bound Alert: could not arm tab completion watcher', error);
   }
@@ -491,7 +496,11 @@ chrome.webRequest.onCompleted.addListener((details) => {
     watcher.finish({ accepted, statusCode: details.statusCode, reason: accepted ? 'request-completed' : 'request-rejected' });
   }
   if (details.statusCode < 200 || details.statusCode >= 300) return;
-  signalConversationRequestCompleted(details.tabId).catch(() => {});
+  signalConversationRequestCompleted(
+    details.tabId,
+    String(details.requestId || ''),
+    String(details.documentId || '')
+  ).catch(() => {});
 }, CHATGPT_REQUEST_FILTER);
 
 function messageTargetOptions(documentId) {
@@ -753,6 +762,7 @@ async function processCodedCompletion(status, owner = {}) {
     documentId: senderDocumentId,
     fingerprint: String(owner.fingerprint || ''),
     notificationId,
+    requestId: String(owner.requestId || status?.requestId || ''),
     notificationTitle: String(owner.notificationTitle || 'ChatGPT'),
     notificationPreview: String(owner.notificationPreview || truncateResponse(status?.responseBody || status?.responseText || 'Response finished.')),
     claimSource: String(owner.reason || '')
@@ -786,10 +796,20 @@ async function showCompletionFromUpstream(message, sender) {
   if (!globalThis.ChatGPTNotifierStatusCode?.isStatusCode(statusCode)) return null;
   if (!statusBoundToCompletion(status, originIdentity, message?.response)) return null;
 
+  const requestOwner = globalThis.__chatgptNotifierResponseStreamStatus?.requestOwnerForTurn?.({
+    tabId,
+    chromeDocumentId: senderDocumentId,
+    conversationId: status.conversationId,
+    promptKey: status.promptKey
+  }) || null;
+  const requestId = String(message?.requestId || requestOwner?.requestId || '');
+  if (!requestId) return null;
+
   return await processCodedCompletion(status, {
     tabId,
     chromeDocumentId: senderDocumentId,
     fingerprint: String(message?.fingerprint || ''),
+    requestId,
     notificationTitle: fullTabTitle(sender, message),
     notificationPreview: truncateResponse(status?.responseBody || message?.response),
     reason: 'coded-completion'
@@ -824,6 +844,7 @@ async function handleWorkerObservedTerminalStatus(payload = {}) {
     tabId,
     chromeDocumentId,
     fingerprint: `worker|${status.conversationId}|${requestId}|${status.statusCode}`,
+    requestId,
     notificationTitle: String(tab?.title || 'ChatGPT').trim() || 'ChatGPT',
     notificationPreview: truncateResponse(status?.responseBody || status?.responseText || 'Response finished.'),
     reason: 'worker-observed-coded-completion'

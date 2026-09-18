@@ -32,7 +32,7 @@
       claimSource: String(owner?.claimSource || '').slice(0, 64),
       tabId: Number.isInteger(owner?.tabId) ? owner.tabId : undefined,
       conversationSuffix: suffix(snapshot?.conversationId),
-      requestSuffix: suffix(snapshot?.requestId),
+      requestSuffix: suffix(snapshot?.requestId || owner?.requestId),
       promptSuffix: suffix(snapshot?.promptKey),
       assistantSuffix: suffix(snapshot?.assistantKey),
       revisionSuffix: suffix(snapshot?.revision),
@@ -44,12 +44,25 @@
     } catch {}
   }
 
-  function logicalDeliveryKey(snapshot) {
+  function requestDeliveryKey(snapshot, owner = {}) {
+    const conversationId = String(snapshot?.conversationId || '');
+    const requestId = String(snapshot?.requestId || owner?.requestId || '');
+    const documentId = String(owner?.documentId || snapshot?.documentId || '');
+    if (!conversationId || !requestId || !documentId) return '';
+    return `request|${conversationId}|${documentId}|${requestId}`;
+  }
+
+  function legacyTurnDeliveryKey(snapshot) {
     const conversationId = String(snapshot?.conversationId || '');
     const promptKey = String(snapshot?.promptKey || '');
     const assistantKey = String(snapshot?.assistantKey || '');
     if (!conversationId || !promptKey || !assistantKey) return '';
     return `${conversationId}|${promptKey}|${assistantKey}`;
+  }
+
+  function logicalDeliveryKey(snapshot, owner = {}) {
+    const requestKey = requestDeliveryKey(snapshot, owner);
+    return requestKey || legacyTurnDeliveryKey(snapshot);
   }
 
   function meaningfulTitle(value) {
@@ -96,6 +109,25 @@
     return databasePromise;
   }
 
+  async function readDelivery(deliveryKey) {
+    if (!deliveryKey) return null;
+    const database = await openDatabase();
+    return await new Promise((resolve, reject) => {
+      const transaction = database.transaction(STORE_NAME, 'readonly');
+      const request = transaction.objectStore(STORE_NAME).get(deliveryKey);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () => reject(request.error || new Error('Could not inspect legacy delivery dedupe state.'));
+    });
+  }
+
+  function recordStillBlocksDelivery(record, now = Date.now()) {
+    if (!record) return false;
+    if (record.state === 'committed') return true;
+    if (record.state !== 'pending') return false;
+    const existingAt = Number(record?.updatedAt || record?.createdAt || 0);
+    return existingAt > 0 && now - existingAt <= PENDING_LEASE_MS;
+  }
+
   async function reserveDelivery(deliveryKey, snapshot, owner) {
     const database = await openDatabase();
     const now = Date.now();
@@ -120,6 +152,8 @@
           promptKey: String(snapshot?.promptKey || ''),
           assistantKey: String(snapshot?.assistantKey || ''),
           revision: String(snapshot?.revision || ''),
+          requestId: String(snapshot?.requestId || owner?.requestId || ''),
+          documentId: String(owner?.documentId || snapshot?.documentId || ''),
           fingerprint: String(owner?.fingerprint || ''),
           state: 'pending',
           createdAt: existing?.createdAt || now,
@@ -178,38 +212,54 @@
   }
 
   async function claimTurn(snapshot, owner = {}) {
-    const deliveryKey = logicalDeliveryKey(snapshot);
+    const baseSnapshot = snapshot && typeof snapshot === 'object' ? snapshot : {};
+    const requestId = String(baseSnapshot?.requestId || owner?.requestId || '');
+    const claimSnapshot = requestId && !baseSnapshot?.requestId
+      ? { ...baseSnapshot, requestId }
+      : baseSnapshot;
+    const deliveryKey = logicalDeliveryKey(claimSnapshot, owner);
     if (!deliveryKey) {
-      emitClaimDiagnostic('claim-unkeyed', snapshot, owner, 'missing-logical-delivery-key');
-      return await originalClaimTurn(snapshot, owner);
+      emitClaimDiagnostic('claim-unkeyed', claimSnapshot, owner, 'missing-logical-delivery-key');
+      return await originalClaimTurn(claimSnapshot, owner);
     }
 
     const settledOwner = await settleOwnerTitle(owner);
-    emitClaimDiagnostic('claim-observed', snapshot, settledOwner, 'logical-turn-observed');
-    const reservation = await reserveDelivery(deliveryKey, snapshot, settledOwner);
+    emitClaimDiagnostic('claim-observed', claimSnapshot, settledOwner, 'logical-turn-observed');
+
+    const requestKey = requestDeliveryKey(claimSnapshot, settledOwner);
+    const legacyKey = requestKey ? legacyTurnDeliveryKey(claimSnapshot) : '';
+    if (legacyKey) {
+      const legacyRecord = await readDelivery(legacyKey);
+      if (recordStillBlocksDelivery(legacyRecord)) {
+        emitClaimDiagnostic('claim-suppressed', claimSnapshot, settledOwner, 'already-delivered-logical-turn');
+        return { claimed: false, reason: 'already-delivered-logical-turn', record: null };
+      }
+    }
+
+    const reservation = await reserveDelivery(deliveryKey, claimSnapshot, settledOwner);
     if (!reservation.reserved) {
       emitClaimDiagnostic('claim-suppressed', snapshot, settledOwner, reservation.reason);
       return { claimed: false, reason: reservation.reason, record: null };
     }
 
     try {
-      const result = await originalClaimTurn(snapshot, settledOwner);
+      const result = await originalClaimTurn(claimSnapshot, settledOwner);
       if (result?.claimed === true || result?.reason === 'already-claimed') {
         await finalizeReservation(deliveryKey, 'commit');
         emitClaimDiagnostic(
           result?.claimed === true ? 'claim-accepted' : 'claim-coordinator-existing',
-          snapshot,
+          claimSnapshot,
           settledOwner,
           result?.reason || 'claimed'
         );
         return result;
       }
       await finalizeReservation(deliveryKey, 'release');
-      emitClaimDiagnostic('claim-released', snapshot, settledOwner, result?.reason || 'claim-not-owned');
+      emitClaimDiagnostic('claim-released', claimSnapshot, settledOwner, result?.reason || 'claim-not-owned');
       return result;
     } catch (error) {
       await finalizeReservation(deliveryKey, 'release').catch(() => {});
-      emitClaimDiagnostic('claim-error', snapshot, settledOwner, error?.message || error);
+      emitClaimDiagnostic('claim-error', claimSnapshot, settledOwner, error?.message || error);
       throw error;
     }
   }
@@ -220,7 +270,9 @@
   });
 
   globalThis.__chatgptNotifierDeliveryDedupeHook = Object.freeze({
-    version: 2,
+    version: 3,
+    requestDeliveryKey,
+    legacyTurnDeliveryKey,
     logicalDeliveryKey,
     meaningfulTitle,
     pruneOldClaims
