@@ -174,6 +174,37 @@ internal sealed class NativeHostApplication : Application
             case "toast.clearAll":
                 _toastManager!.ClearAll();
                 break;
+            case "window.presentExisting":
+            {
+                var result = WindowsVirtualDesktopSwitcher.PresentExistingChromeWindow(new DesktopPresentationTarget(
+                    message.WindowTitle ?? string.Empty,
+                    message.WindowLeft,
+                    message.WindowTop,
+                    message.WindowWidth,
+                    message.WindowHeight));
+
+                _diagnosticsStore?.AppendHost(new
+                {
+                    source = "host-click",
+                    status = result.Success ? "desktop-switch-complete" : "desktop-switch-failed",
+                    observedAt = DateTimeOffset.UtcNow,
+                    targetTabId = message.TargetTabId,
+                    reason = result.Reason,
+                    windowsBuild = result.WindowsBuild,
+                    windowsUbr = result.WindowsUbr
+                });
+
+                _ = SendEventAsync(new
+                {
+                    type = "window.presentExistingResult",
+                    requestId = message.RequestId,
+                    success = result.Success,
+                    reason = result.Reason,
+                    windowsBuild = result.WindowsBuild,
+                    windowsUbr = result.WindowsUbr
+                });
+                break;
+            }
             case "window.foreground":
                 _diagnosticsStore?.AppendHost(new
                 {
