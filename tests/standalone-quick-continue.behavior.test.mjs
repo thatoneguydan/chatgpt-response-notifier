@@ -197,9 +197,11 @@ test('Project menu stays available for config editing when send controls are una
   assert.match(contentSource, /function canSendProject\(\)/);
 });
 
-test('project popover flips below only when opening upward would cross the viewport top', () => {
+test('project popover opens above when it fits, flips below near the top, and chooses the roomier side if neither fits', () => {
   assert.match(contentSource, /function preferredPopoverDirection\(toolbarRect, popoverHeight, viewportHeight\)/);
-  assert.match(contentSource, /upwardTop < margin \? 'below' : 'above'/);
+  assert.match(contentSource, /if \(upwardTop >= margin\) return 'above'/);
+  assert.match(contentSource, /if \(downwardBottom <= viewport - margin\) return 'below'/);
+  assert.match(contentSource, /spaceBelow > spaceAbove \? 'below' : 'above'/);
   assert.match(contentSource, /projectPopover\.style\.top = 'calc\(100% \+ 6px\)'/);
   assert.match(contentSource, /projectPopover\.style\.bottom = 'auto'/);
   assert.match(contentSource, /projectPopover\.style\.top = 'auto'/);
