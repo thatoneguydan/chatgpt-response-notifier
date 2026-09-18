@@ -39,6 +39,16 @@ internal sealed class NativeHostApplication : Application
                 observedAt = DateTimeOffset.UtcNow,
                 extensionVersion = BundleInstaller.ReadInstalledExtensionVersion()
             });
+            var virtualDesktopCapability = ChromeVirtualDesktopSwitcher.Capability();
+            _diagnosticsStore.AppendHost(new
+            {
+                source = "host-click",
+                status = "virtual-desktop-switch-capability",
+                observedAt = DateTimeOffset.UtcNow,
+                reason = virtualDesktopCapability.State,
+                osBuild = virtualDesktopCapability.OsBuild,
+                virtualDesktopSupported = virtualDesktopCapability.Supported
+            });
 
             var store = new NotificationStateStore(Path.Combine(NativeHostInstaller.DataRoot, "pending.json"));
             var acceptedStore = new AcceptedNotificationStore(Path.Combine(NativeHostInstaller.DataRoot, "accepted-notifications.json"));
@@ -189,6 +199,35 @@ internal sealed class NativeHostApplication : Application
             case "toast.clearAll":
                 _toastManager!.ClearAll();
                 break;
+            case "window.switchVirtualDesktop":
+            {
+                var switchResult = ChromeVirtualDesktopSwitcher.TrySwitchToMatchedChromeWindowDesktop(
+                    message.WindowTitle,
+                    message.WindowLeft,
+                    message.WindowTop,
+                    message.WindowWidth,
+                    message.WindowHeight);
+                _diagnosticsStore?.AppendHost(new
+                {
+                    source = "host-click",
+                    status = "virtual-desktop-switch-result",
+                    observedAt = DateTimeOffset.UtcNow,
+                    reason = switchResult.State,
+                    osBuild = switchResult.OsBuild,
+                    candidateCount = switchResult.CandidateCount,
+                    desktopIdSuffix = switchResult.DesktopIdSuffix
+                });
+                _ = SendEventAsync(new
+                {
+                    type = "window.switchVirtualDesktopResult",
+                    requestId = message.RequestId,
+                    success = switchResult.Success,
+                    switchState = switchResult.State,
+                    osBuild = switchResult.OsBuild,
+                    candidateCount = switchResult.CandidateCount
+                });
+                break;
+            }
             case "window.foreground":
                 _diagnosticsStore?.AppendHost(new
                 {
