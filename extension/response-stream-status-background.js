@@ -516,6 +516,7 @@
 
   chrome.webRequest.onCompleted.addListener((details) => {
     noteRequestSettled(details, false);
+    globalThis.__chatgptNotifierObservationScheduler?.observeRequestCompletion?.(details)?.catch?.(() => {});
   }, REQUEST_FILTER);
 
   chrome.webRequest.onErrorOccurred.addListener((details) => {
