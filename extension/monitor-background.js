@@ -12,6 +12,12 @@
   const AUTOMATION_SCHEMA_VERSION = 2;
   const MAX_RUN_AGE_MS = 14 * 24 * 60 * 60 * 1000;
   const MAX_ATTENTION = 20;
+  const CODE_WATCHDOG_RECORD_PREFIX = 'code-watchdog:';
+  const CODE_WATCHDOG_ALARM_PREFIX = 'chatgpt-notifier-code-watchdog:';
+  const CODE_WATCHDOG_DELAY_MS = 30 * 60_000;
+  const CODE_WATCHDOG_RETRY_MS = 60_000;
+  const CODE_WATCHDOG_MAX_SENDS = 3;
+  const CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS = 15_000;
   const REQUEST_FILTER = {
     urls: [
       'https://chatgpt.com/backend-api/f/conversation*',
@@ -174,6 +180,7 @@
       updatedAt: now
     };
     await putRecord(ENROLLMENT_STORE, record);
+    if (!isEnabled) await clearCodeWatchdog(identity.id);
     return record;
   }
 
@@ -279,6 +286,292 @@
     return await getRecord(PROFILE_STORE, 'recovery') || {
       key: 'recovery', breakerOpen: false, breakerReason: '', openedAt: 0, nextProfileActionAt: 0, updatedAt: 0
     };
+  }
+
+
+  const codeWatchdogKey = (conversationId) => `${CODE_WATCHDOG_RECORD_PREFIX}${String(conversationId || '')}`;
+  const codeWatchdogAlarmName = (conversationId) => `${CODE_WATCHDOG_ALARM_PREFIX}${encodeURIComponent(String(conversationId || ''))}`;
+
+  function conversationIdFromCodeWatchdogAlarm(name) {
+    const value = String(name || '');
+    if (!value.startsWith(CODE_WATCHDOG_ALARM_PREFIX)) return '';
+    try { return decodeURIComponent(value.slice(CODE_WATCHDOG_ALARM_PREFIX.length)); } catch { return ''; }
+  }
+
+  async function readCodeWatchdog(conversationId) {
+    if (!conversationId) return null;
+    return await getRecord(PROFILE_STORE, codeWatchdogKey(conversationId));
+  }
+
+  async function cancelCodeWatchdogAlarm(conversationId) {
+    if (!conversationId) return false;
+    try { return await chrome.alarms.clear(codeWatchdogAlarmName(conversationId)); } catch { return false; }
+  }
+
+  async function clearCodeWatchdog(conversationId) {
+    if (!conversationId) return;
+    await cancelCodeWatchdogAlarm(conversationId);
+    await deleteRecord(PROFILE_STORE, codeWatchdogKey(conversationId));
+  }
+
+  async function putCodeWatchdog(conversationId, patch = {}) {
+    const existing = await readCodeWatchdog(conversationId);
+    const record = {
+      ...(existing || {}),
+      ...patch,
+      key: codeWatchdogKey(conversationId),
+      conversationId: String(conversationId || ''),
+      updatedAt: Date.now()
+    };
+    await putRecord(PROFILE_STORE, record);
+    return record;
+  }
+
+  async function scheduleCodeWatchdog(recordValue, when) {
+    const record = recordValue || null;
+    if (!record?.conversationId || record.stopped === true) return record;
+    const deadlineAt = Math.max(Date.now() + 1000, Number(when || 0));
+    const updated = await putCodeWatchdog(record.conversationId, { ...record, deadlineAt });
+    try { chrome.alarms.create(codeWatchdogAlarmName(record.conversationId), { when: deadlineAt }); } catch {}
+    return updated;
+  }
+
+  async function parkCodeWatchdog(recordValue, reason) {
+    const record = recordValue || null;
+    if (!record?.conversationId) return null;
+    await cancelCodeWatchdogAlarm(record.conversationId);
+    return await putCodeWatchdog(record.conversationId, {
+      ...record,
+      stopped: true,
+      stopReason: String(reason || 'stopped'),
+      deadlineAt: 0
+    });
+  }
+
+  async function resetCodeWatchdogForIncomplete(clean, sender, existingValue = null, automaticSentAt = 0) {
+    const conversationId = String(clean?.conversationId || existingValue?.conversationId || '');
+    if (!conversationId) return null;
+    await cancelCodeWatchdogAlarm(conversationId);
+    return await putCodeWatchdog(conversationId, {
+      ...(existingValue || {}),
+      conversationUrl: String(clean?.conversationUrl || existingValue?.conversationUrl || ''),
+      ownerTabId: Number.isInteger(sender?.tab?.id) ? sender.tab.id : (existingValue?.ownerTabId ?? null),
+      sendCount: 0,
+      stopped: false,
+      stopReason: '',
+      waitingForRequestStart: true,
+      resetAt: Date.now(),
+      lastStatusCode: String(clean?.statusCode || ''),
+      lastAutomaticSentAt: Math.max(0, Number(automaticSentAt || 0)),
+      deadlineAt: 0
+    });
+  }
+
+  async function reconcileCodeWatchdog(clean, sender) {
+    const conversationId = String(clean?.conversationId || '');
+    if (!conversationId) return null;
+
+    const statusCode = String(clean?.statusCode || '');
+    if (globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode)) {
+      if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(statusCode) === true) {
+        return await resetCodeWatchdogForIncomplete(clean, sender, await readCodeWatchdog(conversationId));
+      }
+      await clearCodeWatchdog(conversationId);
+      return null;
+    }
+
+    const requestStartedAt = Math.max(0, Number(clean?.requestStartedAt || 0));
+    if (!requestStartedAt) return await readCodeWatchdog(conversationId);
+
+    let current = await readCodeWatchdog(conversationId);
+    if (current?.waitingForRequestStart === true) {
+      const resetAt = Math.max(0, Number(current.resetAt || 0));
+      if (requestStartedAt < resetAt - CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS) return current;
+      current = {
+        ...current,
+        sendCount: 0,
+        stopped: false,
+        stopReason: '',
+        waitingForRequestStart: false
+      };
+    }
+
+    if (current?.stopped === true) {
+      const sameRequest = requestStartedAt === Number(current.lastRequestStartedAt || 0);
+      const followsAutomaticSend = Number(current.lastAutomaticSentAt || 0) > 0
+        && Math.abs(requestStartedAt - Number(current.lastAutomaticSentAt || 0)) <= CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS;
+      if (sameRequest || followsAutomaticSend) {
+        if (!sameRequest) {
+          current = await putCodeWatchdog(conversationId, {
+            ...current,
+            lastRequestStartedAt: requestStartedAt,
+            conversationUrl: clean.conversationUrl || current.conversationUrl || '',
+            ownerTabId: Number.isInteger(sender?.tab?.id) ? sender.tab.id : (current.ownerTabId ?? null)
+          });
+        }
+        return current;
+      }
+      current = null;
+    }
+
+    let sendCount = Math.max(0, Number(current?.sendCount || 0));
+    const requestChanged = requestStartedAt !== Number(current?.lastRequestStartedAt || 0);
+    if (requestChanged && current) {
+      const followsAutomaticSend = Number(current.lastAutomaticSentAt || 0) > 0
+        && Math.abs(requestStartedAt - Number(current.lastAutomaticSentAt || 0)) <= CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS;
+      if (!followsAutomaticSend) sendCount = 0;
+    }
+
+    const record = await putCodeWatchdog(conversationId, {
+      ...(current || {}),
+      conversationUrl: String(clean.conversationUrl || current?.conversationUrl || ''),
+      ownerTabId: Number.isInteger(sender?.tab?.id) ? sender.tab.id : (current?.ownerTabId ?? null),
+      sendCount,
+      stopped: false,
+      stopReason: '',
+      waitingForRequestStart: false,
+      lastRequestStartedAt: requestStartedAt,
+      lastStatusCode: '',
+      deadlineAt: requestStartedAt + CODE_WATCHDOG_DELAY_MS
+    });
+    return await scheduleCodeWatchdog(record, requestStartedAt + CODE_WATCHDOG_DELAY_MS);
+  }
+
+  async function tabForCodeWatchdog(record) {
+    if (Number.isInteger(record?.ownerTabId)) {
+      try {
+        const tab = await chrome.tabs.get(record.ownerTabId);
+        if (tab?.discarded !== true && tab?.frozen !== true && conversationFromUrl(tab?.url || '')?.id === record.conversationId) return tab;
+      } catch {}
+    }
+    let tabs = [];
+    try { tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] }); } catch { return null; }
+    return tabs.find((tab) => Number.isInteger(tab.id)
+      && tab.discarded !== true
+      && tab.frozen !== true
+      && conversationFromUrl(tab.url || '')?.id === record.conversationId) || null;
+  }
+
+  async function ensureCodeWatchdogPageRuntime(tabId) {
+    try {
+      const result = await chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_MONITOR_QUERY' });
+      if (result?.snapshot || result?.conversationId) return result?.snapshot || result;
+    } catch {}
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['status-code.js', 'status-policy.js', 'monitor-script.js', 'status-script.js']
+      });
+      const result = await chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_MONITOR_QUERY' });
+      return result?.snapshot || result || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function sendCodeWatchdogContinuation(tabId, conversationId) {
+    try {
+      return await chrome.tabs.sendMessage(tabId, {
+        type: 'CHATGPT_WATCHDOG_CONTINUE_COMMAND',
+        conversationId
+      });
+    } catch {}
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['status-code.js', 'status-policy.js', 'status-script.js']
+      });
+      return await chrome.tabs.sendMessage(tabId, {
+        type: 'CHATGPT_WATCHDOG_CONTINUE_COMMAND',
+        conversationId
+      });
+    } catch (error) {
+      return { ok: false, clicked: false, reason: 'watchdog-runtime-unavailable', error: String(error?.message || error) };
+    }
+  }
+
+  async function handleCodeWatchdogAlarm(conversationId) {
+    let record = await readCodeWatchdog(conversationId);
+    if (!record || record.stopped === true) return;
+    const enrollment = await getEnrollment(conversationId);
+    if (enrollment?.enabled !== true || enrollment?.userPaused === true) {
+      await clearCodeWatchdog(conversationId);
+      return;
+    }
+    if (Number(record.sendCount || 0) >= CODE_WATCHDOG_MAX_SENDS) {
+      await parkCodeWatchdog(record, 'retry-cap-reached');
+      return;
+    }
+
+    const tab = await tabForCodeWatchdog(record);
+    if (!tab) {
+      await scheduleCodeWatchdog(record, Date.now() + CODE_WATCHDOG_RETRY_MS);
+      return;
+    }
+
+    const live = await ensureCodeWatchdogPageRuntime(tab.id);
+    if (!live || String(live.conversationId || '') !== conversationId) {
+      await scheduleCodeWatchdog(record, Date.now() + CODE_WATCHDOG_RETRY_MS);
+      return;
+    }
+
+    const statusCode = String(live.statusCode || '');
+    if (globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode)) {
+      if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(statusCode) !== true) {
+        await clearCodeWatchdog(conversationId);
+        return;
+      }
+      const result = await sendCodeWatchdogContinuation(tab.id, conversationId);
+      record = await resetCodeWatchdogForIncomplete(live, { tab }, record, result?.ok === true ? Date.now() : 0);
+      if (result?.ok !== true) await scheduleCodeWatchdog(record, Date.now() + CODE_WATCHDOG_RETRY_MS);
+      return;
+    }
+
+    const liveRequestStartedAt = Math.max(0, Number(live.requestStartedAt || 0));
+    if (liveRequestStartedAt && liveRequestStartedAt !== Number(record.lastRequestStartedAt || 0)) {
+      await reconcileCodeWatchdog(live, { tab });
+      const refreshed = await readCodeWatchdog(conversationId);
+      if (!refreshed || refreshed.stopped === true || Number(refreshed.deadlineAt || 0) > Date.now() + 1000) return;
+      record = refreshed;
+    }
+
+    const result = await sendCodeWatchdogContinuation(tab.id, conversationId);
+    const racedStatusCode = String(result?.statusCode || '');
+    if (globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(racedStatusCode)) {
+      if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(racedStatusCode) === true) {
+        record = await resetCodeWatchdogForIncomplete(
+          { ...live, statusCode: racedStatusCode },
+          { tab },
+          record,
+          result?.ok === true ? Date.now() : 0
+        );
+        if (result?.ok !== true) await scheduleCodeWatchdog(record, Date.now() + CODE_WATCHDOG_RETRY_MS);
+      } else {
+        await clearCodeWatchdog(conversationId);
+      }
+      return;
+    }
+
+    if (result?.ok !== true) {
+      await scheduleCodeWatchdog(record, Date.now() + CODE_WATCHDOG_RETRY_MS);
+      return;
+    }
+
+    const sentAt = Date.now();
+    const nextCount = Math.max(0, Number(record.sendCount || 0)) + 1;
+    record = await putCodeWatchdog(conversationId, {
+      ...record,
+      ownerTabId: tab.id,
+      sendCount: nextCount,
+      lastAutomaticSentAt: sentAt,
+      waitingForRequestStart: false,
+      deadlineAt: 0
+    });
+    if (nextCount >= CODE_WATCHDOG_MAX_SENDS) {
+      await parkCodeWatchdog(record, 'retry-cap-reached');
+      return;
+    }
+    await scheduleCodeWatchdog(record, sentAt + CODE_WATCHDOG_DELAY_MS);
   }
 
   function closeDerivedReason(reason) {
@@ -471,7 +764,9 @@
       );
     }
     if (enrollment?.enabled !== true || enrollment?.userPaused === true) return null;
-    return await updateRun(clean, sender);
+    const run = await updateRun(clean, sender);
+    await reconcileCodeWatchdog(clean, sender);
+    return run;
   }
 
   async function sendRequestPhase(tabId, phase, details) {
@@ -548,6 +843,7 @@
       .sort((left, right) => Number(right.createdAt || 0) - Number(left.createdAt || 0))
       .slice(0, MAX_ATTENTION);
     const profile = await readProfileState();
+    const codeWatchdog = active?.id ? await readCodeWatchdog(active.id) : null;
     let helperConnected = false;
     try { helperConnected = typeof bridgeSocket !== 'undefined' && bridgeSocket?.readyState === WebSocket.OPEN; } catch {}
     let recovery = null;
@@ -567,6 +863,7 @@
       recovery,
       attention,
       profile,
+      codeWatchdog,
       helperConnected
     };
   }
@@ -711,6 +1008,12 @@
     return false;
   });
 
+  chrome.alarms.onAlarm.addListener((alarm) => {
+    const conversationId = conversationIdFromCodeWatchdogAlarm(alarm?.name);
+    if (!conversationId) return;
+    handleCodeWatchdogAlarm(conversationId).catch(() => {});
+  });
+
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     const identity = conversationFromUrl(changeInfo.url || tab?.url || '');
     if (identity) tabConversations.set(tabId, identity.id);
@@ -752,7 +1055,7 @@
   }
 
   globalThis.__chatgptNotifierMonitorBackground = Object.freeze({
-    version: 3,
+    version: 4,
     automationSchemaVersion: AUTOMATION_SCHEMA_VERSION,
     getEnrollment,
     setEnrollment,
@@ -764,6 +1067,9 @@
     resolveAttentionForRun,
     acknowledgeAttention,
     readProfileState,
+    readCodeWatchdog,
+    reconcileCodeWatchdog,
+    handleCodeWatchdogAlarm,
     updateRun,
     flushAttention
   });
