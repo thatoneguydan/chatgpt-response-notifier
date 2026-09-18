@@ -1,0 +1,13 @@
+{
+  "continueText": "Continue until you finish or need something from me.",
+  "projectText": "Continue {project} from canonical GitHub state until you finish or need me.",
+  "projects": [
+    "campaign desk",
+    "notifier extension",
+    "game mods",
+    "development infrastructure",
+    "time tracker",
+    "rx ingest",
+    "civitai sync"
+  ]
+}
