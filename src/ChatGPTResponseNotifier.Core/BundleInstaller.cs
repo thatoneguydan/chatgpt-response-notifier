@@ -108,6 +108,22 @@ public static class BundleInstaller
         }
     }
 
+    public static string? ReadInstalledSourceCommit()
+    {
+        if (!File.Exists(NativeHostInstaller.InstallStatePath)) return null;
+        try
+        {
+            using var document = JsonDocument.Parse(File.ReadAllText(NativeHostInstaller.InstallStatePath));
+            if (!document.RootElement.TryGetProperty("sourceCommit", out var source) || source.ValueKind != JsonValueKind.String) return null;
+            var value = (source.GetString() ?? string.Empty).Trim().ToLowerInvariant();
+            return value.Length == 40 && value.All(Uri.IsHexDigit) ? value : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
     private static void ValidateVersion(string version)
     {
         var parts = version.Split('.');

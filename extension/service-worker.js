@@ -205,10 +205,22 @@ function compareVersions(left, right) {
   return 0;
 }
 
-function maybeReloadForInstalledVersion(installedVersion) {
+function normalizeSourceCommit(value) {
+  const commit = String(value || '').trim().toLowerCase();
+  return /^[0-9a-f]{40}$/.test(commit) ? commit : '';
+}
+
+function runningSourceCommit() {
+  return normalizeSourceCommit(globalThis.__chatgptNotifierBuildIdentity?.sourceCommit);
+}
+
+function maybeReloadForInstalledVersion(installedVersion, installedSourceCommit = '') {
   const currentVersion = chrome.runtime.getManifest().version;
   const comparison = compareVersions(installedVersion, currentVersion);
-  if (comparison !== null && comparison !== 0) {
+  const runningSource = runningSourceCommit();
+  const installedSource = normalizeSourceCommit(installedSourceCommit);
+  const sourceChanged = Boolean(runningSource && installedSource && runningSource !== installedSource);
+  if ((comparison !== null && comparison !== 0) || sourceChanged) {
     setTimeout(() => chrome.runtime.reload(), 250);
     return true;
   }
@@ -828,7 +840,7 @@ async function handleNativeMessage(message) {
   settleNativeRequest(message);
 
   if (message.installedExtensionVersion) {
-    if (maybeReloadForInstalledVersion(String(message.installedExtensionVersion))) return;
+    if (maybeReloadForInstalledVersion(String(message.installedExtensionVersion), String(message.installedSourceCommit || ''))) return;
   }
 
   if (message.type === 'host.ready') {
@@ -956,6 +968,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       sendResponse?.(response ? {
         ok: true,
         installedExtensionVersion: response.installedExtensionVersion || null,
+        installedSourceCommit: response.installedSourceCommit || null,
         transport: response.transport || null,
         updateStatus: response.updateStatus || null
       } : { ok: false, error: 'Windows helper is not running or is not responding.' });

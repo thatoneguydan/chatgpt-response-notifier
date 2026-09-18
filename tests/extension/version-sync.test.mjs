@@ -8,7 +8,7 @@ import './cross-desktop-click.behavior.test.mjs';
 const worker = readFileSync(new URL('../../extension/service-worker.js', import.meta.url), 'utf8');
 const readText = (relative) => readFileSync(new URL(`../../${relative}`, import.meta.url), 'utf8');
 
-function loadVersionSync(currentVersion) {
+function loadVersionSync(currentVersion, runningSourceCommit = '') {
   const start = worker.indexOf('function parseVersion(value)');
   const end = worker.indexOf('function conversationFromUrl(rawUrl)', start);
   assert.ok(start >= 0 && end > start, 'version-sync functions were not found in service-worker.js');
@@ -16,6 +16,7 @@ function loadVersionSync(currentVersion) {
   const timers = [];
   let reloads = 0;
   const context = vm.createContext({
+    __chatgptNotifierBuildIdentity: { sourceCommit: runningSourceCommit },
     chrome: {
       runtime: {
         getManifest: () => ({ version: currentVersion }),
@@ -30,6 +31,7 @@ function loadVersionSync(currentVersion) {
   vm.runInContext(worker.slice(start, end), context);
   return {
     maybeReload: context.maybeReloadForInstalledVersion,
+    runningSourceCommit: context.runningSourceCommit,
     timers,
     reloads: () => reloads
   };
@@ -83,13 +85,61 @@ test('installed extension version mismatch self-activates both upgrades and roll
   }
 });
 
-test('same or invalid installed version does not reload the extension runtime', () => {
+test('same or invalid installed version does not reload without a trusted source mismatch', () => {
   for (const installedVersion of ['0.9.9', 'invalid']) {
     const runtime = loadVersionSync('0.9.9');
     assert.equal(runtime.maybeReload(installedVersion), false);
     assert.equal(runtime.timers.length, 0);
     assert.equal(runtime.reloads(), 0);
   }
+});
+
+test('same-version installed source mismatch self-activates the new extension payload', () => {
+  const runningSource = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  const installedSource = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
+  const runtime = loadVersionSync('0.9.29', runningSource);
+  assert.equal(runtime.runningSourceCommit(), runningSource);
+  assert.equal(runtime.maybeReload('0.9.29', installedSource), true);
+  assert.equal(runtime.timers.length, 1);
+  assert.equal(runtime.timers[0].delay, 250);
+  assert.equal(runtime.reloads(), 0);
+  runtime.timers[0].fn();
+  assert.equal(runtime.reloads(), 1);
+});
+
+test('same-version activation fails closed when source identity agrees or is unavailable', () => {
+  const source = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  for (const installedSource of [source, '', 'invalid']) {
+    const runtime = loadVersionSync('0.9.29', source);
+    assert.equal(runtime.maybeReload('0.9.29', installedSource), false);
+    assert.equal(runtime.timers.length, 0);
+    assert.equal(runtime.reloads(), 0);
+  }
+
+  const unstamped = loadVersionSync('0.9.29');
+  assert.equal(unstamped.runningSourceCommit(), '');
+  assert.equal(unstamped.maybeReload('0.9.29', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'), false);
+  assert.equal(unstamped.timers.length, 0);
+  assert.equal(unstamped.reloads(), 0);
+});
+
+test('bundle and localhost bridge carry exact source identity for same-version activation', () => {
+  const bundle = readText('Build-TestBundle.ps1');
+  const background = readText('extension/background.js');
+  const buildIdentity = readText('extension/runtime-build-identity.js');
+  const installer = readText('src/ChatGPTResponseNotifier.Core/BundleInstaller.cs');
+  const host = readText('src/ChatGPTResponseNotifier.Host/NativeHostApplication.cs');
+  const runtimeIdentity = readText('extension/runtime-identity-background.js');
+
+  assert.match(background, /runtime-build-identity\.js[\s\S]*service-worker\.js/);
+  assert.match(bundle, /SourceCommit -notmatch/);
+  assert.match(bundle, /\[0-9a-fA-F\]\{40\}/);
+  assert.match(bundle, /runtime-build-identity\.js/);
+  assert.match(bundle, /sourceCommit: '\$SourceCommit'/);
+  assert.match(buildIdentity, /sourceCommit:\s*''/);
+  assert.match(installer, /ReadInstalledSourceCommit\(\)/);
+  assert.match(host, /installedSourceCommit = BundleInstaller\.ReadInstalledSourceCommit\(\)/);
+  assert.match(runtimeIdentity, /sourceCommitSuffix/);
 });
 
 test('both incomplete limit and tool failure are recoverable continuation codes', () => {

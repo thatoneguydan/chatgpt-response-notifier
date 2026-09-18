@@ -16,9 +16,11 @@ internal sealed class RuntimeEvidencePublisher
     private readonly HiddenWindowIncidentRetention _hiddenWindowIncidents = new();
     private string? _historicalExtensionVersion;
     private string? _historicalExtensionRuntimeSuffix;
+    private string? _historicalExtensionSourceCommitSuffix;
     private DateTimeOffset? _historicalExtensionObservedAtUtc;
     private string? _currentExtensionVersion;
     private string? _currentExtensionRuntimeSuffix;
+    private string? _currentExtensionSourceCommitSuffix;
     private DateTimeOffset? _currentExtensionObservedAtUtc;
     private DateTimeOffset? _bridgeLastSeenAtUtc;
     private int _bridgeClientCount;
@@ -79,13 +81,16 @@ internal sealed class RuntimeEvidencePublisher
                 {
                     var version = StringValue(diagnostic, "extensionVersion", 32);
                     var runtimeSuffix = Suffix(StringValue(diagnostic, "correlationId", 80));
+                    var sourceCommitSuffix = StringValue(diagnostic, "sourceCommitSuffix", 8);
                     if (!string.IsNullOrWhiteSpace(version))
                     {
                         _currentExtensionVersion = version;
                         _currentExtensionRuntimeSuffix = runtimeSuffix;
+                        _currentExtensionSourceCommitSuffix = sourceCommitSuffix;
                         _currentExtensionObservedAtUtc = DateTimeOffset.UtcNow;
                         _historicalExtensionVersion = version;
                         _historicalExtensionRuntimeSuffix = runtimeSuffix;
+                        _historicalExtensionSourceCommitSuffix = sourceCommitSuffix;
                         _historicalExtensionObservedAtUtc = _currentExtensionObservedAtUtc;
                     }
                 }
@@ -142,15 +147,18 @@ internal sealed class RuntimeEvidencePublisher
             bridgeLastSeenAtUtc = _bridgeLastSeenAtUtc,
             currentExtensionVersion = _currentExtensionVersion,
             currentExtensionRuntimeSuffix = _currentExtensionRuntimeSuffix,
+            currentExtensionSourceCommitSuffix = _currentExtensionSourceCommitSuffix,
             currentExtensionObservedAtUtc = _currentExtensionObservedAtUtc,
             extensionConnectionLive,
             historicalExtensionVersion = _historicalExtensionVersion,
             historicalExtensionRuntimeSuffix = _historicalExtensionRuntimeSuffix,
+            historicalExtensionSourceCommitSuffix = _historicalExtensionSourceCommitSuffix,
             historicalExtensionObservedAtUtc = _historicalExtensionObservedAtUtc,
             // Legacy compatibility fields are deliberately live-only. A helper restart
             // can never make restored identity look current again.
             loadedExtensionVersion = extensionConnectionLive ? _currentExtensionVersion : null,
             extensionRuntimeSuffix = extensionConnectionLive ? _currentExtensionRuntimeSuffix : null,
+            extensionSourceCommitSuffix = extensionConnectionLive ? _currentExtensionSourceCommitSuffix : null,
             hiddenWindowDiagnostics = _hiddenWindowIncidents.Snapshot(),
             diagnostics = _diagnostics
         };
@@ -221,6 +229,9 @@ internal sealed class RuntimeEvidencePublisher
             _historicalExtensionRuntimeSuffix = StringValue(root, "historicalExtensionRuntimeSuffix", 8)
                 ?? StringValue(root, "currentExtensionRuntimeSuffix", 8)
                 ?? StringValue(root, "extensionRuntimeSuffix", 8);
+            _historicalExtensionSourceCommitSuffix = StringValue(root, "historicalExtensionSourceCommitSuffix", 8)
+                ?? StringValue(root, "currentExtensionSourceCommitSuffix", 8)
+                ?? StringValue(root, "extensionSourceCommitSuffix", 8);
             _historicalExtensionObservedAtUtc = DateValue(root, "historicalExtensionObservedAtUtc")
                 ?? DateValue(root, "currentExtensionObservedAtUtc")
                 ?? DateValue(root, "observedAtUtc");
@@ -229,6 +240,7 @@ internal sealed class RuntimeEvidencePublisher
             // They must be re-observed in this helper process lifetime.
             _currentExtensionVersion = null;
             _currentExtensionRuntimeSuffix = null;
+            _currentExtensionSourceCommitSuffix = null;
             _currentExtensionObservedAtUtc = null;
             _bridgeLastSeenAtUtc = null;
             _bridgeClientCount = 0;
@@ -255,6 +267,7 @@ internal sealed class RuntimeEvidencePublisher
             observedAt = StringValue(input, "observedAt", 64),
             extensionVersion = StringValue(input, "extensionVersion", 32),
             correlationId = StringValue(input, "correlationId", 80),
+            sourceCommitSuffix = StringValue(input, "sourceCommitSuffix", 8),
             tabId = IntegerValue(input, "tabId"),
             statusCode = IntegerValue(input, "statusCode"),
             attempt = IntegerValue(input, "attempt"),

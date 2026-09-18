@@ -38,6 +38,7 @@ function reportBootstrapFailure(status, error) {
 let importsReady = false;
 try {
   importScripts(
+    'runtime-build-identity.js',
     'status-code.js',
     'status-policy.js',
     'recovery-model.js',

@@ -102,6 +102,7 @@ internal sealed class NativeHostApplication : Application
         type = "host.ready",
         restored = _toastManager?.Count ?? 0,
         installedExtensionVersion = BundleInstaller.ReadInstalledExtensionVersion(),
+        installedSourceCommit = BundleInstaller.ReadInstalledSourceCommit(),
         transport = "localhost-websocket",
         diagnosticsAvailable = true,
         updateStatus = _updateService?.Status
@@ -196,6 +197,7 @@ internal sealed class NativeHostApplication : Application
                     type = "pong",
                     requestId = message.RequestId,
                     installedExtensionVersion = BundleInstaller.ReadInstalledExtensionVersion(),
+                    installedSourceCommit = BundleInstaller.ReadInstalledSourceCommit(),
                     transport = "localhost-websocket",
                     diagnosticsAvailable = true,
                     updateStatus = _updateService?.Status
@@ -248,6 +250,7 @@ internal sealed class NativeHostApplication : Application
             type = "diagnostics.result",
             requestId,
             installedExtensionVersion = BundleInstaller.ReadInstalledExtensionVersion(),
+            installedSourceCommit = BundleInstaller.ReadInstalledSourceCommit(),
             hostProcessId = Environment.ProcessId,
             records
         }).ConfigureAwait(false);

@@ -22,6 +22,10 @@ if ([string]::IsNullOrWhiteSpace($SourceCommit)) {
         throw 'Could not resolve the exact source commit for the bundle.'
     }
 }
+if ($SourceCommit -notmatch '^[0-9a-fA-F]{40}$') {
+    throw 'SourceCommit must be an exact 40-character Git commit SHA.'
+}
+$SourceCommit = $SourceCommit.ToLowerInvariant()
 
 $bundleName = "ChatGPT-Response-Notifier-$version"
 $bundleRoot = Join-Path $OutputDirectory $bundleName
@@ -53,6 +57,17 @@ if ($unexpectedRuntimeFiles.Count -gt 0) {
 
 Copy-Item -LiteralPath $publishedExe -Destination (Join-Path $bundleRoot 'ChatGPTResponseNotifier.Host.exe') -Force
 Copy-Item -LiteralPath (Join-Path $root 'extension') -Destination (Join-Path $bundleRoot 'extension') -Recurse -Force
+$runtimeIdentityPath = Join-Path $bundleRoot 'extension\runtime-build-identity.js'
+$runtimeIdentityText = @"
+'use strict';
+
+globalThis.__chatgptNotifierBuildIdentity = Object.freeze({
+  schemaVersion: 1,
+  sourceCommit: '$SourceCommit'
+});
+"@
+Set-Content -LiteralPath $runtimeIdentityPath -Value $runtimeIdentityText -Encoding UTF8
+
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $bundleRoot 'LICENSE') -Force
 
 $installText = @"

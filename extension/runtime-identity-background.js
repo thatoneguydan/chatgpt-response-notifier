@@ -8,8 +8,13 @@
   const CAPABILITY = 'runtime-identity-heartbeat-v4';
 
   let extensionVersion = '';
+  let sourceCommitSuffix = '';
   let runtimeId = '';
   try { extensionVersion = String(chrome.runtime.getManifest().version || ''); } catch {}
+  try {
+    const sourceCommit = String(globalThis.__chatgptNotifierBuildIdentity?.sourceCommit || '').trim().toLowerCase();
+    sourceCommitSuffix = /^[0-9a-f]{40}$/.test(sourceCommit) ? sourceCommit.slice(-8) : '';
+  } catch {}
   try { runtimeId = crypto.randomUUID(); } catch { runtimeId = `${Date.now()}-${Math.random()}`; }
 
   function workStatusCapability() {
@@ -41,6 +46,7 @@
       status: String(status || 'worker-alive'),
       observedAt: new Date().toISOString(),
       extensionVersion,
+      sourceCommitSuffix,
       correlationId: runtimeId,
       captureSource: CAPABILITY,
       reason: capability.evidenceReason,
@@ -76,6 +82,7 @@
   const runtime = Object.freeze({
     version: 4,
     extensionVersion,
+    sourceCommitSuffix,
     runtimeId,
     capability: CAPABILITY,
     heartbeatAlarm: HEARTBEAT_ALARM,
