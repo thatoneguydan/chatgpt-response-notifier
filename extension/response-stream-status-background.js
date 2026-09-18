@@ -6,7 +6,9 @@
   const DB_NAME = 'chatgpt-response-notifier-response-stream-status';
   const DB_VERSION = 1;
   const STORE_NAME = 'deliveries';
-  const CONTEXT_TTL_MS = 5 * 60 * 1000;
+  const PAGE_QUERY_TIMEOUT_MS = 1500;
+  const ACTIVE_CONTEXT_TTL_MS = 60 * 60 * 1000;
+  const SETTLED_CONTEXT_TTL_MS = 10 * 60 * 1000;
   const LATE_DOM_DEDUPE_MS = 10 * 60 * 1000;
   const MAX_RECORD_AGE_MS = 14 * 24 * 60 * 60 * 1000;
   const REQUEST_FILTER = {
@@ -68,23 +70,32 @@
     try { delivery()?.record?.(status, fields); } catch {}
   }
 
-  async function queryMonitorSnapshot(tabId, documentId) {
+  async function queryMonitorSnapshot(tabId, documentId, timeoutMs = PAGE_QUERY_TIMEOUT_MS) {
     if (!Number.isInteger(tabId) || !documentId) return null;
+    let timeoutId = null;
     try {
-      const response = await chrome.tabs.sendMessage(
+      const query = Promise.resolve(chrome.tabs.sendMessage(
         tabId,
         { type: 'CHATGPT_MONITOR_QUERY' },
         { documentId: String(documentId) }
-      );
-      return response?.snapshot || response || null;
+      )).then((response) => response?.snapshot || response || null).catch(() => null);
+      const deadline = new Promise((resolve) => {
+        timeoutId = setTimeout(() => resolve(null), Math.max(1, Number(timeoutMs || PAGE_QUERY_TIMEOUT_MS)));
+      });
+      return await Promise.race([query, deadline]);
     } catch {
       return null;
+    } finally {
+      if (timeoutId !== null) clearTimeout(timeoutId);
     }
   }
 
   function pruneContexts(now = Date.now()) {
     for (const [key, context] of requestContexts) {
-      if (now - Number(context?.startedAt || 0) <= CONTEXT_TTL_MS) continue;
+      const settledAt = Number(context?.completedAt || 0);
+      const referenceAt = settledAt || Number(context?.startedAt || 0);
+      const ttl = settledAt > 0 ? SETTLED_CONTEXT_TTL_MS : ACTIVE_CONTEXT_TTL_MS;
+      if (now - referenceAt <= ttl) continue;
       requestContexts.delete(key);
       const docKey = contextKey(context?.tabId, context?.chromeDocumentId);
       if (latestRequestByDocument.get(docKey) === key) latestRequestByDocument.delete(docKey);
@@ -104,11 +115,14 @@
 
     pruneContexts();
     const key = requestKey(details);
+    const requestConversation = conversationFromUrl(details.documentUrl || '');
     const context = {
       key,
       tabId: details.tabId,
       requestId: String(details.requestId || ''),
       chromeDocumentId,
+      conversationId: String(requestConversation?.id || ''),
+      conversationUrl: String(requestConversation?.url || ''),
       startedAt: Date.now(),
       completedAt: 0,
       failed: false,
@@ -284,7 +298,7 @@
     });
   }
 
-  async function currentContext(sender) {
+  function currentContext(sender) {
     const tabId = sender?.tab?.id;
     const chromeDocumentId = String(sender?.documentId || '');
     if (!Number.isInteger(tabId) || !chromeDocumentId) return null;
@@ -292,25 +306,37 @@
     const key = latestRequestByDocument.get(contextKey(tabId, chromeDocumentId));
     const context = key ? requestContexts.get(key) : null;
     if (!context || context.failed) return null;
-    try { await context.capturePromise; } catch {}
     return context;
   }
 
   async function identityForStreamEvent(message, sender) {
-    const context = await currentContext(sender);
+    const context = currentContext(sender);
     if (!context) return null;
     const tab = sender?.tab || null;
-    const conversation = conversationFromUrl(tab?.url || '');
+    const senderConversation = conversationFromUrl(tab?.url || '');
+    const requestConversation = context.conversationId
+      ? { id: context.conversationId, url: context.conversationUrl || senderConversation?.url || '' }
+      : null;
+    if (requestConversation && senderConversation && requestConversation.id !== senderConversation.id) return null;
+    const conversation = requestConversation || senderConversation;
     if (!conversation) return null;
 
-    const current = await queryMonitorSnapshot(context.tabId, context.chromeDocumentId);
     const first = context.snapshot || {};
-    const promptKey = String(first.promptKey || current?.promptKey || '');
-    const promptRevision = String(first.promptRevision || current?.promptRevision || '');
-    const monitorRuntimeId = String(current?.documentId || first.documentId || '');
-    const requestId = String(context.requestId || current?.requestId || '');
+    const promptKey = String(first.promptKey || '');
+    const promptRevision = String(first.promptRevision || '');
+    const monitorRuntimeId = String(first.documentId || '');
+    const requestId = String(context.requestId || '');
     if (!requestId) return null;
     if (promptKey && !promptKey.startsWith(`${conversation.id}|`)) return null;
+
+    if (!promptKey) {
+      recordDiagnostic('response-stream-page-context-unavailable', {
+        tabId: context.tabId,
+        reason: 'terminal-status-routed-from-request-document-identity',
+        conversationId: conversation.id,
+        chromeDocumentId: context.chromeDocumentId
+      });
+    }
 
     return {
       conversationId: conversation.id,
@@ -429,10 +455,11 @@
 
     const wrapped = async function responseStreamAwareQueueDurableNotification(turnRecord, reason = '') {
       const conversationId = String(turnRecord?.conversationId || '');
+      const requestId = String(turnRecord?.requestId || '');
       const promptKey = String(turnRecord?.promptKey || '');
-      if (conversationId && promptKey) {
+      if (conversationId && (requestId || promptKey)) {
         let early = null;
-        try { early = await getEarlyDelivery({ conversationId, promptKey }); } catch {}
+        try { early = await getEarlyDelivery({ conversationId, requestId, promptKey }); } catch {}
         if (early?.notificationId) {
           const state = coordinatorState();
           if (turnRecord?.turnKey && state?.updateTurn) {
