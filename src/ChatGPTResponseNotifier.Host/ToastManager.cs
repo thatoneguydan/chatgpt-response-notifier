@@ -105,21 +105,6 @@ internal sealed class ToastManager
                 correlationId = Guid.NewGuid().ToString("N")
             });
         };
-        window.ToastMoveHereRequested += async (_, _) =>
-        {
-            if (window.TargetTabId is not >= 0) return;
-            window.SetClickState("pending", window.TargetTabId);
-            Restack();
-            await _sendEvent(new
-            {
-                type = "toast.moveHere",
-                notificationId = record.Id,
-                conversationId = record.ConversationId,
-                conversationUrl = record.ConversationUrl,
-                targetTabId = window.TargetTabId,
-                correlationId = Guid.NewGuid().ToString("N")
-            });
-        };
         window.ToastDismissed += async (_, _) =>
         {
             RemoveWindow(window, persist: true);
