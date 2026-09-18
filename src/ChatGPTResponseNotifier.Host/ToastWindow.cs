@@ -11,8 +11,10 @@ internal sealed class ToastWindow : Window
 {
     public NotificationRecord Record { get; }
     public bool SuppressCloseEvent { get; set; }
+    private Button? _moveHereButton;
 
     public event EventHandler? ToastClicked;
+    public event EventHandler? ToastMoveHereRequested;
     public event EventHandler? ToastDismissed;
 
     public ToastWindow(NotificationRecord record)
@@ -105,6 +107,23 @@ internal sealed class ToastWindow : Window
             });
         }
 
+        _moveHereButton = new Button
+        {
+            Content = "Move tab here",
+            Visibility = Visibility.Collapsed,
+            HorizontalAlignment = HorizontalAlignment.Left,
+            Margin = new Thickness(0, 7, 0, 0),
+            Padding = new Thickness(9, 3, 9, 3),
+            FontSize = 10.5,
+            Cursor = Cursors.Hand
+        };
+        _moveHereButton.Click += (_, e) =>
+        {
+            e.Handled = true;
+            ToastMoveHereRequested?.Invoke(this, EventArgs.Empty);
+        };
+        stack.Children.Add(_moveHereButton);
+
         // Preview remains persisted in NotificationRecord for popup history and
         // future toast layouts, but is intentionally not rendered here.
         var border = new Border
@@ -132,6 +151,14 @@ internal sealed class ToastWindow : Window
             ToastClicked?.Invoke(this, EventArgs.Empty);
         };
         return border;
+    }
+
+    public void SetClickState(string state)
+    {
+        if (_moveHereButton is null) return;
+        _moveHereButton.Visibility = state is "other-desktop" or "move-failed"
+            ? Visibility.Visible
+            : Visibility.Collapsed;
     }
 
     private static string FormatCompletedAt(DateTimeOffset value)
