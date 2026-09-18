@@ -12,6 +12,8 @@ internal sealed class ToastWindow : Window
     public NotificationRecord Record { get; }
     public bool SuppressCloseEvent { get; set; }
     private Button? _moveHereButton;
+    private TextBlock? _clickStateText;
+    public int? TargetTabId { get; private set; }
 
     public event EventHandler? ToastClicked;
     public event EventHandler? ToastMoveHereRequested;
@@ -20,6 +22,7 @@ internal sealed class ToastWindow : Window
     public ToastWindow(NotificationRecord record)
     {
         Record = record;
+        TargetTabId = record.TargetTabId;
         Width = 350;
         SizeToContent = SizeToContent.Height;
         WindowStyle = WindowStyle.None;
@@ -107,9 +110,19 @@ internal sealed class ToastWindow : Window
             });
         }
 
+        _clickStateText = new TextBlock
+        {
+            Visibility = Visibility.Collapsed,
+            Margin = new Thickness(0, 6, 0, 0),
+            Foreground = new SolidColorBrush(Color.FromRgb(92, 92, 92)),
+            FontSize = 10.5,
+            TextWrapping = TextWrapping.Wrap
+        };
+        stack.Children.Add(_clickStateText);
+
         _moveHereButton = new Button
         {
-            Content = "Move tab here",
+            Content = "Move this tab here",
             Visibility = Visibility.Collapsed,
             HorizontalAlignment = HorizontalAlignment.Left,
             Margin = new Thickness(0, 7, 0, 0),
@@ -153,12 +166,42 @@ internal sealed class ToastWindow : Window
         return border;
     }
 
-    public void SetClickState(string state)
+    public void SetClickState(string state, int? targetTabId = null)
     {
-        if (_moveHereButton is null) return;
-        _moveHereButton.Visibility = state is "other-desktop" or "move-failed"
-            ? Visibility.Visible
-            : Visibility.Collapsed;
+        if (targetTabId is >= 0) TargetTabId = targetTabId;
+        if (_moveHereButton is null || _clickStateText is null) return;
+
+        switch (state)
+        {
+            case "other-desktop":
+                _clickStateText.Text = "This chat is on another Windows desktop.";
+                _clickStateText.Visibility = Visibility.Visible;
+                _moveHereButton.Visibility = TargetTabId is >= 0 ? Visibility.Visible : Visibility.Collapsed;
+                break;
+            case "move-failed":
+                _clickStateText.Text = "Could not move the existing tab here. Click the notification to retry.";
+                _clickStateText.Visibility = Visibility.Visible;
+                _moveHereButton.Visibility = TargetTabId is >= 0 ? Visibility.Visible : Visibility.Collapsed;
+                break;
+            case "probe-timeout":
+            case "route-timeout":
+            case "unverified":
+            case "visible-not-focused":
+                _clickStateText.Text = "Could not confirm the existing tab was shown. Click the notification to retry.";
+                _clickStateText.Visibility = Visibility.Visible;
+                _moveHereButton.Visibility = Visibility.Collapsed;
+                break;
+            case "pending":
+                _clickStateText.Text = "Opening existing tab…";
+                _clickStateText.Visibility = Visibility.Visible;
+                _moveHereButton.Visibility = Visibility.Collapsed;
+                break;
+            default:
+                _clickStateText.Text = string.Empty;
+                _clickStateText.Visibility = Visibility.Collapsed;
+                _moveHereButton.Visibility = Visibility.Collapsed;
+                break;
+        }
     }
 
     private static string FormatCompletedAt(DateTimeOffset value)
