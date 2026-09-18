@@ -292,11 +292,36 @@
     }
   }
 
+  function preferredPopoverDirection(toolbarRect, popoverHeight, viewportHeight) {
+    const gap = 6;
+    const margin = 8;
+    const upwardTop = Number(toolbarRect?.top || 0) - gap - Math.max(0, Number(popoverHeight) || 0);
+    return upwardTop < margin ? 'below' : 'above';
+  }
+
+  function positionProjectPopover() {
+    if (!projectPopover || projectPopover.hidden || !toolbar) return;
+    const direction = preferredPopoverDirection(
+      toolbar.getBoundingClientRect(),
+      projectPopover.offsetHeight,
+      window.innerHeight
+    );
+
+    if (direction === 'below') {
+      projectPopover.style.top = 'calc(100% + 6px)';
+      projectPopover.style.bottom = 'auto';
+    } else {
+      projectPopover.style.top = 'auto';
+      projectPopover.style.bottom = 'calc(100% + 6px)';
+    }
+  }
+
   function setEditorMode(editing) {
     if (!browsePanel || !editorPanel) return;
     browsePanel.hidden = Boolean(editing);
     editorPanel.hidden = !editing;
     if (!editing) setEditorError('');
+    positionProjectPopover();
   }
 
   function closeProjectPopover({ clear = false } = {}) {
@@ -389,6 +414,7 @@
     const config = await ensureConfig();
     if (config) renderProjectList(config.projects);
     updateProjectSendState();
+    positionProjectPopover();
   }
 
   async function openConfigEditor() {
@@ -397,6 +423,7 @@
     editorTextarea.value = configApi.serialize(config);
     setEditorError('');
     setEditorMode(true);
+    positionProjectPopover();
   }
 
   async function saveConfigEditor() {
@@ -811,6 +838,7 @@
     root.style.left = `${Math.round(left)}px`;
     root.style.top = `${Math.round(top)}px`;
     root.style.visibility = 'visible';
+    positionProjectPopover();
   }
 
   function scheduleSync() {
