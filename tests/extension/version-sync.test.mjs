@@ -284,14 +284,24 @@ test('quick prompt toolbar tracks the full composer, sits below native popups, a
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-prompts-script.js')));
 });
 
-test('native toast renders persisted completion time in local time and release versions stay aligned', () => {
+test('native toast renders persisted completion time, keeps failed clicks retryable, and release versions stay aligned', () => {
   const toast = readText('src/ChatGPTResponseNotifier.Host/ToastWindow.cs');
+  const manager = readText('src/ChatGPTResponseNotifier.Host/ToastManager.cs');
+  const record = readText('src/ChatGPTResponseNotifier.Core/NotificationRecord.cs');
+  const app = readText('src/ChatGPTResponseNotifier.Host/NativeHostApplication.cs');
   const manifest = JSON.parse(readText('extension/manifest.json'));
   const version = readText('VERSION.txt').trim();
 
   assert.match(toast, /FormatCompletedAt\(record\.CompletedAt\)/);
   assert.match(toast, /value\.ToLocalTime\(\)/);
   assert.match(toast, /local\.ToString\("t"\)/);
+  assert.match(toast, /Content = "Move tab here"/);
+  assert.match(toast, /ToastMoveHereRequested/);
+  assert.match(manager, /ReportClickResult/);
+  assert.match(manager, /targetTabId = record\.TargetTabId/);
+  assert.match(record, /public int\? TargetTabId/);
+  assert.match(app, /case "toast\.clickResult"/);
+  assert.doesNotMatch(app, /click-shell-fallback/);
   assert.equal(version, '0.9.29');
   assert.equal(manifest.version, version);
 });
