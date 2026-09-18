@@ -11,6 +11,7 @@ const extensionRoot = path.join(repoRoot, 'standalone-quick-continue');
 const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.json'), 'utf8'));
 const promptSource = fs.readFileSync(path.join(extensionRoot, 'prompt-format.js'), 'utf8');
 const contentSource = fs.readFileSync(path.join(extensionRoot, 'content-script.js'), 'utf8');
+const installerSource = fs.readFileSync(path.join(extensionRoot, 'Install.ps1'), 'utf8');
 
 test('standalone extension has no background or network permissions', () => {
   assert.equal(manifest.manifest_version, 3);
@@ -48,6 +49,7 @@ test('send path targets the real ChatGPT send button and has no retry click loop
   assert.doesNotMatch(contentSource, /fetch\(/);
   assert.doesNotMatch(contentSource, /XMLHttpRequest/);
   assert.doesNotMatch(contentSource, /WebSocket/);
+  assert.match(contentSource, /chatgpt-notifier-quick-prompts/);
 });
 
 test('project field is non-modal and does not auto-focus or trap focus', () => {
@@ -55,4 +57,12 @@ test('project field is non-modal and does not auto-focus or trap focus', () => {
   assert.doesNotMatch(contentSource, /\.focus\(/);
   assert.match(contentSource, /event\.key === 'Escape'/);
   assert.match(contentSource, /event\.key === 'Enter'/);
+  assert.doesNotMatch(contentSource, /\.title\s*=/);
+});
+
+test('installer uses a stable local path without policy, registry, or process side effects', () => {
+  assert.match(installerSource, /LOCALAPPDATA/);
+  assert.match(installerSource, /ChatGPTQuickContinue\\Extension/);
+  assert.doesNotMatch(installerSource, /Set-ItemProperty|New-ItemProperty|reg\.exe|HKCU:|HKLM:/i);
+  assert.doesNotMatch(installerSource, /Start-Process|chrome\.exe/i);
 });
