@@ -215,10 +215,11 @@
 
   function sendCompletion(snapshot, requestId = '') {
     const requestIdentity = String(requestId || '');
-    const fingerprint = `${requestIdentity}|${snapshot.promptKey}|${snapshot.assistantKey}|${snapshot.response.slice(0, 1000)}`;
-    if (fingerprint === lastSentFingerprint) return;
+    const fingerprint = `${snapshot.promptKey}|${snapshot.assistantKey}|${snapshot.response.slice(0, 1000)}`;
+    const localFingerprint = `${requestIdentity}|${fingerprint}`;
+    if (localFingerprint === lastSentFingerprint) return;
 
-    lastSentFingerprint = fingerprint;
+    lastSentFingerprint = localFingerprint;
     chrome.runtime.sendMessage({
       type: 'CHATGPT_RESPONSE_COMPLETE',
       sessionTitle: document.title,
