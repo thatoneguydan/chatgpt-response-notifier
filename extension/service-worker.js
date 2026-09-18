@@ -803,6 +803,7 @@ async function showCompletionFromUpstream(message, sender) {
     promptKey: status.promptKey
   }) || null;
   const requestId = String(message?.requestId || requestOwner?.requestId || '');
+  if (!requestId) return null;
 
   return await processCodedCompletion(status, {
     tabId,
