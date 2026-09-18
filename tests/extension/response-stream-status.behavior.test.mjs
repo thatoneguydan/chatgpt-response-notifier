@@ -227,6 +227,7 @@ test('stream dedupe carries exact request identity when page prompt identity is 
   assert.match(backgroundSource, /requestOwnerForTurn,/);
   assert.match(serviceWorkerSource, /__chatgptNotifierResponseStreamStatus\?\.requestOwnerForTurn/);
   assert.match(serviceWorkerSource, /message\?\.requestId \|\| requestOwner\?\.requestId/);
+  assert.match(serviceWorkerSource, /if \(!requestId\) return null;/);
 });
 
 test('request completion arms durable worker DOM fallback without generating ChatGPT traffic', () => {
