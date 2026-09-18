@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "version": "0.9.33",
-  "sourceCommit": "fdc6b4be380d84ec0ec5223dbbe1e40568f22d79",
-  "downloadUrl": "https://github.com/thatoneguydan/chatgpt-response-notifier/releases/download/v0.9.33/ChatGPT-Response-Notifier-0.9.33.zip",
-  "sha256": "21555e744c621ca38fd3e3eb50f06359c309b22efe4e7514244c3c1d354726ea"
+  "version": "0.9.36",
+  "sourceCommit": "e96aae20b49db910abe830e477e37d73aa785db9",
+  "downloadUrl": "https://github.com/thatoneguydan/chatgpt-response-notifier/releases/download/v0.9.36/ChatGPT-Response-Notifier-0.9.36.zip",
+  "sha256": "1bcbdac89c32b60759e6eb1210728e41350a8d9aaf01d1cc1d35a8d1c20f30e4"
 }
