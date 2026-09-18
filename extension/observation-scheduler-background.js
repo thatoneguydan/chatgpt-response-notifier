@@ -9,11 +9,13 @@
   const ALARM = 'chatgpt-notifier-observation-deadline';
   const QUERY_TIMEOUT_MS = 5_000;
   const REINSPECT_DELAY_MS = 1_000;
+  const COMPLETION_RECHECK_DELAYS_MS = Object.freeze([1_000, 3_000, 10_000, 30_000]);
   const KINDS = Object.freeze({
     missingFooter: 'missing-footer',
     silentFirst: 'silent-first',
     silentConfirm: 'silent-confirm',
-    longThinking: 'long-thinking'
+    longThinking: 'long-thinking',
+    codedCompletion: 'coded-completion-check'
   });
 
   let databasePromise = null;
@@ -125,6 +127,43 @@
       requestStartedAt: num(snapshot.requestStartedAt),
       requestSettledAt: num(snapshot.requestSettledAt)
     };
+  }
+
+  function conversationFromDocumentUrl(url) {
+    try {
+      const parsed = new URL(text(url));
+      if (!['chatgpt.com', 'www.chatgpt.com'].includes(parsed.hostname)) return null;
+      const parts = parsed.pathname.split('/').filter(Boolean);
+      for (let index = parts.length - 2; index >= 0; index -= 1) {
+        if (parts[index] !== 'c') continue;
+        const id = decodeURIComponent(parts[index + 1] || '').trim();
+        if (id) return { id, url: `https://chatgpt.com${parsed.pathname.replace(/\/+$/, '')}` };
+      }
+    } catch {}
+    return null;
+  }
+
+  function completionDeadlineKey(tabId, documentId, requestId) {
+    return `completion|${Number(tabId)}|${text(documentId)}|${text(requestId)}`;
+  }
+
+  async function scheduleCompletionRetry(record) {
+    const attempt = num(record.attempt);
+    if (attempt >= COMPLETION_RECHECK_DELAYS_MS.length) {
+      await deleteRecord(record.deadlineKey);
+      return false;
+    }
+    const delay = COMPLETION_RECHECK_DELAYS_MS[attempt];
+    await putRecord({
+      ...record,
+      attempt: attempt + 1,
+      dueAt: Date.now() + delay,
+      state: 'scheduled',
+      deferReason: '',
+      updatedAt: Date.now()
+    });
+    await armAlarm();
+    return true;
   }
 
   function samePrompt(record, snapshot = {}) {
@@ -243,7 +282,12 @@
     if (tab.discarded === true || tab.frozen === true) return { ok: false, reason: 'page-unobservable', deferred: true };
 
     const ask = async () => {
-      const reply = await boundedPromise(chrome.tabs.sendMessage(record.tabId, { type: 'CHATGPT_MONITOR_QUERY', observationToken: record.token }), QUERY_TIMEOUT_MS);
+      const options = record.documentId ? { documentId: text(record.documentId) } : undefined;
+      const message = { type: 'CHATGPT_MONITOR_QUERY', observationToken: record.token };
+      const pending = options
+        ? chrome.tabs.sendMessage(record.tabId, message, options)
+        : chrome.tabs.sendMessage(record.tabId, message);
+      const reply = await boundedPromise(pending, QUERY_TIMEOUT_MS);
       return reply?.snapshot && typeof reply.snapshot === 'object' ? reply.snapshot : reply;
     };
     let snapshot = await ask();
@@ -280,11 +324,43 @@
     if (!current || current.token !== record.token || num(current.dueAt) > Date.now()) return;
     const inspected = await query(current);
     if (!inspected.ok) {
-      if (inspected.deferred) await defer(current, inspected.reason);
+      if (current.kind === KINDS.codedCompletion && inspected.deferred !== true) {
+        await scheduleCompletionRetry(current);
+      } else if (inspected.deferred) await defer(current, inspected.reason);
       else await deleteRecord(current.deadlineKey);
       return;
     }
     const snapshot = inspected.snapshot;
+
+    if (current.kind === KINDS.codedCompletion) {
+      if (text(snapshot.conversationId) !== current.conversationId) {
+        await deleteRecord(current.deadlineKey);
+        return;
+      }
+      const observedRequestId = text(snapshot.requestId);
+      if (observedRequestId && observedRequestId !== current.requestId) {
+        await deleteRecord(current.deadlineKey);
+        return;
+      }
+      if (globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(text(snapshot.statusCode)) === true
+          && snapshot.promptKey && snapshot.assistantKey) {
+        const result = await globalThis.__chatgptNotifierWorkerTerminalFallback?.handle?.({
+          monitorSnapshot: snapshot,
+          owner: {
+            tabId: current.tabId,
+            chromeDocumentId: current.documentId,
+            requestId: current.requestId
+          }
+        });
+        if (result?.handled === true) {
+          await deleteRecord(current.deadlineKey);
+          return;
+        }
+      }
+      await scheduleCompletionRetry(current);
+      return;
+    }
+
     if (!samePrompt(current, snapshot) || snapshot.statusCode || blocked(snapshot) || snapshot.stopGenerating === true || snapshot.toolActivity === true) {
       await deleteRecord(current.deadlineKey);
       return;
@@ -344,6 +420,39 @@
     await armAlarm();
   }
 
+  async function observeRequestCompletion(details = {}) {
+    const tabId = Number(details.tabId);
+    const documentId = text(details.documentId);
+    const requestId = text(details.requestId);
+    const statusCode = Number(details.statusCode || 0);
+    const conversation = conversationFromDocumentUrl(details.documentUrl || '');
+    if (!Number.isInteger(tabId) || tabId < 0 || !documentId || !requestId || !conversation) return null;
+    if (statusCode < 200 || statusCode >= 300) return null;
+
+    const now = Date.now();
+    const record = {
+      deadlineKey: completionDeadlineKey(tabId, documentId, requestId),
+      generationKey: `${conversation.id}|request:${requestId}`,
+      kind: KINDS.codedCompletion,
+      tabId,
+      documentId,
+      requestId,
+      conversationId: conversation.id,
+      conversationUrl: conversation.url,
+      token: crypto.randomUUID(),
+      dueAt: now,
+      attempt: 0,
+      state: 'scheduled',
+      deferReason: '',
+      createdAt: now,
+      updatedAt: now
+    };
+    await putRecord(record);
+    await processRecord(record);
+    await armAlarm();
+    return await getRecord(record.deadlineKey);
+  }
+
   chrome.alarms?.onAlarm?.addListener((alarm) => {
     if (alarm?.name === ALARM) processDue().catch(() => {});
   });
@@ -368,7 +477,8 @@
     queryTimeoutMs: QUERY_TIMEOUT_MS,
     observe,
     processDue,
-    resumeTab
+    resumeTab,
+    observeRequestCompletion
   });
   armAlarm().catch(() => {});
 })();

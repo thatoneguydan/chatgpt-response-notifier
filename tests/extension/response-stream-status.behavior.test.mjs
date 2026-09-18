@@ -6,6 +6,7 @@ import test from 'node:test';
 const mainSource = readFileSync(new URL('../../extension/response-stream-status-main.js', import.meta.url), 'utf8');
 const bridgeSource = readFileSync(new URL('../../extension/response-stream-status-bridge.js', import.meta.url), 'utf8');
 const backgroundSource = readFileSync(new URL('../../extension/response-stream-status-background.js', import.meta.url), 'utf8');
+const serviceWorkerSource = readFileSync(new URL('../../extension/service-worker.js', import.meta.url), 'utf8');
 
 function streamResponse(chunks, onClone = () => {}) {
   return {
@@ -38,6 +39,7 @@ test('response-stream sources are valid JavaScript', () => {
   assert.doesNotThrow(() => new vm.Script(mainSource));
   assert.doesNotThrow(() => new vm.Script(bridgeSource));
   assert.doesNotThrow(() => new vm.Script(backgroundSource));
+  assert.doesNotThrow(() => new vm.Script(serviceWorkerSource));
 });
 
 test('MAIN-world observer tees the existing fetch once and emits only the terminal status token', async () => {
@@ -193,6 +195,48 @@ test('stream delivery remains notification-only while automatic Continue stays D
   assert.doesNotMatch(backgroundSource, /tabs\.update\([^)]*active:\s*true/);
   assert.doesNotMatch(backgroundSource, /windows\.update\([^)]*focused:\s*true/);
   assert.doesNotMatch(backgroundSource, /api\/auth\/session/i);
+});
+
+
+test('terminal stream routing never waits on a live page reply', () => {
+  assert.match(backgroundSource, /PAGE_QUERY_TIMEOUT_MS = 1500/);
+  assert.match(backgroundSource, /Promise\.race\(\[query, deadline\]\)/);
+  assert.match(backgroundSource, /conversationFromUrl\(details\.documentUrl \|\| ''\)/);
+
+  const currentStart = backgroundSource.indexOf('function currentContext(sender)');
+  const identityStart = backgroundSource.indexOf('async function identityForStreamEvent', currentStart);
+  const queueStart = backgroundSource.indexOf('async function queueEarlyNotification', identityStart);
+  assert.ok(currentStart >= 0 && identityStart > currentStart && queueStart > identityStart);
+
+  const currentSource = backgroundSource.slice(currentStart, identityStart);
+  const identitySource = backgroundSource.slice(identityStart, queueStart);
+  assert.doesNotMatch(currentSource, /await\s+context\.capturePromise/);
+  assert.doesNotMatch(identitySource, /queryMonitorSnapshot\s*\(/);
+  assert.match(identitySource, /requestConversation \|\| senderConversation/);
+  assert.match(identitySource, /terminal-status-routed-from-request-document-identity/);
+});
+
+test('stream dedupe carries exact request identity when page prompt identity is unavailable', () => {
+  assert.match(backgroundSource, /const requestId = String\(turnRecord\?\.requestId \|\| ''\)/);
+  assert.match(backgroundSource, /getEarlyDelivery\(\{ conversationId, requestId, promptKey \}\)/);
+  assert.match(backgroundSource, /ACTIVE_CONTEXT_TTL_MS = 60 \* 60 \* 1000/);
+  assert.match(backgroundSource, /SETTLED_CONTEXT_TTL_MS = 10 \* 60 \* 1000/);
+});
+
+test('request completion arms durable worker DOM fallback without generating ChatGPT traffic', () => {
+  assert.match(backgroundSource, /__chatgptNotifierObservationScheduler\?\.observeRequestCompletion\?\.\(details\)/);
+  assert.match(serviceWorkerSource, /__chatgptNotifierWorkerTerminalFallback/);
+  assert.match(serviceWorkerSource, /handleWorkerObservedTerminalStatus/);
+  assert.match(serviceWorkerSource, /queryImmediateTerminalStatus/);
+  assert.match(serviceWorkerSource, /timeoutMs: 1/);
+  assert.match(serviceWorkerSource, /request-identity-mismatch/);
+  assert.match(serviceWorkerSource, /prompt-identity-mismatch/);
+  assert.match(serviceWorkerSource, /assistant-identity-mismatch/);
+  assert.match(serviceWorkerSource, /processCodedCompletion/);
+  assert.doesNotMatch(serviceWorkerSource.slice(
+    serviceWorkerSource.indexOf('async function handleWorkerObservedTerminalStatus'),
+    serviceWorkerSource.indexOf('globalThis.__chatgptNotifierWorkerTerminalFallback')
+  ), /\bfetch\s*\(|XMLHttpRequest|backend-api/);
 });
 
 test('MAIN observer does not poll ChatGPT or use extension privileges', () => {

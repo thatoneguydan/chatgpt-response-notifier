@@ -10,9 +10,9 @@ Owner/checkpoint: DevelopmentInfrastructure #478.
 | --- | --- | --- |
 | Foreground / ordinary visible page | Current canonical source passes the complete extension behavior suite, durable notification pipeline tests, installed-Chrome fresh-load, and runtime-evidence validation. | Deterministic source proof complete. |
 | Inactive/hidden tab | `tests/extension/hidden-tab-completion.behavior.test.mjs` proves hidden completion bypasses both the 150 ms page throttle and `requestAnimationFrame`, including a visible→hidden transition. The response-stream observer remains the notification path when rendered DOM is delayed. | Deterministic source proof complete. |
-| Unfocused / occluded / another Windows virtual desktop | DevelopmentInfrastructure #439 live v0.9.27 acceptance recorded `visibility=hidden`, `pageHasFocus=false`, and `windowFocused=false` while the request/stream continued; the native notification arrived before Chrome regained focus. | Physical acceptance complete for that event. Do not repeat it merely for this gate. |
+| Unfocused / occluded / another Windows virtual desktop | Historical DevelopmentInfrastructure #439 live v0.9.27 acceptance recorded `visibility=hidden`, `pageHasFocus=false`, and `windowFocused=false` with notification before Chrome regained focus. Fresh 2026-09-17 acceptance on the current live runtime contradicts treating that as current proof: another app focused on the same desktop works, but moving Chrome/ChatGPT to another Windows virtual desktop does not produce the expected notification. | **Current cross-desktop acceptance failed. #439 is historical-only evidence.** |
 | Frozen / discarded | Current lifecycle/worker tests identify frozen/discarded pages explicitly and the completed Workstream 4 scheduler defers them as page-unobservable rather than declaring generation failure or authorizing timer-only recovery. | Safety/defer acceptance complete. A frozen renderer is not required to manufacture a terminal notification while frozen. |
-| Minimized Chrome window | No retained independent physical acceptance was found in #439 or current canonical evidence. | **Only remaining Step 2 boundary.** |
+| Minimized Chrome window | Fresh 2026-09-17 physical acceptance on the current live runtime: notification arrived while Chrome remained minimized. | **Physical acceptance passed.** |
 
 ## Current-live equivalence for the minimized test
 
@@ -33,15 +33,14 @@ The files that own the passive coded-completion → durable-notification path ar
 
 The manifest keeps the same permissions, host permissions, service worker and response-stream/hidden-diagnostics entries; canonical source only adds the separate `observation-relay.js` content-script entry. Later monitor/recovery/diagnostic source differs, so a **successful** minimized notification on the accepted live runtime is valid positive evidence for the unchanged notification path. A failure on the older installed source must not be used to diagnose or modify current canonical source without first reconciling that source difference.
 
-## One remaining operator test
+## Fresh current-runtime result and diagnostic boundary
 
-When convenient:
+Physical acceptance on 2026-09-17 establishes a state-specific failure rather than a generic unfocused/minimized failure:
 
-1. Use a normal notifier-eligible build chat response.
-2. Immediately minimize the Chrome window and leave it minimized until the response finishes.
-3. Do not restore Chrome, reload the tab, click Continue, or manually recover during the observation.
-4. Record only whether the native notification arrived **before** Chrome was restored.
+- another app focused on the same Windows desktop: notification works;
+- Chrome minimized: notification works;
+- Chrome/ChatGPT on another Windows virtual desktop: notification does not appear.
 
-If it arrives while Chrome remains minimized, Step 2/2 is accepted and Workstream 1/5 can close. If it does not, preserve the observation as a live-runtime failure but do not infer a current-source root cause from it; reconcile/install current source only through the existing installation/release gate before repair selection.
+This means Workstream 1/5 remains open specifically on the cross-virtual-desktop path. Do not repeat the minimized or same-desktop unfocused tests. Do not assume the failure is Windows toast presentation: first inspect retained runtime evidence for the failed response and locate the first missing boundary among request/page observation, classification, durable notification queue/helper acknowledgement, and native presentation.
 
-No other hidden/background reproduction is required by this checkpoint.
+Because later canonical monitor/recovery/diagnostic source differs from the accepted live runtime, a failure on the installed source is evidence of a live defect but is not by itself sufficient to select a current-source code repair. Diagnose the missing boundary first.

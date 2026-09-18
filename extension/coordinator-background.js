@@ -74,6 +74,7 @@
           conversationId: String(snapshot.conversationId || ''),
           conversationUrl: String(snapshot.conversationUrl || ''),
           documentId: String(snapshot.documentId || ''),
+          requestId: String(snapshot.requestId || ''),
           promptKey: String(snapshot.promptKey || ''),
           assistantKey: String(snapshot.assistantKey || ''),
           revision: String(snapshot.revision || ''),

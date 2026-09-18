@@ -475,6 +475,44 @@ async function queryTerminalStatus(tabId, senderDocumentId = '', timeoutMs = STA
   }
 }
 
+function boundedLocalObservation(promise, timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      resolve(null);
+    }, Math.max(1, Number(timeoutMs || 1500)));
+    Promise.resolve(promise).then((value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(value || null);
+    }, () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve(null);
+    });
+  });
+}
+
+async function queryImmediateTerminalStatus(tabId, senderDocumentId = '') {
+  const message = { type: 'CHATGPT_STATUS_CODE_QUERY', timeoutMs: 1 };
+  const ask = () => boundedLocalObservation(sendTabMessage(tabId, message, senderDocumentId), 1500);
+  let status = await ask();
+  if (status?.statusCode) return status;
+  try {
+    const target = senderDocumentId ? { tabId, documentIds: [senderDocumentId] } : { tabId };
+    await boundedLocalObservation(
+      chrome.scripting.executeScript({ target, files: ['status-code.js', 'status-policy.js', 'status-script.js'] }),
+      1500
+    );
+  } catch {}
+  status = await ask();
+  return status?.statusCode ? status : null;
+}
+
 async function requestContinuation(tabId, senderDocumentId, expected) {
   try {
     return await sendTabMessage(tabId, { type: 'CHATGPT_CONTINUE_COMMAND', expected }, senderDocumentId);
@@ -655,6 +693,44 @@ async function handleContinuationClaim(record, status, tabId, senderDocumentId) 
   return null;
 }
 
+async function processCodedCompletion(status, owner = {}) {
+  const tabId = owner.tabId;
+  const senderDocumentId = String(owner.chromeDocumentId || '');
+  if (!Number.isInteger(tabId)) return null;
+  const statusCode = String(status?.statusCode || '');
+  if (!globalThis.ChatGPTNotifierStatusCode?.isStatusCode(statusCode)) return null;
+
+  const currentIdentity = await currentConversationForTab(tabId);
+  if (!currentIdentity || currentIdentity.id !== String(status?.conversationId || '')) return null;
+
+  const state = coordinator();
+  if (!state) return null;
+  const notificationId = String(owner.notificationId || crypto.randomUUID());
+  const claimOwner = {
+    tabId,
+    documentId: senderDocumentId,
+    fingerprint: String(owner.fingerprint || ''),
+    notificationId,
+    notificationTitle: String(owner.notificationTitle || 'ChatGPT'),
+    notificationPreview: String(owner.notificationPreview || truncateResponse(status?.responseBody || status?.responseText || 'Response finished.'))
+  };
+  const claim = await state.claimTurn(status, claimOwner);
+  if (!claim?.claimed) {
+    flushNotificationOutbox().catch(() => {});
+    return null;
+  }
+
+  const record = claim.record;
+  activeTurnKeys.add(record.turnKey);
+  try {
+    const shouldContinue = globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(statusCode) === true;
+    if (!shouldContinue) return await queueDurableNotification(record, String(owner.reason || 'coded-completion'));
+    return await handleContinuationClaim(record, status, tabId, senderDocumentId);
+  } finally {
+    activeTurnKeys.delete(record.turnKey);
+  }
+}
+
 async function showCompletionFromUpstream(message, sender) {
   const tabId = sender.tab?.id;
   if (typeof tabId !== 'number') return null;
@@ -667,39 +743,55 @@ async function showCompletionFromUpstream(message, sender) {
   if (!globalThis.ChatGPTNotifierStatusCode?.isStatusCode(statusCode)) return null;
   if (!statusBoundToCompletion(status, originIdentity, message?.response)) return null;
 
-  const currentIdentity = await currentConversationForTab(tabId);
-  if (!currentIdentity || currentIdentity.id !== originIdentity.id) return null;
-
-  const state = coordinator();
-  if (!state) return null;
-  const notificationId = crypto.randomUUID();
-  const owner = {
+  return await processCodedCompletion(status, {
     tabId,
-    documentId: senderDocumentId,
+    chromeDocumentId: senderDocumentId,
     fingerprint: String(message?.fingerprint || ''),
-    notificationId,
     notificationTitle: fullTabTitle(sender, message),
-    notificationPreview: truncateResponse(status?.responseBody || message?.response)
-  };
-  const claim = await state.claimTurn(status, owner);
-  if (!claim?.claimed) {
-    flushNotificationOutbox().catch(() => {});
-    return null;
-  }
-
-  const record = claim.record;
-  activeTurnKeys.add(record.turnKey);
-  try {
-    const shouldContinue = globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(statusCode) === true;
-    if (!shouldContinue) {
-      return await queueDurableNotification(record, 'coded-completion');
-    }
-
-    return await handleContinuationClaim(record, status, tabId, senderDocumentId);
-  } finally {
-    activeTurnKeys.delete(record.turnKey);
-  }
+    notificationPreview: truncateResponse(status?.responseBody || message?.response),
+    reason: 'coded-completion'
+  });
 }
+
+async function handleWorkerObservedTerminalStatus(payload = {}) {
+  const monitorSnapshot = payload?.monitorSnapshot || {};
+  const owner = payload?.owner || {};
+  const tabId = Number(owner.tabId);
+  const chromeDocumentId = String(owner.chromeDocumentId || '');
+  const requestId = String(owner.requestId || '');
+  if (!Number.isInteger(tabId) || !requestId || !chromeDocumentId) return { handled: false, reason: 'missing-request-owner' };
+  if (String(monitorSnapshot.requestId || '') !== requestId) return { handled: false, reason: 'request-identity-mismatch' };
+  if (!globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(String(monitorSnapshot.statusCode || ''))) {
+    return { handled: false, reason: 'status-not-ready' };
+  }
+  if (!monitorSnapshot.conversationId || !monitorSnapshot.promptKey || !monitorSnapshot.assistantKey) {
+    return { handled: false, reason: 'turn-identity-not-ready' };
+  }
+
+  const status = await queryImmediateTerminalStatus(tabId, chromeDocumentId);
+  if (!status?.statusCode) return { handled: false, reason: 'status-dom-not-ready' };
+  if (String(status.statusCode) !== String(monitorSnapshot.statusCode || '')) return { handled: false, reason: 'status-code-mismatch' };
+  if (String(status.conversationId || '') !== String(monitorSnapshot.conversationId || '')) return { handled: false, reason: 'conversation-identity-mismatch' };
+  if (String(status.promptKey || '') !== String(monitorSnapshot.promptKey || '')) return { handled: false, reason: 'prompt-identity-mismatch' };
+  if (String(status.assistantKey || '') !== String(monitorSnapshot.assistantKey || '')) return { handled: false, reason: 'assistant-identity-mismatch' };
+
+  let tab = null;
+  try { tab = await chrome.tabs.get(tabId); } catch {}
+  const notificationId = await processCodedCompletion(status, {
+    tabId,
+    chromeDocumentId,
+    fingerprint: `worker|${status.conversationId}|${requestId}|${status.statusCode}`,
+    notificationTitle: String(tab?.title || 'ChatGPT').trim() || 'ChatGPT',
+    notificationPreview: truncateResponse(status?.responseBody || status?.responseText || 'Response finished.'),
+    reason: 'worker-observed-coded-completion'
+  });
+  return { handled: true, notificationId: notificationId || null, reason: notificationId ? 'notification-queued' : 'coded-completion-processed' };
+}
+
+globalThis.__chatgptNotifierWorkerTerminalFallback = Object.freeze({
+  version: 1,
+  handle: handleWorkerObservedTerminalStatus
+});
 
 async function handleNativeMessage(message) {
   if (!message || typeof message !== 'object') return;

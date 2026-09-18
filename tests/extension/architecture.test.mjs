@@ -85,7 +85,8 @@ test('status observation is read-only and continuation is separately authorized'
   assert.match(status, /function timestampedContinueText/);
   assert.match(status, /Intl\.DateTimeFormat/);
   assert.doesNotMatch(status, /composerText\([^)]*\)\s*===\s*''[^\n]*return\s*\{[^}]*ok:\s*true/);
-  assert.match(worker, /claimTurn\(status, owner\)/);
+  assert.match(worker, /state\.claimTurn\(status, claimOwner\)/);
+  assert.match(worker, /processCodedCompletion\(status, owner/);
   assert.match(worker, /continuation-authorized/);
   assert.match(worker, /requestContinuation\(tabId, senderDocumentId, expected\)/);
   assert.match(policy, /current\.conversationId === expected\.conversationId/);
@@ -419,7 +420,8 @@ test('completion is bound to originating conversation, document and rendered res
   assert.match(worker, /queryTerminalStatus\(tabId, senderDocumentId\)/);
   assert.match(worker, /statusBoundToCompletion\(status, originIdentity, message\?\.response\)/);
   assert.match(worker, /upstream === observed/);
-  assert.match(worker, /currentIdentity\.id !== originIdentity\.id/);
+  assert.match(worker, /currentIdentity\.id !== String\(status\?\.conversationId \|\| ''\)/);
+  assert.match(worker, /statusBoundToCompletion\(status, originIdentity, message\?\.response\)/);
 });
 
 test('split-footer completion binding accepts exact detector body and stable turn identity while preserving identity checks', () => {
