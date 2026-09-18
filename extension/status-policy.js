@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 9;
+  const RUNTIME_VERSION = 10;
   if (globalThis.ChatGPTNotifierContinuationPolicy?.runtimeVersion === RUNTIME_VERSION) return;
 
   const MONITOR_POLICY_VERSION = 7;
@@ -18,7 +18,8 @@
   const AUTO_CONTINUE_STATUS_CODES = Object.freeze([
     'INCOMPLETE_LIMIT',
     'INCOMPLETE_TOOL_FAILURE',
-    'INCOMPLETE_CONTINUE'
+    'INCOMPLETE_CONTINUE',
+    'INCOMPLETE_HANDOFF'
   ]);
   const AUTO_CONTINUE_STATUS_CODE_SET = new Set(AUTO_CONTINUE_STATUS_CODES);
   const EXPLICIT_INTERRUPTION_KINDS = new Set([

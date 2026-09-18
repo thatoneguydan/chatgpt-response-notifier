@@ -53,13 +53,13 @@ The accepted structural form is:
 [GITHUB_STATUS: UPPERCASE_CODE]
 ```
 
-The current accepted codes are `PLANNING_ACTIVE`, `COMPLETE_APPLIED`, `COMPLETE_NO_CHANGES`, `BLOCKED_HUMAN`, `INCOMPLETE_LIMIT`, `INCOMPLETE_TOOL_FAILURE`, and `INCOMPLETE_HANDOFF`. The list intentionally mirrors the canonical DevelopmentInfrastructure policy rather than accepting arbitrary uppercase tokens, so a future taxonomy change requires an intentional notifier update.
+The current accepted codes are `PLANNING_ACTIVE`, `COMPLETE_APPLIED`, `COMPLETE_NO_CHANGES`, `BLOCKED_HUMAN`, `INCOMPLETE_LIMIT`, `INCOMPLETE_TOOL_FAILURE`, `INCOMPLETE_CONTINUE`, and `INCOMPLETE_HANDOFF`. The list intentionally mirrors the canonical DevelopmentInfrastructure policy rather than accepting arbitrary uppercase tokens, so a future taxonomy change requires an intentional notifier update.
 
 A completed response without a valid terminal footer is ignored: no auto-continuation, Windows toast, chime, or popup-history entry.
 
-## `INCOMPLETE_LIMIT` auto-continuation
+## Incomplete-code auto-continuation
 
-`INCOMPLETE_LIMIT` is treated as a machine-actionable continuation request instead of something that normally needs operator attention. Once the same terminal footer used by the notifier is confirmed, `status-script.js` tries to place exactly this text into ChatGPT's existing composer:
+All `INCOMPLETE_*` terminal codes are treated as machine-actionable continuation requests instead of something that normally needs operator attention. Once the same terminal footer used by the notifier is confirmed, `status-script.js` tries to place exactly this text into ChatGPT's existing composer:
 
 ```text
 continue until you finish or need something from me

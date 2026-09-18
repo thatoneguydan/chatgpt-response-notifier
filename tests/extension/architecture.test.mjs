@@ -195,6 +195,7 @@ test('monitored chats use a 30-minute local code watchdog with a three-send cap 
   assert.match(policy, /'INCOMPLETE_LIMIT'/);
   assert.match(policy, /'INCOMPLETE_TOOL_FAILURE'/);
   assert.match(policy, /'INCOMPLETE_CONTINUE'/);
+  assert.match(policy, /'INCOMPLETE_HANDOFF'/);
   assert.doesNotMatch(monitor, /\bfetch\s*\(/);
 });
 
