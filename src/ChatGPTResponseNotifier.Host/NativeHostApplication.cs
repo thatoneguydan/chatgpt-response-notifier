@@ -198,7 +198,7 @@ internal sealed class NativeHostApplication : Application
                     requestId = message.RequestId,
                     installedExtensionVersion = BundleInstaller.ReadInstalledExtensionVersion(),
                     installedSourceCommit = BundleInstaller.ReadInstalledSourceCommit(),
-                    transport = "localhost-websocket"
+                    transport = "localhost-websocket",
                     diagnosticsAvailable = true,
                     updateStatus = _updateService?.Status
                 });
