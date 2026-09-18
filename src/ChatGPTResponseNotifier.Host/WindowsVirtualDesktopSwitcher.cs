@@ -22,6 +22,15 @@ internal readonly record struct DesktopPresentationResult(
     int WindowsBuild,
     int? WindowsUbr);
 
+internal readonly record struct DesktopPlacementTarget(
+    bool Available,
+    Guid DesktopId,
+    string Reason);
+
+internal readonly record struct DesktopPlacementResult(
+    bool Success,
+    string Reason);
+
 internal static class WindowsVirtualDesktopSwitcher
 {
     private const int Windows11_24H2Build = 26100;
@@ -32,6 +41,86 @@ internal static class WindowsVirtualDesktopSwitcher
     private static readonly Guid ClsidImmersiveShell = new("C2F03A33-21F5-47FA-B4BB-156362A2F239");
     private static readonly Guid ClsidVirtualDesktopManagerInternal = new("C5E0CDCA-7B6E-41B2-9FC4-D93975CC467B");
     private static readonly Guid ClsidVirtualDesktopManager = new("AA509086-5CA9-4C25-8F95-589D3C07B48A");
+
+    public static DesktopPlacementTarget CaptureCurrentDesktop()
+    {
+        var foregroundWindow = GetForegroundWindow();
+        if (foregroundWindow == IntPtr.Zero)
+        {
+            return new(false, Guid.Empty, "foreground-window-unavailable");
+        }
+
+        object? publicManagerObject = null;
+        try
+        {
+            var publicManagerType = Type.GetTypeFromCLSID(ClsidVirtualDesktopManager, throwOnError: true)!;
+            publicManagerObject = Activator.CreateInstance(publicManagerType)
+                ?? throw new InvalidOperationException("virtual-desktop-manager-unavailable");
+            var publicManager = (IVirtualDesktopManager)publicManagerObject;
+            var desktopId = publicManager.GetWindowDesktopId(foregroundWindow);
+            return desktopId == Guid.Empty
+                ? new(false, Guid.Empty, "foreground-desktop-unavailable")
+                : new(true, desktopId, "foreground-desktop-captured");
+        }
+        catch (COMException)
+        {
+            return new(false, Guid.Empty, "foreground-desktop-com-failed");
+        }
+        catch
+        {
+            return new(false, Guid.Empty, "foreground-desktop-capture-failed");
+        }
+        finally
+        {
+            ReleaseCom(publicManagerObject);
+        }
+    }
+
+    public static DesktopPlacementResult PlaceWindowOnDesktop(IntPtr hwnd, DesktopPlacementTarget target)
+    {
+        if (hwnd == IntPtr.Zero)
+        {
+            return new(false, "toast-window-handle-missing");
+        }
+        if (!target.Available || target.DesktopId == Guid.Empty)
+        {
+            return new(false, string.IsNullOrWhiteSpace(target.Reason) ? "target-desktop-unavailable" : target.Reason);
+        }
+
+        object? publicManagerObject = null;
+        try
+        {
+            var publicManagerType = Type.GetTypeFromCLSID(ClsidVirtualDesktopManager, throwOnError: true)!;
+            publicManagerObject = Activator.CreateInstance(publicManagerType)
+                ?? throw new InvalidOperationException("virtual-desktop-manager-unavailable");
+            var publicManager = (IVirtualDesktopManager)publicManagerObject;
+
+            var before = publicManager.GetWindowDesktopId(hwnd);
+            if (before == target.DesktopId)
+            {
+                return new(true, "toast-already-on-current-desktop");
+            }
+
+            var desktopId = target.DesktopId;
+            publicManager.MoveWindowToDesktop(hwnd, ref desktopId);
+            var after = publicManager.GetWindowDesktopId(hwnd);
+            return after == target.DesktopId
+                ? new(true, "toast-moved-to-current-desktop")
+                : new(false, "toast-desktop-move-unverified");
+        }
+        catch (COMException)
+        {
+            return new(false, "toast-desktop-move-com-failed");
+        }
+        catch
+        {
+            return new(false, "toast-desktop-move-failed");
+        }
+        finally
+        {
+            ReleaseCom(publicManagerObject);
+        }
+    }
 
     public static DesktopPresentationResult PresentExistingChromeWindow(DesktopPresentationTarget target)
     {
@@ -247,6 +336,9 @@ internal static class WindowsVirtualDesktopSwitcher
 
     [DllImport("user32.dll")]
     private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr GetForegroundWindow();
 
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
