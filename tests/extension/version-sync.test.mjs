@@ -345,14 +345,16 @@ test('native toast renders persisted completion time, keeps failed clicks retrya
   assert.match(toast, /FormatCompletedAt\(record\.CompletedAt\)/);
   assert.match(toast, /value\.ToLocalTime\(\)/);
   assert.match(toast, /local\.ToString\("t"\)/);
-  assert.match(toast, /Content = "Move this tab here"/);
-  assert.match(toast, /ToastMoveHereRequested/);
+  assert.doesNotMatch(toast, /Content = "Move this tab here"/);
+  assert.doesNotMatch(toast, /ToastMoveHereRequested/);
+  assert.match(toast, /desktop-switch-failed/);
+  assert.doesNotMatch(manager, /ToastMoveHereRequested/);
   assert.match(manager, /ReportClickResult/);
   assert.match(manager, /targetTabId = window\.TargetTabId/);
   assert.match(record, /public int\? TargetTabId/);
   assert.match(app, /case "toast\.clickResult"/);
   assert.doesNotMatch(app, /click-shell-fallback/);
-  assert.equal(version, '0.9.30');
+  assert.equal(version, '0.9.31');
   assert.equal(manifest.version, version);
 });
 
