@@ -187,6 +187,10 @@ internal sealed class ToastWindow : Window
             case "route-timeout":
             case "unverified":
             case "visible-not-focused":
+            case "target-changed":
+            case "ambiguous":
+            case "invalid":
+            case "error":
                 _clickStateText.Text = "Could not confirm the existing tab was shown. Click the notification to retry.";
                 _clickStateText.Visibility = Visibility.Visible;
                 _moveHereButton.Visibility = Visibility.Collapsed;
