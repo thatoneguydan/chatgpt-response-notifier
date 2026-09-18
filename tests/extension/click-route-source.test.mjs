@@ -37,7 +37,9 @@ test('retired generic native foreground route stays absent while explicit deskto
   assert.match(switcher, /SwitchDesktopWithAnimation/);
   assert.match(switcher, /chrome-window-ambiguous/);
   assert.match(switcher, /SetForegroundWindow\(resolution\.Hwnd\)/);
-  assert.doesNotMatch(switcher, /\.MoveWindowToDesktop\(/);
+  const moveCalls = [...switcher.matchAll(/\.MoveWindowToDesktop\(([^)]*)\)/g)].map((match) => match[1].trim());
+  assert.deepEqual(moveCalls, ['hwnd, ref desktopId']);
+  assert.doesNotMatch(switcher, /MoveWindowToDesktop\(resolution\.Hwnd/);
   assert.doesNotMatch(switcher, /SendKeys|keybd_event|SendInput/);
 });
 test('toast click routing switches desktops without moving or duplicating an existing chat', () => {
