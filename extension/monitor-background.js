@@ -425,10 +425,24 @@
       if (!followsAutomaticSend) sendCount = 0;
     }
 
+    const ownerTabId = Number.isInteger(sender?.tab?.id) ? sender.tab.id : (current?.ownerTabId ?? null);
+    const conversationUrl = String(clean.conversationUrl || current?.conversationUrl || '');
+    if (
+      current &&
+      !requestChanged &&
+      current.waitingForRequestStart !== true &&
+      current.stopped !== true &&
+      Number(current.deadlineAt || 0) > 0 &&
+      current.ownerTabId === ownerTabId &&
+      String(current.conversationUrl || '') === conversationUrl
+    ) {
+      return current;
+    }
+
     const record = await putCodeWatchdog(conversationId, {
       ...(current || {}),
-      conversationUrl: String(clean.conversationUrl || current?.conversationUrl || ''),
-      ownerTabId: Number.isInteger(sender?.tab?.id) ? sender.tab.id : (current?.ownerTabId ?? null),
+      conversationUrl,
+      ownerTabId,
       sendCount,
       stopped: false,
       stopReason: '',
