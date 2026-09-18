@@ -198,7 +198,7 @@ test('hidden-window diagnostic sources are syntactically valid and wired after t
   assert.match(bootstrapSource, /hidden-window-diagnostics-background\.js/);
 
   const manifest = JSON.parse(read('extension/manifest.json'));
-  assert.equal(manifest.version, '0.9.29');
+  assert.equal(manifest.version, '0.9.29.1');
   assert.equal(manifest.background.service_worker, 'diagnostics-bootstrap.js');
   const scripts = manifest.content_scripts.flatMap((item) => item.js || []);
   assert.ok(scripts.includes('hidden-window-diagnostics-main.js'));
