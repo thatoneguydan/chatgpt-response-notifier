@@ -17,6 +17,33 @@
 
   const originalClaimTurn = coordinator.claimTurn.bind(coordinator);
 
+  function suffix(value) {
+    const text = String(value || '').trim();
+    return text ? text.slice(-8) : '';
+  }
+
+  function emitClaimDiagnostic(status, snapshot = {}, owner = {}, reason = '') {
+    const diagnostic = {
+      source: 'delivery-identity',
+      status: String(status || '').slice(0, 64),
+      observedAt: new Date().toISOString(),
+      extensionVersion: (() => { try { return String(chrome.runtime.getManifest().version || ''); } catch { return ''; } })(),
+      reason: String(reason || '').replace(/[\r\n\t]+/g, ' ').slice(0, 160),
+      claimSource: String(owner?.claimSource || '').slice(0, 64),
+      tabId: Number.isInteger(owner?.tabId) ? owner.tabId : undefined,
+      conversationSuffix: suffix(snapshot?.conversationId),
+      requestSuffix: suffix(snapshot?.requestId),
+      promptSuffix: suffix(snapshot?.promptKey),
+      assistantSuffix: suffix(snapshot?.assistantKey),
+      revisionSuffix: suffix(snapshot?.revision),
+      chromeDocumentSuffix: suffix(owner?.documentId || snapshot?.documentId),
+      notificationSuffix: suffix(owner?.notificationId)
+    };
+    try {
+      if (typeof sendNative === 'function') sendNative({ type: 'diagnostics.event', diagnostic });
+    } catch {}
+  }
+
   function logicalDeliveryKey(snapshot) {
     const conversationId = String(snapshot?.conversationId || '');
     const promptKey = String(snapshot?.promptKey || '');
@@ -152,11 +179,16 @@
 
   async function claimTurn(snapshot, owner = {}) {
     const deliveryKey = logicalDeliveryKey(snapshot);
-    if (!deliveryKey) return await originalClaimTurn(snapshot, owner);
+    if (!deliveryKey) {
+      emitClaimDiagnostic('claim-unkeyed', snapshot, owner, 'missing-logical-delivery-key');
+      return await originalClaimTurn(snapshot, owner);
+    }
 
     const settledOwner = await settleOwnerTitle(owner);
+    emitClaimDiagnostic('claim-observed', snapshot, settledOwner, 'logical-turn-observed');
     const reservation = await reserveDelivery(deliveryKey, snapshot, settledOwner);
     if (!reservation.reserved) {
+      emitClaimDiagnostic('claim-suppressed', snapshot, settledOwner, reservation.reason);
       return { claimed: false, reason: reservation.reason, record: null };
     }
 
@@ -164,12 +196,20 @@
       const result = await originalClaimTurn(snapshot, settledOwner);
       if (result?.claimed === true || result?.reason === 'already-claimed') {
         await finalizeReservation(deliveryKey, 'commit');
+        emitClaimDiagnostic(
+          result?.claimed === true ? 'claim-accepted' : 'claim-coordinator-existing',
+          snapshot,
+          settledOwner,
+          result?.reason || 'claimed'
+        );
         return result;
       }
       await finalizeReservation(deliveryKey, 'release');
+      emitClaimDiagnostic('claim-released', snapshot, settledOwner, result?.reason || 'claim-not-owned');
       return result;
     } catch (error) {
       await finalizeReservation(deliveryKey, 'release').catch(() => {});
+      emitClaimDiagnostic('claim-error', snapshot, settledOwner, error?.message || error);
       throw error;
     }
   }
@@ -180,7 +220,7 @@
   });
 
   globalThis.__chatgptNotifierDeliveryDedupeHook = Object.freeze({
-    version: 1,
+    version: 2,
     logicalDeliveryKey,
     meaningfulTitle,
     pruneOldClaims
