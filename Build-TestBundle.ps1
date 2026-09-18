@@ -87,6 +87,7 @@ $manifest = [ordered]@{
     transport = 'localhost-websocket'
     selfContained = $true
     nativeLibrariesEmbedded = $true
+    extensionRootName = 'Extension-v2'
     generatedAtUtc = [DateTime]::UtcNow.ToString('o')
     files = $fileRecords
 }
