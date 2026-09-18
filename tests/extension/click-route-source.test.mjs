@@ -52,7 +52,7 @@ test('toast click routing is bounded, exact-targeted, and never silently duplica
   assert.match(manager, /ReportClickResult/);
   assert.match(manager, /window\\.SetClickState\\(\"pending\", window\\.TargetTabId\\)/);
   assert.match(manager, /ToastMoveHereRequested/);
-  assert.match(window, /Content = "Move tab here"/);
+  assert.match(window, /Content = "Move this tab here"/);
   assert.match(window, /ToastMoveHereRequested/);
   assert.match(record, /TargetTabId/);
 
