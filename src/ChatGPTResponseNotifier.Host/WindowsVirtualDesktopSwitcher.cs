@@ -147,7 +147,7 @@ internal static class WindowsVirtualDesktopSwitcher
             if (!IsWindowVisible(hwnd)) return true;
             if (!string.Equals(ReadClassName(hwnd), "Chrome_WidgetWin_1", StringComparison.Ordinal)) return true;
 
-            _ = GetWindowThreadProcessId(hwnd, out var processId);
+            GetWindowThreadProcessId(hwnd, out var processId);
             if (processId == 0) return true;
             try
             {
@@ -161,7 +161,7 @@ internal static class WindowsVirtualDesktopSwitcher
 
             var nativeTitle = NormalizeTitle(ReadWindowTitle(hwnd));
             if (!TitleMatches(expectedTitle, nativeTitle)) return true;
-            _ = GetWindowRect(hwnd, out var rect);
+            GetWindowRect(hwnd, out var rect);
             candidates.Add(new WindowCandidate(hwnd, rect));
             return true;
         }, IntPtr.Zero);
