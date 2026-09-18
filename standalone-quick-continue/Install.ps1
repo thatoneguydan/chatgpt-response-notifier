@@ -9,7 +9,8 @@ $sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $requiredFiles = @(
     'manifest.json',
     'prompt-format.js',
-    'content-script.js'
+    'content-script.js',
+    'projects.json'
 )
 
 foreach ($file in $requiredFiles) {
@@ -25,6 +26,7 @@ $managedFiles = @(
     'manifest.json',
     'prompt-format.js',
     'content-script.js',
+    'projects.json',
     'README.md'
 )
 
