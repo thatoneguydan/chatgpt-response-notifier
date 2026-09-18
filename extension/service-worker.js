@@ -184,6 +184,72 @@ async function pingNativeHost(timeoutMs = 3000) {
   return await sendNativeRequest({ type: 'ping' }, ['pong'], timeoutMs);
 }
 
+async function requestNativeExistingWindowPresentation(targetTabId, targetWindowId, clickContext = {}) {
+  if (!Number.isInteger(targetTabId) || !Number.isInteger(targetWindowId)) {
+    return { success: false, reason: 'missing-window-identity' };
+  }
+
+  let tab;
+  let windowInfo;
+  try {
+    [tab, windowInfo] = await Promise.all([
+      chrome.tabs.get(targetTabId),
+      chrome.windows.get(targetWindowId)
+    ]);
+  } catch {
+    return { success: false, reason: 'chrome-window-unavailable' };
+  }
+
+  if (tab?.windowId !== targetWindowId) {
+    return { success: false, reason: 'target-window-changed' };
+  }
+
+  const windowTitle = String(tab?.title || '').trim();
+  if (!windowTitle) {
+    return { success: false, reason: 'missing-window-title' };
+  }
+
+  emitClickDiagnostic('desktop-switch-requested', {
+    ...clickContext,
+    tabId: targetTabId,
+    reason: 'explicit-toast-click'
+  });
+
+  const response = await sendNativeRequest({
+    type: 'window.presentExisting',
+    targetTabId,
+    windowTitle,
+    windowLeft: Number.isInteger(windowInfo?.left) ? windowInfo.left : null,
+    windowTop: Number.isInteger(windowInfo?.top) ? windowInfo.top : null,
+    windowWidth: Number.isInteger(windowInfo?.width) ? windowInfo.width : null,
+    windowHeight: Number.isInteger(windowInfo?.height) ? windowInfo.height : null
+  }, ['window.presentExistingResult'], 3000, { queueIfDisconnected: false });
+
+  if (!response) {
+    emitClickDiagnostic('desktop-switch-result-missing', {
+      ...clickContext,
+      tabId: targetTabId,
+      reason: 'native-switch-timeout'
+    });
+    return { success: false, reason: 'native-switch-timeout' };
+  }
+
+  const reason = String(response.reason || (response.success === true ? 'desktop-switched' : 'native-switch-failed'));
+  emitClickDiagnostic(response.success === true ? 'desktop-switch-succeeded' : 'desktop-switch-rejected', {
+    ...clickContext,
+    tabId: targetTabId,
+    reason
+  });
+  return {
+    success: response.success === true,
+    reason,
+    windowsBuild: Number.isInteger(response.windowsBuild) ? response.windowsBuild : null,
+    windowsUbr: Number.isInteger(response.windowsUbr) ? response.windowsUbr : null
+  };
+}
+
+globalThis.__chatgptNotifierPresentExistingWindow = requestNativeExistingWindowPresentation;
+
 function parseVersion(value) {
   const parts = String(value || '').split('.');
   if (parts.length < 2 || parts.length > 4) return null;
@@ -890,37 +956,6 @@ async function handleNativeMessage(message) {
     return;
   }
 
-  if (message.type === 'toast.moveHere') {
-    const conversationId = String(message.conversationId || '');
-    const notificationId = String(message.notificationId || '');
-    const correlationId = String(message.correlationId || crypto.randomUUID());
-    const targetTabId = Number.isInteger(message.targetTabId) ? message.targetTabId : null;
-    if (!conversationId || !notificationId || !Number.isInteger(targetTabId)) return;
-    if (activeToastClicks.has(notificationId)) return;
-    activeToastClicks.add(notificationId);
-    try {
-      const result = await globalThis.__chatgptNotifierCrossDesktopClickFallback?.moveTabHere?.(
-        conversationId,
-        targetTabId,
-        { notificationId, correlationId, targetTabId }
-      );
-      if (result?.presented === true) {
-        sendNative({ type: 'toast.dismissConversation', conversationId });
-        emitClickDiagnostic('click-move-here-complete', { conversationId, notificationId, correlationId, tabId: targetTabId });
-      } else {
-        sendNative({ type: 'toast.clickResult', notificationId, clickState: String(result?.presentationState || 'unverified'), targetTabId });
-        emitClickDiagnostic('click-move-here-incomplete', {
-          conversationId,
-          notificationId,
-          correlationId,
-          tabId: targetTabId,
-          reason: String(result?.reason || 'move-here-unverified')
-        });
-      }
-    } finally {
-      activeToastClicks.delete(notificationId);
-    }
-  }
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
