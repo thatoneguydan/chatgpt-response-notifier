@@ -1,0 +1,82 @@
+name: Apply notifier v0.9.36 on Glass
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/apply-notifier-v0.9.36-on-glass.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.head_commit.message == 'Apply notifier v0.9.36 on Glass'
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build, install, and verify v0.9.36
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expectedVersion = '0.9.36'
+          $expectedSource = 'c164d71fee3c2d104f3aa2e1c3ec709215f47609'
+          $version = (Get-Content -LiteralPath .\VERSION.txt -Raw).Trim()
+          if ($version -ne $expectedVersion) { throw "Expected VERSION.txt $expectedVersion, found $version." }
+
+          $output = Join-Path $env:RUNNER_TEMP 'notifier-v0.9.36-apply'
+          Remove-Item -LiteralPath $output -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $output -Force | Out-Null
+
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\Build-Installer.ps1 `
+            -OutputDirectory $output `
+            -SourceCommit $expectedSource
+          if ($LASTEXITCODE -ne 0) { throw 'Notifier installer build failed.' }
+
+          $setup = Join-Path $output "ChatGPT-Response-Notifier-Setup-$expectedVersion.exe"
+          if (-not (Test-Path -LiteralPath $setup -PathType Leaf)) { throw 'Built Setup.exe is missing.' }
+
+          $process = Start-Process -FilePath $setup -ArgumentList '--silent' -PassThru -Wait
+          if ($process.ExitCode -ne 0) { throw "Setup.exe failed with exit code $($process.ExitCode)." }
+
+          $installRoot = Join-Path $env:LOCALAPPDATA 'ChatGPTResponseNotifier'
+          $statePath = Join-Path $installRoot 'Data\install-state.json'
+          $manifestPath = Join-Path $installRoot 'Extension-v2\manifest.json'
+          if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { throw 'Installed state file is missing.' }
+          if (-not (Test-Path -LiteralPath $manifestPath -PathType Leaf)) { throw 'Installed extension manifest is missing.' }
+
+          $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          if ([string]$state.version -ne $expectedVersion) { throw "Installed state version mismatch: $($state.version)" }
+          if ([string]$state.sourceCommit -ne $expectedSource) { throw "Installed source mismatch: $($state.sourceCommit)" }
+          if ([string]$manifest.version -ne $expectedVersion) { throw "Installed extension version mismatch: $($manifest.version)" }
+
+          $hostPath = [IO.Path]::GetFullPath([string]$state.hostExecutablePath)
+          $host = Get-Process -Name 'ChatGPTResponseNotifier.Host' -ErrorAction SilentlyContinue | Where-Object {
+            try { [IO.Path]::GetFullPath([string]$_.Path) -eq $hostPath } catch { $false }
+          } | Select-Object -First 1
+          if (-not $host) { throw 'Verified installed notifier helper is not running.' }
+
+          $receipt = [ordered]@{
+            schemaVersion = 1
+            version = $expectedVersion
+            sourceCommit = $expectedSource
+            extensionVersion = [string]$manifest.version
+            helperRunning = $true
+            setupExitCode = $process.ExitCode
+            verifiedAtUtc = [DateTime]::UtcNow.ToString('o')
+          }
+
+          git switch -C notifier-apply-receipts
+          New-Item -ItemType Directory -Path .\ops\receipts -Force | Out-Null
+          $receipt | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath .\ops\receipts\notifier-v0.9.36-glass.json -Encoding UTF8
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add .\ops\receipts\notifier-v0.9.36-glass.json
+          git commit -m 'Record notifier v0.9.36 Glass application'
+          git push --force origin HEAD:notifier-apply-receipts
