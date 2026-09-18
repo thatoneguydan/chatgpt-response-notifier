@@ -111,16 +111,6 @@
     }
   }
 
-  function stopPresent() {
-    try {
-      return Boolean(document.querySelector(
-        'button[data-testid="stop-button"], button[data-testid="fruitjuice-stop-button"], button[aria-label="Stop generating"]'
-      ));
-    } catch {
-      return false;
-    }
-  }
-
   function enabledSend(composer) {
     const root = composer?.closest?.('form') || document;
     for (const selector of [
@@ -140,7 +130,7 @@
   }
 
   function waitForSendButton(composer) {
-    const immediate = !stopPresent() && enabledSend(composer);
+    const immediate = enabledSend(composer);
     if (immediate) return Promise.resolve(immediate);
 
     return new Promise((resolve) => {
@@ -157,7 +147,7 @@
       };
 
       const inspect = () => {
-        const button = !stopPresent() && enabledSend(composer);
+        const button = enabledSend(composer);
         if (button) finish(button);
       };
 
@@ -171,7 +161,7 @@
         });
       }
 
-      const timer = setTimeout(() => finish(!stopPresent() && enabledSend(composer)), SEND_READY_TIMEOUT_MS);
+      const timer = setTimeout(() => finish(enabledSend(composer)), SEND_READY_TIMEOUT_MS);
       inspect();
     });
   }
@@ -228,11 +218,6 @@
       scheduleSync();
       return false;
     }
-    if (stopPresent()) {
-      setStatus('Wait for the current response to stop.');
-      return false;
-    }
-
     busy = true;
     updateAvailability(composer);
     try {
@@ -246,7 +231,7 @@
         setStatus('Send not ready; prompt left in composer.');
         return false;
       }
-      if (composerText(composer) !== cleanComposer(text) || stopPresent()) {
+      if (composerText(composer) !== cleanComposer(text)) {
         setStatus('Composer changed; nothing sent.');
         return false;
       }
@@ -348,8 +333,7 @@
     const composer = composerElement();
     return !busy
       && Boolean(composer)
-      && !composerText(composer)
-      && !stopPresent();
+      && !composerText(composer);
   }
 
   function updateProjectSendState() {
@@ -790,7 +774,7 @@
 
   function updateAvailability(composer) {
     const hasDraft = Boolean(composer && composerText(composer));
-    const unavailable = busy || !composer || hasDraft || stopPresent();
+    const unavailable = busy || !composer || hasDraft;
     for (const button of sendButtons) {
       button.disabled = unavailable;
       button.style.opacity = button.disabled ? '.45' : '1';
