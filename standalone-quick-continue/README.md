@@ -21,11 +21,14 @@ The project name is inserted as plain text exactly as typed after whitespace nor
 - Each operator click causes at most one Send-button click. There are no automatic retries.
 - If the Send button does not become ready, the generated prompt is left in the composer for inspection/manual sending.
 
-## Install as an unpacked extension
+## Install
 
-1. Open `chrome://extensions`.
-2. Enable **Developer mode**.
-3. Choose **Load unpacked**.
-4. Select this `standalone-quick-continue` directory.
+Run the included installer from PowerShell with a temporary execution-policy bypass:
 
-Because this is a separate extension, it can stay enabled while ChatGPT Response Notifier is disabled or under repair.
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
+```
+
+It copies the extension to the stable path `%LOCALAPPDATA%\ChatGPTQuickContinue\Extension` and prints the one-time **Load unpacked** steps for `chrome://extensions`. It does not open Chrome, change Chrome policy, write the registry, or install any background service.
+
+Because this is a separate extension, it can stay enabled while ChatGPT Response Notifier is disabled or under repair. If the notifier is later enabled too, Quick Continue suppresses the notifier's older quick-prompt toolbar so only the standalone controls are shown.
