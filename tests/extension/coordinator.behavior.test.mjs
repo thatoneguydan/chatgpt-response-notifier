@@ -165,6 +165,7 @@ const snapshot = {
   conversationId: 'conversation-1',
   conversationUrl: 'https://chatgpt.com/c/conversation-1',
   documentId: 'document-runtime-a',
+  requestId: 'request-77',
   promptKey: 'conversation-1|user-4',
   assistantKey: 'assistant-5',
   revision: '100:abc12345',
@@ -194,6 +195,7 @@ test('only the first tab can claim an exact response revision', async () => {
   assert.equal(duplicateTab.reason, 'already-claimed');
   assert.equal(duplicateTab.record.ownerTabId, 10);
   assert.equal(duplicateTab.record.notificationId, 'notification-1');
+  assert.equal(duplicateTab.record.requestId, 'request-77');
 
   const newRevision = await coordinator.claimTurn({ ...snapshot, revision: '101:def67890' }, {
     tabId: 11,
