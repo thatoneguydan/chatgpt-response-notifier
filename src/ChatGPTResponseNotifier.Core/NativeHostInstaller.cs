@@ -17,7 +17,15 @@ public static class NativeHostInstaller
     }
 
     public static string HostVersionsRoot => Path.Combine(InstallRoot, "Host");
-    public static string ExtensionRoot => Path.Combine(InstallRoot, "Extension");
+
+    // The original unpacked root is intentionally retained as a rollback/evidence
+    // boundary. A stale legacy Chrome registration still points at this path on
+    // Glass, so new notifier payloads must not reuse or rewrite it.
+    public static string LegacyExtensionRoot => Path.Combine(InstallRoot, "Extension");
+
+    // The fixed-key notifier uses one distinct permanent root. Future updates
+    // replace this payload in place; this is not a per-version rotating path.
+    public static string ExtensionRoot => Path.Combine(InstallRoot, "Extension-v2");
     public static string DataRoot => Path.Combine(InstallRoot, "Data");
     public static string InstallStatePath => Path.Combine(DataRoot, "install-state.json");
 
