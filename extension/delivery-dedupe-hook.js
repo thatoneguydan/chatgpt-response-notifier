@@ -155,6 +155,8 @@
           requestId: String(snapshot?.requestId || owner?.requestId || ''),
           documentId: String(owner?.documentId || snapshot?.documentId || ''),
           fingerprint: String(owner?.fingerprint || ''),
+          notificationId: String(owner?.notificationId || ''),
+          claimSource: String(owner?.claimSource || ''),
           state: 'pending',
           createdAt: existing?.createdAt || now,
           updatedAt: now
@@ -169,7 +171,7 @@
     });
   }
 
-  async function finalizeReservation(deliveryKey, state) {
+  async function finalizeReservation(deliveryKey, state, patch = {}) {
     const database = await openDatabase();
     await new Promise((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, 'readwrite');
@@ -179,13 +181,62 @@
         const current = request.result;
         if (!current) return;
         if (state === 'release') store.delete(deliveryKey);
-        else store.put({ ...current, state: 'committed', updatedAt: Date.now() });
+        else store.put({
+          ...current,
+          ...(patch && typeof patch === 'object' ? patch : {}),
+          deliveryKey,
+          state: 'committed',
+          updatedAt: Date.now()
+        });
       };
       request.onerror = () => reject(request.error || new Error('Could not finalize delivery dedupe state.'));
       transaction.oncomplete = resolve;
       transaction.onerror = () => reject(transaction.error || new Error('Delivery dedupe finalization failed.'));
       transaction.onabort = () => reject(transaction.error || new Error('Delivery dedupe finalization was aborted.'));
     });
+  }
+
+  async function reserveRequestDelivery(identity = {}, owner = {}) {
+    const requestOwner = {
+      ...owner,
+      documentId: String(owner?.documentId || identity?.chromeDocumentId || identity?.documentId || ''),
+      requestId: String(owner?.requestId || identity?.requestId || '')
+    };
+    const snapshot = {
+      conversationId: String(identity?.conversationId || ''),
+      requestId: requestOwner.requestId,
+      documentId: requestOwner.documentId,
+      promptKey: String(identity?.promptKey || ''),
+      assistantKey: String(identity?.assistantKey || ''),
+      revision: String(identity?.revision || '')
+    };
+    const deliveryKey = requestDeliveryKey(snapshot, requestOwner);
+    if (!deliveryKey) {
+      emitClaimDiagnostic('request-reservation-unkeyed', snapshot, requestOwner, 'missing-request-delivery-key');
+      return { reserved: false, reason: 'missing-request-delivery-key', record: null, deliveryKey: '' };
+    }
+
+    emitClaimDiagnostic('request-reservation-observed', snapshot, requestOwner, 'request-delivery-observed');
+    const reservation = await reserveDelivery(deliveryKey, snapshot, requestOwner);
+    emitClaimDiagnostic(
+      reservation.reserved ? 'request-reservation-accepted' : 'request-reservation-suppressed',
+      snapshot,
+      requestOwner,
+      reservation.reason
+    );
+    return { ...reservation, deliveryKey };
+  }
+
+  async function commitRequestDelivery(deliveryKey, patch = {}) {
+    if (!deliveryKey) return false;
+    await finalizeReservation(deliveryKey, 'commit', patch);
+    return true;
+  }
+
+  async function releaseRequestDelivery(deliveryKey) {
+    if (!deliveryKey) return false;
+    await finalizeReservation(deliveryKey, 'release');
+    return true;
   }
 
   async function pruneOldClaims(now = Date.now()) {
@@ -270,11 +321,14 @@
   });
 
   globalThis.__chatgptNotifierDeliveryDedupeHook = Object.freeze({
-    version: 3,
+    version: 4,
     requestDeliveryKey,
     legacyTurnDeliveryKey,
     logicalDeliveryKey,
     meaningfulTitle,
+    reserveRequestDelivery,
+    commitRequestDelivery,
+    releaseRequestDelivery,
     pruneOldClaims
   });
 
