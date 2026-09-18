@@ -295,7 +295,7 @@ test('native toast renders persisted completion time, keeps failed clicks retrya
   assert.match(toast, /FormatCompletedAt\(record\.CompletedAt\)/);
   assert.match(toast, /value\.ToLocalTime\(\)/);
   assert.match(toast, /local\.ToString\("t"\)/);
-  assert.match(toast, /Content = "Move tab here"/);
+  assert.match(toast, /Content = "Move this tab here"/);
   assert.match(toast, /ToastMoveHereRequested/);
   assert.match(manager, /ReportClickResult/);
   assert.match(manager, /targetTabId = window\.TargetTabId/);
