@@ -215,7 +215,7 @@
     return candidates[0] || null;
   }
 
-  async function reserveDelivery(identity) {
+  async function reserveDelivery(identity, notificationId = '') {
     const key = deliveryKey(identity?.conversationId, identity?.requestId);
     if (!key) return { reserved: false, record: null };
     const database = await openDatabase();
@@ -236,7 +236,7 @@
           requestId: String(identity.requestId || ''),
           promptKey: String(identity.promptKey || ''),
           statusCode: String(identity.statusCode || ''),
-          notificationId: crypto.randomUUID(),
+          notificationId: String(notificationId || crypto.randomUUID()),
           state: 'reserved',
           createdAt: now,
           updatedAt: now
@@ -408,8 +408,53 @@
       return null;
     }
 
-    const reservation = await reserveDelivery(identity);
+    const sharedDelivery = globalThis.__chatgptNotifierDeliveryDedupeHook;
+    if (
+      !sharedDelivery?.reserveRequestDelivery ||
+      !sharedDelivery?.commitRequestDelivery ||
+      !sharedDelivery?.releaseRequestDelivery
+    ) {
+      recordDiagnostic('response-stream-shared-delivery-unavailable', {
+        tabId: identity.tabId,
+        reason: 'shared-request-delivery-authority-unavailable',
+        conversationId: identity.conversationId,
+        chromeDocumentId: identity.chromeDocumentId,
+        monitorRuntimeId: identity.monitorRuntimeId
+      });
+      return null;
+    }
+
+    const notificationId = crypto.randomUUID();
+    const sharedReservation = await sharedDelivery.reserveRequestDelivery(identity, {
+      tabId: identity.tabId,
+      documentId: identity.chromeDocumentId,
+      requestId: identity.requestId,
+      notificationId,
+      claimSource: 'response-stream-terminal'
+    });
+
+    if (!sharedReservation?.reserved) {
+      recordDiagnostic('response-stream-shared-delivery-suppressed', {
+        tabId: identity.tabId,
+        reason: String(sharedReservation?.reason || 'shared-request-already-owned'),
+        conversationId: identity.conversationId,
+        notificationId: sharedReservation?.record?.notificationId,
+        chromeDocumentId: identity.chromeDocumentId,
+        monitorRuntimeId: identity.monitorRuntimeId
+      });
+      return sharedReservation?.record?.notificationId || null;
+    }
+
+    const reservation = await reserveDelivery(identity, notificationId);
     if (!reservation.reserved) {
+      if (reservation.record?.state === 'queued') {
+        await sharedDelivery.commitRequestDelivery(sharedReservation.deliveryKey, {
+          notificationId: String(reservation.record?.notificationId || notificationId),
+          claimSource: 'response-stream-existing'
+        }).catch(() => {});
+      } else {
+        await sharedDelivery.releaseRequestDelivery(sharedReservation.deliveryKey).catch(() => {});
+      }
       recordDiagnostic('response-stream-status-duplicate', {
         tabId: identity.tabId,
         reason: 'request-already-notified',
@@ -425,6 +470,7 @@
     const state = coordinatorState();
     if (!state || typeof state.queueNotification !== 'function') {
       await releaseDelivery(deliveryRecord.deliveryKey).catch(() => {});
+      await sharedDelivery.releaseRequestDelivery(sharedReservation.deliveryKey).catch(() => {});
       return null;
     }
 
@@ -446,6 +492,10 @@
       }
       if (typeof finalizeRecovery === 'function') await finalizeRecovery(identity.conversationId);
       await updateDelivery(deliveryRecord.deliveryKey, { state: 'queued' });
+      await sharedDelivery.commitRequestDelivery(sharedReservation.deliveryKey, {
+        notificationId: notification.id,
+        claimSource: 'response-stream-terminal'
+      });
       recordDiagnostic('response-stream-notification-queued', {
         tabId: identity.tabId,
         reason: `status=${identity.statusCode};transport=${identity.transport}`,
@@ -458,6 +508,7 @@
       return notification.id;
     } catch {
       await releaseDelivery(deliveryRecord.deliveryKey).catch(() => {});
+      await sharedDelivery.releaseRequestDelivery(sharedReservation.deliveryKey).catch(() => {});
       recordDiagnostic('response-stream-notification-error', {
         tabId: identity.tabId,
         reason: 'durable-notification-queue-failed',
