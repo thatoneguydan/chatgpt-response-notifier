@@ -32,8 +32,9 @@ jobs:
           }
           '@
 
-          $activeSession = [int][CleanupSessionNative]::WTSGetActiveConsoleSessionId()
-          if ($activeSession -eq [int][uint32]::MaxValue) { throw 'No active console session.' }
+          $activeSessionRaw = [CleanupSessionNative]::WTSGetActiveConsoleSessionId()
+          if ($activeSessionRaw -eq [uint32]::MaxValue) { throw 'No active console session.' }
+          $activeSession = [int]$activeSessionRaw
 
           $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
           if (-not $listener) { throw 'Live notifier bridge is not listening.' }
