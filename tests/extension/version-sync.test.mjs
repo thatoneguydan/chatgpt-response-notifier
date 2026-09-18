@@ -298,7 +298,7 @@ test('native toast renders persisted completion time, keeps failed clicks retrya
   assert.match(toast, /Content = "Move tab here"/);
   assert.match(toast, /ToastMoveHereRequested/);
   assert.match(manager, /ReportClickResult/);
-  assert.match(manager, /targetTabId = record\.TargetTabId/);
+  assert.match(manager, /targetTabId = window\.TargetTabId/);
   assert.match(record, /public int\? TargetTabId/);
   assert.match(app, /case "toast\.clickResult"/);
   assert.doesNotMatch(app, /click-shell-fallback/);
