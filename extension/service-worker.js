@@ -754,7 +754,8 @@ async function processCodedCompletion(status, owner = {}) {
     fingerprint: String(owner.fingerprint || ''),
     notificationId,
     notificationTitle: String(owner.notificationTitle || 'ChatGPT'),
-    notificationPreview: String(owner.notificationPreview || truncateResponse(status?.responseBody || status?.responseText || 'Response finished.'))
+    notificationPreview: String(owner.notificationPreview || truncateResponse(status?.responseBody || status?.responseText || 'Response finished.')),
+    claimSource: String(owner.reason || '')
   };
   const claim = await state.claimTurn(status, claimOwner);
   if (!claim?.claimed) {
