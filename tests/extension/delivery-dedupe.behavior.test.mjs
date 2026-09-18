@@ -5,6 +5,8 @@ import test from 'node:test';
 
 const root = new URL('../../', import.meta.url);
 const source = readFileSync(new URL('extension/delivery-dedupe-hook.js', root), 'utf8');
+const serviceWorkerSource = readFileSync(new URL('extension/service-worker.js', root), 'utf8');
+const contentScriptSource = readFileSync(new URL('extension/content-script.js', root), 'utf8');
 
 function clone(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
