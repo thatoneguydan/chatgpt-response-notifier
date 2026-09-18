@@ -195,6 +195,32 @@ test('stream delivery remains notification-only while automatic Continue stays D
   assert.doesNotMatch(backgroundSource, /api\/auth\/session/i);
 });
 
+
+test('terminal stream routing never waits on a live page reply', () => {
+  assert.match(backgroundSource, /PAGE_QUERY_TIMEOUT_MS = 1500/);
+  assert.match(backgroundSource, /Promise\.race\(\[query, deadline\]\)/);
+  assert.match(backgroundSource, /conversationFromUrl\(details\.documentUrl \|\| ''\)/);
+
+  const currentStart = backgroundSource.indexOf('function currentContext(sender)');
+  const identityStart = backgroundSource.indexOf('async function identityForStreamEvent', currentStart);
+  const queueStart = backgroundSource.indexOf('async function queueEarlyNotification', identityStart);
+  assert.ok(currentStart >= 0 && identityStart > currentStart && queueStart > identityStart);
+
+  const currentSource = backgroundSource.slice(currentStart, identityStart);
+  const identitySource = backgroundSource.slice(identityStart, queueStart);
+  assert.doesNotMatch(currentSource, /await\s+context\.capturePromise/);
+  assert.doesNotMatch(identitySource, /queryMonitorSnapshot\s*\(/);
+  assert.match(identitySource, /requestConversation \|\| senderConversation/);
+  assert.match(identitySource, /terminal-status-routed-from-request-document-identity/);
+});
+
+test('stream dedupe carries exact request identity when page prompt identity is unavailable', () => {
+  assert.match(backgroundSource, /const requestId = String\(turnRecord\?\.requestId \|\| ''\)/);
+  assert.match(backgroundSource, /getEarlyDelivery\(\{ conversationId, requestId, promptKey \}\)/);
+  assert.match(backgroundSource, /ACTIVE_CONTEXT_TTL_MS = 60 \* 60 \* 1000/);
+  assert.match(backgroundSource, /SETTLED_CONTEXT_TTL_MS = 10 \* 60 \* 1000/);
+});
+
 test('MAIN observer does not poll ChatGPT or use extension privileges', () => {
   assert.match(mainSource, /nativeFetch\.apply\(this, arguments\)/);
   assert.match(mainSource, /response\.clone\(\)/);
