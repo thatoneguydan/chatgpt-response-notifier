@@ -278,8 +278,9 @@ test('a new Chrome request remains independently notifiable even with the same D
 
 test('request identity is propagated from Chrome completion into both delivery claim paths', () => {
   assert.match(serviceWorkerSource, /signalConversationRequestCompleted\(\s*details\.tabId,\s*String\(details\.requestId \|\| ''\),\s*String\(details\.documentId \|\| ''\)/);
-  assert.match(serviceWorkerSource, /requestId:\s*String\(message\?\.requestId \|\| ''\)/);
   assert.match(serviceWorkerSource, /__chatgptNotifierResponseStreamStatus\?\.requestOwnerForTurn/);
+  assert.match(serviceWorkerSource, /const requestId = String\(message\?\.requestId \|\| requestOwner\?\.requestId \|\| ''\)/);
+  assert.match(serviceWorkerSource, /fingerprint:\s*String\(message\?\.fingerprint \|\| ''\),\s*requestId,/);
   assert.match(serviceWorkerSource, /fingerprint:\s*`worker\|\$\{status\.conversationId\}\|\$\{requestId\}\|\$\{status\.statusCode\}`,\s*requestId,/);
   assert.match(contentScriptSource, /requestId:\s*requestIdentity/);
   assert.match(contentScriptSource, /armForCurrentPrompt\(String\(message\?\.requestId \|\| ''\)\)/);
