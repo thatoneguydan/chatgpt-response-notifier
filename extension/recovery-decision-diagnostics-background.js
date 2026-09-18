@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  if (globalThis.__chatgptNotifierRecoveryDecisionDiagnostics?.version === 1) return;
+  if (Number(globalThis.__chatgptNotifierRecoveryDecisionDiagnostics?.version || 0) >= 2) return;
 
   const base = globalThis.ChatGPTNotifierRecoveryModel;
   if (!base || typeof base !== 'object') return;
