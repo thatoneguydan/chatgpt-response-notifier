@@ -1,0 +1,117 @@
+name: Clean runner notifier residue
+
+on:
+  push:
+    branches: [ops/verify-apply-live-v0.9.36]
+    paths:
+      - .github/workflows/cleanup-runner-notifier-residue.yml
+
+permissions:
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 5
+    steps:
+      - name: Remove only NetworkService notifier residue
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expectedVersion = '0.9.36'
+          $expectedSource = 'e96aae20b49db910abe830e477e37d73aa785db9'
+          $port = 38473
+
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class CleanupSessionNative
+          {
+              [DllImport("kernel32.dll")]
+              public static extern uint WTSGetActiveConsoleSessionId();
+          }
+          '@
+
+          $activeSession = [int][CleanupSessionNative]::WTSGetActiveConsoleSessionId()
+          if ($activeSession -eq [int][uint32]::MaxValue) { throw 'No active console session.' }
+
+          $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $listener) { throw 'Live notifier bridge is not listening.' }
+          $liveProcess = Get-Process -Id $listener.OwningProcess -ErrorAction Stop
+          if ([int]$liveProcess.SessionId -ne $activeSession) {
+            throw 'Live bridge is not owned by the interactive session; refusing cleanup.'
+          }
+
+          function Ping-LiveHelper {
+            $socket = [System.Net.WebSockets.ClientWebSocket]::new()
+            $socket.Options.SetRequestHeader('Origin', 'chrome-extension://lciedmoiiapbgemklkpoadimhffaaaah')
+            $cts = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(20))
+            try {
+              $socket.ConnectAsync([Uri]"ws://127.0.0.1:$port/bridge", $cts.Token).GetAwaiter().GetResult()
+              $requestId = [Guid]::NewGuid().ToString('N')
+              $bytes = [Text.Encoding]::UTF8.GetBytes((@{ type='ping'; requestId=$requestId } | ConvertTo-Json -Compress))
+              $socket.SendAsync([ArraySegment[byte]]::new($bytes), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $cts.Token).GetAwaiter().GetResult()
+              $buffer = New-Object byte[] 65536
+              for ($i=0; $i -lt 20; $i++) {
+                $result = $socket.ReceiveAsync([ArraySegment[byte]]::new($buffer), $cts.Token).GetAwaiter().GetResult()
+                if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { break }
+                $event = ([Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count) | ConvertFrom-Json)
+                if ([string]$event.requestId -eq $requestId) { return $event }
+              }
+              return $null
+            } finally {
+              try { $socket.Dispose() } catch {}
+              $cts.Dispose()
+            }
+          }
+
+          $before = Ping-LiveHelper
+          if (-not $before -or [string]$before.installedExtensionVersion -ne $expectedVersion -or [string]$before.installedSourceCommit -ne $expectedSource) {
+            throw 'Live interactive helper is not the verified v0.9.36 build; refusing cleanup.'
+          }
+
+          $runnerRoot = [IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'ChatGPTResponseNotifier'))
+          $serviceProfileRoot = [IO.Path]::GetFullPath((Join-Path $env:SystemRoot 'ServiceProfiles\NetworkService'))
+          if (-not $runnerRoot.StartsWith($serviceProfileRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            throw 'Runner LocalAppData is not the NetworkService profile; refusing cleanup.'
+          }
+
+          $stopped = 0
+          foreach ($process in @(Get-Process -Name 'ChatGPTResponseNotifier.Host' -ErrorAction SilentlyContinue)) {
+            if ([int]$process.SessionId -eq $activeSession) { continue }
+            $path = ''
+            try { $path = [IO.Path]::GetFullPath([string]$process.Path) } catch { continue }
+            if (-not $path.StartsWith($runnerRoot, [StringComparison]::OrdinalIgnoreCase)) { continue }
+            Stop-Process -Id $process.Id -Force -ErrorAction Stop
+            $stopped++
+          }
+
+          $runKey = 'HKCU:\Software\Microsoft\Windows\CurrentVersion\Run'
+          $runRemoved = $false
+          try {
+            $command = [string](Get-ItemPropertyValue -LiteralPath $runKey -Name 'ChatGPTResponseNotifier' -ErrorAction SilentlyContinue)
+            if ($command -and $command.IndexOf($runnerRoot, [StringComparison]::OrdinalIgnoreCase) -ge 0) {
+              Remove-ItemProperty -LiteralPath $runKey -Name 'ChatGPTResponseNotifier' -ErrorAction Stop
+              $runRemoved = $true
+            }
+          } catch {}
+
+          $filesRemoved = $false
+          if (Test-Path -LiteralPath $runnerRoot) {
+            Remove-Item -LiteralPath $runnerRoot -Recurse -Force -ErrorAction Stop
+            $filesRemoved = $true
+          }
+
+          $after = Ping-LiveHelper
+          if (-not $after -or [string]$after.installedExtensionVersion -ne $expectedVersion -or [string]$after.installedSourceCommit -ne $expectedSource) {
+            throw 'Live interactive helper verification failed after runner residue cleanup.'
+          }
+
+          Write-Host ("CLEANUP_VERIFIED " + (@{
+            runnerProcessesStopped = $stopped
+            runnerRunEntryRemoved = $runRemoved
+            runnerFilesRemoved = $filesRemoved
+            liveVersion = [string]$after.installedExtensionVersion
+            liveSourceMatchesExpected = ([string]$after.installedSourceCommit -eq $expectedSource)
+            liveBridgeInteractive = $true
+          } | ConvertTo-Json -Compress))
