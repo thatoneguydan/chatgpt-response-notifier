@@ -48,7 +48,7 @@ test('toast click routing is bounded, exact-targeted, and never silently duplica
 
   const clicked = manager.slice(manager.indexOf('window.ToastClicked'), manager.indexOf('window.ToastMoveHereRequested'));
   assert.doesNotMatch(clicked, /RemoveWindow/);
-  assert.match(clicked, /targetTabId = record\.TargetTabId/);
+  assert.match(clicked, /targetTabId = window\.TargetTabId/);
   assert.match(manager, /ReportClickResult/);
   assert.match(manager, /window\\.SetClickState\\(\"pending\", window\\.TargetTabId\\)/);
   assert.match(manager, /ToastMoveHereRequested/);
