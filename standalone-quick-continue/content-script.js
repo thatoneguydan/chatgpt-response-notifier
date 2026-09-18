@@ -295,8 +295,20 @@
   function preferredPopoverDirection(toolbarRect, popoverHeight, viewportHeight) {
     const gap = 6;
     const margin = 8;
-    const upwardTop = Number(toolbarRect?.top || 0) - gap - Math.max(0, Number(popoverHeight) || 0);
-    return upwardTop < margin ? 'below' : 'above';
+    const height = Math.max(0, Number(popoverHeight) || 0);
+    const top = Number(toolbarRect?.top || 0);
+    const bottom = Number(toolbarRect?.bottom || top);
+    const viewport = Math.max(0, Number(viewportHeight) || 0);
+    const upwardTop = top - gap - height;
+
+    if (upwardTop >= margin) return 'above';
+
+    const downwardBottom = bottom + gap + height;
+    if (downwardBottom <= viewport - margin) return 'below';
+
+    const spaceAbove = Math.max(0, top - margin);
+    const spaceBelow = Math.max(0, viewport - bottom - margin);
+    return spaceBelow > spaceAbove ? 'below' : 'above';
   }
 
   function positionProjectPopover() {
