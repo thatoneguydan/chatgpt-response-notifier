@@ -42,7 +42,7 @@ test('toast click routing is bounded, exact-targeted, and never silently duplica
   assert.match(click, /PROBE_TIMEOUT_MS = 300/);
   assert.match(click, /CLICK_DEADLINE_MS = 3500/);
   assert.match(click, /Promise\.resolve\(promise\)/);
-  assert.match(click, /presentationState: 'other-desktop'/);
+  assert.match(click, /state: 'other-desktop'/);
   assert.match(click, /chrome\.windows\.create\(\{ tabId: targetTabId, focused: true, type: 'normal' \}\)/);
   assert.doesNotMatch(click, /windows\.create\(\{\s*url:/);
 
