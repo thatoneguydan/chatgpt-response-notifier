@@ -5,19 +5,24 @@
   globalThis.__chatgptQuickContinueInstalled = true;
 
   const prompts = globalThis.ChatGPTQuickContinuePrompts;
-  if (!prompts) return;
+  const configApi = globalThis.ChatGPTQuickContinueConfig;
+  if (!prompts || !configApi) return;
 
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const SEND_READY_TIMEOUT_MS = 1800;
-  const MAX_PROJECTS = 40;
-  const buttons = [];
+  const sendButtons = [];
   const projectButtons = [];
+
   let toolbar = null;
   let clock = null;
   let projectPopover = null;
   let projectList = null;
   let projectInput = null;
   let projectSend = null;
+  let browsePanel = null;
+  let editorPanel = null;
+  let editorTextarea = null;
+  let editorError = null;
   let status = null;
   let statusTimer = null;
   let observer = null;
@@ -28,9 +33,9 @@
   let scheduledWithAnimationFrame = false;
   let clockTimer = null;
   let busy = false;
-  let savedProjects = [];
-  let projectsLoaded = false;
-  let projectsLoadPromise = null;
+  let currentConfig = null;
+  let configLoadPromise = null;
+  let unsubscribeConfig = null;
 
   const cleanComposer = (value) => String(value || '')
     .replace(/[\u200B-\u200D\uFEFF]/g, '')
@@ -185,8 +190,34 @@
     }, 2200);
   }
 
+  function setEditorError(message) {
+    if (!editorError) return;
+    editorError.textContent = String(message || '');
+    editorError.hidden = !message;
+  }
+
+  async function ensureConfig() {
+    if (currentConfig) return currentConfig;
+    if (configLoadPromise) return configLoadPromise;
+
+    configLoadPromise = configApi.load()
+      .then((config) => {
+        currentConfig = config;
+        return currentConfig;
+      })
+      .catch((error) => {
+        setStatus(String(error?.message || 'Could not load config.'));
+        return null;
+      })
+      .finally(() => {
+        configLoadPromise = null;
+      });
+
+    return configLoadPromise;
+  }
+
   async function sendPrompt(text) {
-    if (busy) return false;
+    if (busy || !text) return false;
     const composer = composerElement();
     if (!composer) {
       setStatus('ChatGPT composer not found.');
@@ -234,42 +265,10 @@
     }
   }
 
-  function normalizeProjectList(value) {
-    if (!Array.isArray(value)) return [];
-    const seen = new Set();
-    const result = [];
-    for (const entry of value) {
-      const title = prompts.normalizeInline(entry);
-      const key = title.toLocaleLowerCase();
-      if (!title || seen.has(key)) continue;
-      seen.add(key);
-      result.push(title);
-      if (result.length >= MAX_PROJECTS) break;
-    }
-    return result;
-  }
-
-  async function loadProjects() {
-    if (projectsLoaded) return savedProjects;
-    if (projectsLoadPromise) return projectsLoadPromise;
-
-    projectsLoadPromise = (async () => {
-      try {
-        const url = chrome.runtime.getURL('projects.json');
-        const response = await fetch(url, { cache: 'no-store' });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        savedProjects = normalizeProjectList(await response.json());
-      } catch {
-        savedProjects = [];
-        setStatus('Could not load project list.');
-      } finally {
-        projectsLoaded = true;
-        projectsLoadPromise = null;
-      }
-      return savedProjects;
-    })();
-
-    return projectsLoadPromise;
+  async function sendContinue() {
+    const config = await ensureConfig();
+    if (!config) return;
+    await sendPrompt(prompts.continuePrompt(config.continueText, new Date()));
   }
 
   function formatClock(date = new Date()) {
@@ -293,9 +292,17 @@
     }
   }
 
+  function setEditorMode(editing) {
+    if (!browsePanel || !editorPanel) return;
+    browsePanel.hidden = Boolean(editing);
+    editorPanel.hidden = !editing;
+    if (!editing) setEditorError('');
+  }
+
   function closeProjectPopover({ clear = false } = {}) {
     if (!projectPopover) return;
     projectPopover.hidden = true;
+    setEditorMode(false);
     if (clear && projectInput) projectInput.value = '';
     updateProjectSendState();
   }
@@ -309,11 +316,12 @@
   }
 
   function updateProjectSendState() {
+    const canSend = canSendProject();
     if (projectSend && projectInput) {
-      projectSend.disabled = !canSendProject() || !prompts.normalizeInline(projectInput.value);
+      projectSend.disabled = !canSend || !prompts.normalizeInline(projectInput.value);
     }
     for (const button of projectButtons) {
-      button.disabled = !canSendProject();
+      button.disabled = !canSend;
       button.style.opacity = button.disabled ? '.45' : '1';
       button.style.cursor = button.disabled ? 'default' : 'pointer';
     }
@@ -322,7 +330,12 @@
   async function sendProjectName(projectName) {
     const normalized = prompts.normalizeInline(projectName);
     if (!normalized) return;
-    const sent = await sendPrompt(prompts.projectContinuePrompt(normalized, new Date()));
+
+    const config = await ensureConfig();
+    if (!config) return;
+
+    const text = prompts.projectContinuePrompt(normalized, config.projectText, new Date());
+    const sent = await sendPrompt(text);
     if (sent) closeProjectPopover({ clear: true });
   }
 
@@ -331,7 +344,7 @@
     await sendProjectName(projectInput.value);
   }
 
-  function renderProjectList(projects) {
+  function renderProjectList(projects = currentConfig?.projects || []) {
     if (!projectList) return;
     projectList.replaceChildren();
     projectButtons.length = 0;
@@ -365,20 +378,46 @@
       projectButtons.push(button);
       projectList.append(button);
     }
+
     updateProjectSendState();
   }
 
   async function openProjectPopover() {
     if (!projectPopover) return;
     projectPopover.hidden = false;
-    if (projectList && !projectsLoaded) {
-      projectList.textContent = 'Loading projects…';
-      const projects = await loadProjects();
-      renderProjectList(projects);
-    } else {
-      renderProjectList(savedProjects);
-    }
+    setEditorMode(false);
+    const config = await ensureConfig();
+    if (config) renderProjectList(config.projects);
     updateProjectSendState();
+  }
+
+  async function openConfigEditor() {
+    const config = await ensureConfig();
+    if (!config || !editorTextarea) return;
+    editorTextarea.value = configApi.serialize(config);
+    setEditorError('');
+    setEditorMode(true);
+  }
+
+  async function saveConfigEditor() {
+    if (!editorTextarea) return;
+    let parsed = null;
+    try {
+      parsed = JSON.parse(editorTextarea.value);
+    } catch (error) {
+      setEditorError(`Invalid JSON: ${error?.message || 'parse failed'}`);
+      return;
+    }
+
+    try {
+      currentConfig = await configApi.save(parsed);
+      editorTextarea.value = configApi.serialize(currentConfig);
+      renderProjectList(currentConfig.projects);
+      setEditorMode(false);
+      setStatus('Config saved.');
+    } catch (error) {
+      setEditorError(String(error?.message || 'Config could not be saved.'));
+    }
   }
 
   function buildToolbar() {
@@ -412,9 +451,9 @@
     continueButton.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
-      sendPrompt(prompts.continuePrompt(new Date()));
+      sendContinue();
     });
-    buttons.push(continueButton);
+    sendButtons.push(continueButton);
     root.append(continueButton);
 
     const projectButton = document.createElement('button');
@@ -429,7 +468,6 @@
       if (projectPopover.hidden) openProjectPopover();
       else closeProjectPopover();
     });
-    buttons.push(projectButton);
     root.append(projectButton);
 
     const time = document.createElement('span');
@@ -469,14 +507,22 @@
       flexDirection: 'column',
       alignItems: 'stretch',
       gap: '6px',
-      minWidth: '220px',
-      maxWidth: '280px',
+      minWidth: '250px',
+      maxWidth: '330px',
       padding: '7px',
       border: '1px solid var(--border-light, rgba(127,127,127,.28))',
       borderRadius: '9px',
       background: 'var(--main-surface-primary, #fff)',
       color: 'var(--text-primary, #111)',
       boxShadow: '0 4px 18px rgba(0,0,0,.14)'
+    });
+
+    const header = document.createElement('div');
+    Object.assign(header.style, {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: '8px'
     });
 
     const savedLabel = document.createElement('div');
@@ -486,7 +532,32 @@
       opacity: '.62',
       fontWeight: '600'
     });
-    popover.append(savedLabel);
+    header.append(savedLabel);
+
+    const editButton = document.createElement('button');
+    editButton.type = 'button';
+    editButton.textContent = 'Edit';
+    editButton.setAttribute('aria-label', 'Edit Quick Continue JSON');
+    styleButton(editButton);
+    Object.assign(editButton.style, {
+      padding: '3px 6px',
+      fontSize: '10px'
+    });
+    editButton.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openConfigEditor();
+    });
+    header.append(editButton);
+    popover.append(header);
+
+    const browse = document.createElement('div');
+    Object.assign(browse.style, {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '6px'
+    });
+    browsePanel = browse;
 
     const list = document.createElement('div');
     Object.assign(list.style, {
@@ -496,7 +567,7 @@
       maxHeight: '190px',
       overflowY: 'auto'
     });
-    popover.append(list);
+    browse.append(list);
     projectList = list;
 
     const divider = document.createElement('div');
@@ -504,7 +575,7 @@
       height: '1px',
       background: 'var(--border-light, rgba(127,127,127,.20))'
     });
-    popover.append(divider);
+    browse.append(divider);
 
     const customRow = document.createElement('div');
     Object.assign(customRow.style, {
@@ -558,7 +629,91 @@
     });
     customRow.append(send);
     projectSend = send;
-    popover.append(customRow);
+    browse.append(customRow);
+    popover.append(browse);
+
+    const editor = document.createElement('div');
+    editor.hidden = true;
+    Object.assign(editor.style, {
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '6px'
+    });
+    editorPanel = editor;
+
+    const textarea = document.createElement('textarea');
+    textarea.setAttribute('aria-label', 'Quick Continue JSON');
+    textarea.spellcheck = false;
+    Object.assign(textarea.style, {
+      width: '300px',
+      maxWidth: 'calc(100vw - 40px)',
+      height: '220px',
+      resize: 'both',
+      padding: '7px',
+      boxSizing: 'border-box',
+      border: '1px solid var(--border-light, rgba(127,127,127,.30))',
+      borderRadius: '6px',
+      outline: 'none',
+      background: 'var(--main-surface-secondary, rgba(127,127,127,.08))',
+      color: 'inherit',
+      font: '11px ui-monospace, SFMono-Regular, Consolas, monospace',
+      lineHeight: '1.35',
+      whiteSpace: 'pre'
+    });
+    textarea.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        setEditorMode(false);
+      }
+    });
+    editor.append(textarea);
+    editorTextarea = textarea;
+
+    const error = document.createElement('div');
+    error.hidden = true;
+    error.setAttribute('role', 'alert');
+    Object.assign(error.style, {
+      maxWidth: '300px',
+      whiteSpace: 'normal',
+      lineHeight: '1.25',
+      opacity: '.82'
+    });
+    editor.append(error);
+    editorError = error;
+
+    const editorActions = document.createElement('div');
+    Object.assign(editorActions.style, {
+      display: 'flex',
+      justifyContent: 'flex-end',
+      gap: '5px'
+    });
+
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = 'Cancel';
+    cancel.setAttribute('aria-label', 'Cancel JSON edit');
+    styleButton(cancel);
+    cancel.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      setEditorMode(false);
+    });
+    editorActions.append(cancel);
+
+    const save = document.createElement('button');
+    save.type = 'button';
+    save.textContent = 'Save';
+    save.setAttribute('aria-label', 'Save Quick Continue JSON');
+    styleButton(save);
+    save.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      saveConfigEditor();
+    });
+    editorActions.append(save);
+
+    editor.append(editorActions);
+    popover.append(editor);
 
     root.append(popover);
     projectPopover = popover;
@@ -597,7 +752,7 @@
   function updateAvailability(composer) {
     const hasDraft = Boolean(composer && composerText(composer));
     const unavailable = busy || !composer || hasDraft || stopPresent();
-    for (const button of buttons) {
+    for (const button of sendButtons) {
       button.disabled = unavailable;
       button.style.opacity = button.disabled ? '.45' : '1';
       button.style.cursor = button.disabled ? 'default' : 'pointer';
@@ -669,6 +824,14 @@
     }
   }
 
+  unsubscribeConfig = configApi.subscribe((nextConfig) => {
+    currentConfig = nextConfig;
+    if (projectList && (!editorPanel || editorPanel.hidden)) renderProjectList(nextConfig.projects);
+    updateProjectSendState();
+  });
+
+  ensureConfig();
+
   observer = new MutationObserver(scheduleSync);
   observer.observe(document.documentElement, { childList: true, subtree: true });
   document.addEventListener('input', scheduleSync, { capture: true, passive: true });
@@ -678,10 +841,11 @@
   clockTimer = setInterval(scheduleSync, 30_000);
 
   globalThis.__chatgptQuickContinueRuntime = Object.freeze({
-    version: 2,
+    version: 3,
     dispose() {
       try { observer?.disconnect(); } catch {}
       try { resizeObserver?.disconnect(); } catch {}
+      try { unsubscribeConfig?.(); } catch {}
       try {
         if (scheduled !== null) {
           if (scheduledWithAnimationFrame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(scheduled);
