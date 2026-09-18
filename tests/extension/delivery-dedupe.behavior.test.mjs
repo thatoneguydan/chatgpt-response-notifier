@@ -245,6 +245,117 @@ test('one Chrome request remains one delivery across assistant identity remounts
   assert.equal(originalClaims[0].snapshot.requestId, 'request-1', 'request identity must persist into the coordinator turn record');
 });
 
+test('shared response-stream reservation blocks a later coordinator claim for the same request', async () => {
+  const { context, originalClaims } = loadHook();
+  const coordinator = context.__chatgptNotifierCoordinator;
+  const shared = context.__chatgptNotifierDeliveryDedupeHook;
+
+  const reservation = await shared.reserveRequestDelivery({
+    conversationId: 'conversation-1',
+    requestId: 'request-1',
+    chromeDocumentId: 'document-1',
+    promptKey: 'conversation-1|user-1'
+  }, {
+    tabId: 7,
+    documentId: 'document-1',
+    requestId: 'request-1',
+    notificationId: 'stream-notification',
+    claimSource: 'response-stream-terminal'
+  });
+  assert.equal(reservation.reserved, true);
+  await shared.commitRequestDelivery(reservation.deliveryKey, {
+    notificationId: 'stream-notification',
+    claimSource: 'response-stream-terminal'
+  });
+
+  const duplicate = await coordinator.claimTurn(snapshot(), {
+    tabId: 7,
+    documentId: 'document-1',
+    requestId: 'request-1',
+    notificationId: 'coordinator-notification',
+    notificationTitle: 'Build chat'
+  });
+
+  assert.equal(duplicate.claimed, false);
+  assert.equal(duplicate.reason, 'already-delivered-logical-turn');
+  assert.equal(originalClaims.length, 0);
+});
+
+test('coordinator claim blocks a later response-stream reservation for the same request', async () => {
+  const { context, originalClaims } = loadHook();
+  const coordinator = context.__chatgptNotifierCoordinator;
+  const shared = context.__chatgptNotifierDeliveryDedupeHook;
+
+  const claimed = await coordinator.claimTurn(snapshot(), {
+    tabId: 7,
+    documentId: 'document-1',
+    requestId: 'request-1',
+    notificationId: 'coordinator-notification',
+    notificationTitle: 'Build chat'
+  });
+  assert.equal(claimed.claimed, true);
+
+  const duplicate = await shared.reserveRequestDelivery({
+    conversationId: 'conversation-1',
+    requestId: 'request-1',
+    chromeDocumentId: 'document-1',
+    promptKey: 'conversation-1|user-1'
+  }, {
+    tabId: 7,
+    documentId: 'document-1',
+    requestId: 'request-1',
+    notificationId: 'stream-notification',
+    claimSource: 'response-stream-terminal'
+  });
+
+  assert.equal(duplicate.reserved, false);
+  assert.equal(duplicate.reason, 'already-delivered-logical-turn');
+  assert.equal(duplicate.record.notificationId, 'coordinator-notification');
+  assert.equal(originalClaims.length, 1);
+});
+
+test('in-flight response-stream reservation blocks a racing coordinator claim', async () => {
+  const { context, originalClaims } = loadHook();
+  const coordinator = context.__chatgptNotifierCoordinator;
+  const shared = context.__chatgptNotifierDeliveryDedupeHook;
+
+  const reservation = await shared.reserveRequestDelivery({
+    conversationId: 'conversation-1',
+    requestId: 'request-1',
+    chromeDocumentId: 'document-1'
+  }, {
+    tabId: 7,
+    documentId: 'document-1',
+    requestId: 'request-1',
+    notificationId: 'stream-notification',
+    claimSource: 'response-stream-terminal'
+  });
+  assert.equal(reservation.reserved, true);
+
+  const duplicate = await coordinator.claimTurn(snapshot(), {
+    tabId: 7,
+    documentId: 'document-1',
+    requestId: 'request-1',
+    notificationId: 'coordinator-notification',
+    notificationTitle: 'Build chat'
+  });
+
+  assert.equal(duplicate.claimed, false);
+  assert.equal(duplicate.reason, 'logical-turn-in-flight');
+  assert.equal(originalClaims.length, 0);
+
+  await shared.releaseRequestDelivery(reservation.deliveryKey);
+  const retry = await coordinator.claimTurn(snapshot(), {
+    tabId: 7,
+    documentId: 'document-1',
+    requestId: 'request-1',
+    notificationId: 'coordinator-notification',
+    notificationTitle: 'Build chat'
+  });
+  assert.equal(retry.claimed, true);
+  assert.equal(originalClaims.length, 1);
+});
+
 test('request-key migration respects an already committed legacy logical-turn claim', async () => {
   const { context, originalClaims } = loadHook();
   const coordinator = context.__chatgptNotifierCoordinator;
