@@ -44,35 +44,52 @@ internal static class WindowsVirtualDesktopSwitcher
 
     public static DesktopPlacementTarget CaptureCurrentDesktop()
     {
-        var foregroundWindow = GetForegroundWindow();
-        if (foregroundWindow == IntPtr.Zero)
+        var build = Environment.OSVersion.Version.Build;
+        var ubr = ReadWindowsUbr();
+        if (!IsSupportedBuild(build, ubr))
         {
-            return new(false, Guid.Empty, "foreground-window-unavailable");
+            return new(false, Guid.Empty, "unsupported-windows-build");
         }
 
-        object? publicManagerObject = null;
+        object? shellObject = null;
+        object? managerObject = null;
+        object? desktopObject = null;
         try
         {
-            var publicManagerType = Type.GetTypeFromCLSID(ClsidVirtualDesktopManager, throwOnError: true)!;
-            publicManagerObject = Activator.CreateInstance(publicManagerType)
-                ?? throw new InvalidOperationException("virtual-desktop-manager-unavailable");
-            var publicManager = (IVirtualDesktopManager)publicManagerObject;
-            var desktopId = publicManager.GetWindowDesktopId(foregroundWindow);
+            var shellType = Type.GetTypeFromCLSID(ClsidImmersiveShell, throwOnError: true)!;
+            shellObject = Activator.CreateInstance(shellType)
+                ?? throw new InvalidOperationException("immersive-shell-unavailable");
+            var provider = (IServiceProvider10)shellObject;
+
+            var service = ClsidVirtualDesktopManagerInternal;
+            var iid = typeof(IVirtualDesktopManagerInternal).GUID;
+            managerObject = provider.QueryService(ref service, ref iid);
+            var manager = (IVirtualDesktopManagerInternal)managerObject;
+
+            desktopObject = manager.GetCurrentDesktop();
+            var desktop = (IVirtualDesktop)desktopObject;
+            var desktopId = desktop.GetId();
             return desktopId == Guid.Empty
-                ? new(false, Guid.Empty, "foreground-desktop-unavailable")
-                : new(true, desktopId, "foreground-desktop-captured");
+                ? new(false, Guid.Empty, "current-desktop-unavailable")
+                : new(true, desktopId, "current-desktop-captured");
         }
         catch (COMException)
         {
-            return new(false, Guid.Empty, "foreground-desktop-com-failed");
+            return new(false, Guid.Empty, "current-desktop-com-failed");
+        }
+        catch (InvalidCastException)
+        {
+            return new(false, Guid.Empty, "current-desktop-interface-mismatch");
         }
         catch
         {
-            return new(false, Guid.Empty, "foreground-desktop-capture-failed");
+            return new(false, Guid.Empty, "current-desktop-capture-failed");
         }
         finally
         {
-            ReleaseCom(publicManagerObject);
+            ReleaseCom(desktopObject);
+            ReleaseCom(managerObject);
+            ReleaseCom(shellObject);
         }
     }
 
@@ -338,9 +355,6 @@ internal static class WindowsVirtualDesktopSwitcher
     private static extern bool EnumWindows(EnumWindowsProc callback, IntPtr lParam);
 
     [DllImport("user32.dll")]
-    private static extern IntPtr GetForegroundWindow();
-
-    [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static extern bool IsWindowVisible(IntPtr hwnd);
 
@@ -397,6 +411,15 @@ internal static class WindowsVirtualDesktopSwitcher
     [Guid("3F07F4BE-B107-441A-AF0F-39D82529072C")]
     private interface IVirtualDesktop
     {
+        [return: MarshalAs(UnmanagedType.Bool)]
+        bool IsViewVisible(IntPtr view);
+        Guid GetId();
+        [return: MarshalAs(UnmanagedType.HString)]
+        string GetName();
+        [return: MarshalAs(UnmanagedType.HString)]
+        string GetWallpaperPath();
+        [return: MarshalAs(UnmanagedType.Bool)]
+        bool IsRemote();
     }
 
     [ComImport]
