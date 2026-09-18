@@ -139,7 +139,8 @@ internal sealed class NativeHostApplication : Application
                     conversationSuffix = Suffix(message.Notification.ConversationId),
                     notificationSuffix = Suffix(message.Notification.Id),
                     presented = showResult.Presented,
-                    presentationState = showResult.PresentationState
+                    presentationState = showResult.PresentationState,
+                    reason = showResult.DesktopPlacementState
                 });
 
                 _ = SendEventAsync(new
@@ -149,7 +150,8 @@ internal sealed class NativeHostApplication : Application
                     notificationId = message.Notification.Id,
                     accepted = showResult.Accepted,
                     presented = showResult.Presented,
-                    presentationState = showResult.PresentationState
+                    presentationState = showResult.PresentationState,
+                    desktopPlacementState = showResult.DesktopPlacementState
                 });
                 break;
             }
