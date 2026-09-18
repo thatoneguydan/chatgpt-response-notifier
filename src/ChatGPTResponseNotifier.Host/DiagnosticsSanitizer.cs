@@ -160,6 +160,7 @@ internal static class DiagnosticsSanitizer
             observedAt = StringValue(input, "observedAt", 64),
             extensionVersion = StringValue(input, "extensionVersion", 32),
             correlationId = StringValue(input, "correlationId", 80),
+            sourceCommitSuffix = StringValue(input, "sourceCommitSuffix", 8),
             tabId = IntegerValue(input, "tabId"),
             statusCode = IntegerValue(input, "statusCode"),
             attempt = IntegerValue(input, "attempt"),
