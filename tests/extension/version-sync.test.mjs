@@ -355,14 +355,16 @@ test('native toast renders persisted completion time, keeps failed clicks retrya
   assert.match(manager, /new WindowInteropHelper\(window\)\.Handle/);
   assert.match(manager, /targetTabId = window\.TargetTabId/);
   const desktopSwitcher = readText('src/ChatGPTResponseNotifier.Host/WindowsVirtualDesktopSwitcher.cs');
-  assert.match(desktopSwitcher, /GetForegroundWindow\(\)/);
+  assert.match(desktopSwitcher, /GetCurrentDesktop\(\)/);
+  assert.match(desktopSwitcher, /desktop\.GetId\(\)/);
+  assert.doesNotMatch(desktopSwitcher, /GetForegroundWindow\(\)/);
   assert.match(desktopSwitcher, /MoveWindowToDesktop\(hwnd, ref desktopId\)/);
   assert.match(desktopSwitcher, /toast-moved-to-current-desktop/);
   assert.match(desktopSwitcher, /toast-desktop-move-unverified/);
   assert.match(record, /public int\? TargetTabId/);
   assert.match(app, /case "toast\.clickResult"/);
   assert.doesNotMatch(app, /click-shell-fallback/);
-  assert.equal(version, '0.9.32');
+  assert.equal(version, '0.9.33');
   assert.equal(manifest.version, version);
 });
 
