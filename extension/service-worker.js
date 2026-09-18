@@ -326,18 +326,6 @@ async function resolveClickTarget(conversationId, preferredTabId = null) {
   return { tab: null, reason: 'conversation-target-missing' };
 }
 
-async function foregroundChromeWindow(windowId) {
-  if (typeof windowId !== 'number') return false;
-  try {
-    const windowInfo = await chrome.windows.get(windowId);
-    if (windowInfo.state === 'minimized') await chrome.windows.update(windowId, { state: 'normal' });
-    await chrome.windows.update(windowId, { focused: true });
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 async function focusOrOpenConversation(conversationId, conversationUrl, clickContext = {}) {
   try {
     const preferredTabId = Number.isInteger(clickContext?.targetTabId) ? clickContext.targetTabId : null;
