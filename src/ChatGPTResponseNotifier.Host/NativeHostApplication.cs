@@ -152,6 +152,9 @@ internal sealed class NativeHostApplication : Application
                 });
                 break;
             }
+            case "toast.clickResult" when !string.IsNullOrWhiteSpace(message.NotificationId):
+                _toastManager!.ReportClickResult(message.NotificationId, message.ClickState ?? "unverified");
+                break;
             case "toast.dismissConversation" when !string.IsNullOrWhiteSpace(message.ConversationId):
                 _toastManager!.DismissConversation(message.ConversationId);
                 break;
@@ -389,39 +392,6 @@ internal sealed class NativeHostApplication : Application
             return;
         }
 
-        try
-        {
-            if (root.ValueKind == JsonValueKind.Object
-                && string.Equals(type, "toast.clicked", StringComparison.Ordinal)
-                && root.TryGetProperty("conversationUrl", out var urlNode)
-                && urlNode.ValueKind == JsonValueKind.String)
-            {
-                var url = urlNode.GetString();
-                if (!string.IsNullOrWhiteSpace(url)
-                    && Uri.TryCreate(url, UriKind.Absolute, out var uri)
-                    && string.Equals(uri.Host, "chatgpt.com", StringComparison.OrdinalIgnoreCase))
-                {
-                    Process.Start(new ProcessStartInfo(uri.AbsoluteUri) { UseShellExecute = true });
-                    _diagnosticsStore?.AppendHost(new
-                    {
-                        source = "host-click",
-                        status = "click-shell-fallback",
-                        observedAt = DateTimeOffset.UtcNow,
-                        correlationId,
-                        conversationSuffix,
-                        notificationSuffix,
-                        reason = "no-extension-bridge-client"
-                    });
-                }
-            }
-        }
-        catch (Exception error)
-        {
-            FileLog.Write("Local bridge event fallback failed", error);
-        }
-        finally
-        {
-            document?.Dispose();
-        }
+        document?.Dispose();
     }
 }
