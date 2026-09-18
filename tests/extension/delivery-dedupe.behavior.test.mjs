@@ -206,7 +206,7 @@ test('one logical assistant turn produces one coordinator claim across DOM revis
   assert.equal(originalClaims.length, 1, 'rerendered revision must not create a second notification claim');
 });
 
-test('a different assistant turn remains independently notifiable', async () => {
+test('a different assistant turn remains independently notifiable when request identity is unavailable', async () => {
   const { context, originalClaims } = loadHook();
   const coordinator = context.__chatgptNotifierCoordinator;
 
@@ -222,6 +222,48 @@ test('a different assistant turn remains independently notifiable', async () => 
 });
 
 
+test('one Chrome request remains one delivery across assistant identity remounts', async () => {
+  const { context, originalClaims } = loadHook();
+  const coordinator = context.__chatgptNotifierCoordinator;
+  const owner = {
+    tabId: 7,
+    documentId: 'document-1',
+    requestId: 'request-1',
+    notificationTitle: 'ChatGPT'
+  };
+
+  const first = await coordinator.claimTurn(snapshot(), { ...owner, notificationId: 'notification-1' });
+  const duplicate = await coordinator.claimTurn(
+    snapshot({ assistantKey: 'assistant-2', revision: '200:remounted' }),
+    { ...owner, notificationId: 'notification-2' }
+  );
+
+  assert.equal(first.claimed, true);
+  assert.equal(duplicate.claimed, false);
+  assert.equal(duplicate.reason, 'already-delivered-logical-turn');
+  assert.equal(originalClaims.length, 1, 'assistant remount under one network request must not produce a second claim');
+});
+
+test('a new Chrome request remains independently notifiable even with the same DOM identity', async () => {
+  const { context, originalClaims } = loadHook();
+  const coordinator = context.__chatgptNotifierCoordinator;
+  const owner = { tabId: 7, documentId: 'document-1', notificationTitle: 'ChatGPT' };
+
+  const first = await coordinator.claimTurn(snapshot(), { ...owner, requestId: 'request-1', notificationId: 'notification-1' });
+  const second = await coordinator.claimTurn(snapshot(), { ...owner, requestId: 'request-2', notificationId: 'notification-2' });
+
+  assert.equal(first.claimed, true);
+  assert.equal(second.claimed, true);
+  assert.equal(originalClaims.length, 2, 'a genuine retry/regenerate request must remain independently notifiable');
+});
+
+test('request identity is propagated from Chrome completion into both delivery claim paths', () => {
+  assert.match(serviceWorkerSource, /signalConversationRequestCompleted\(\s*details\.tabId,\s*String\(details\.requestId \|\| ''\),\s*String\(details\.documentId \|\| ''\)/);
+  assert.match(serviceWorkerSource, /requestId:\s*String\(message\?\.requestId \|\| ''\)/);
+  assert.match(serviceWorkerSource, /fingerprint:\s*`worker\|\$\{status\.conversationId\}\|\$\{requestId\}\|\$\{status\.statusCode\}`,\s*requestId,/);
+  assert.match(contentScriptSource, /requestId:\s*requestIdentity/);
+  assert.match(contentScriptSource, /armForCurrentPrompt\(String\(message\?\.requestId \|\| ''\)\)/);
+});
 test('delivery identity diagnostics retain same-request assistant remount evidence', async () => {
   const { context, nativeMessages } = loadHook();
   const coordinator = context.__chatgptNotifierCoordinator;
