@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 6;
+  const RUNTIME_VERSION = 7;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me.';
   const DEFAULT_WAIT_MS = 30000;
@@ -306,6 +306,100 @@
     return { ok: true, clicked: true, reason: 'continuation-user-turn-confirmed', documentId, continuationUserKey: observed.userTurn.key };
   }
 
+
+  async function performWatchdogContinuation(expectedConversationId = '') {
+    const expectedId = String(expectedConversationId || '');
+    const identity = conversationIdentity();
+    if (!identity?.id || (expectedId && identity.id !== expectedId)) {
+      return { ok: false, clicked: false, reason: 'watchdog-conversation-changed', documentId };
+    }
+
+    const observed = latestAssistantSnapshot();
+    const observedStatusCode = String(observed?.statusCode || '');
+    if (observedStatusCode) {
+      if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(observedStatusCode) === true) {
+        const result = await performContinuation(observed);
+        return { ...result, statusCode: observedStatusCode, watchdogDisposition: 'incomplete-reset' };
+      }
+      return {
+        ok: false,
+        clicked: false,
+        reason: 'terminal-status-observed',
+        statusCode: observedStatusCode,
+        watchdogDisposition: 'stop',
+        documentId
+      };
+    }
+
+    const composer = composerElement();
+    if (!composer) return { ok: false, clicked: false, reason: 'composer-not-found', documentId };
+    const initialBlock = activeUserBlockReason(composer);
+    if (initialBlock) return { ok: false, clicked: false, reason: initialBlock, documentId };
+    if (stopPresent()) return { ok: false, clicked: false, reason: 'response-still-generating', documentId };
+
+    const text = timestampedContinueText();
+    const previousUserKey = latestUserSnapshot()?.key || '';
+    if (!writeComposer(composer, text)) return { ok: false, clicked: false, reason: 'composer-write-failed', documentId };
+
+    const sendButton = await waitForSendButton(composer);
+    if (!sendButton) {
+      if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
+      return { ok: false, clicked: false, reason: 'send-button-not-ready', documentId };
+    }
+
+    const beforeSendIdentity = conversationIdentity();
+    if (!beforeSendIdentity?.id || (expectedId && beforeSendIdentity.id !== expectedId)) {
+      if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
+      return { ok: false, clicked: false, reason: 'watchdog-conversation-changed-before-send', documentId };
+    }
+
+    const beforeSendStatusCode = String(latestAssistantSnapshot()?.statusCode || '');
+    if (beforeSendStatusCode) {
+      if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
+      return {
+        ok: false,
+        clicked: false,
+        reason: 'terminal-status-observed',
+        statusCode: beforeSendStatusCode,
+        watchdogDisposition: globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(beforeSendStatusCode) === true
+          ? 'incomplete-reset'
+          : 'stop',
+        documentId
+      };
+    }
+
+    if (stopPresent()) {
+      if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
+      return { ok: false, clicked: false, reason: 'response-still-generating-before-send', documentId };
+    }
+    if (composerText(composer) !== cleanComposer(text)) return { ok: false, clicked: false, reason: 'composer-changed-before-send', documentId };
+
+    const beforeSendBlock = activeUserBlockReason(composer);
+    if (beforeSendBlock && beforeSendBlock !== 'composer-not-empty') {
+      writeComposer(composer, '');
+      return { ok: false, clicked: false, reason: `${beforeSendBlock}-before-send`, documentId };
+    }
+
+    try {
+      sendButton.click();
+    } catch {
+      if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
+      return { ok: false, clicked: false, reason: 'send-click-failed', documentId };
+    }
+
+    const sent = await waitForContinuationUserTurn(previousUserKey, text);
+    if (sent.errorText) return { ok: false, clicked: true, reason: 'page-send-error', pageError: sent.errorText, documentId };
+    if (!sent.userTurn) return { ok: false, clicked: true, reason: 'continuation-user-turn-not-confirmed', documentId };
+    return {
+      ok: true,
+      clicked: true,
+      reason: 'watchdog-continuation-user-turn-confirmed',
+      watchdogDisposition: 'retry-sent',
+      documentId,
+      continuationUserKey: sent.userTurn.key
+    };
+  }
+
   async function waitForTerminalStatus(timeoutMs = DEFAULT_WAIT_MS) {
     const immediate = latestAssistantSnapshot();
     if (immediate?.statusCode) return immediate;
@@ -323,6 +417,11 @@
         promptRevision: snapshot?.promptRevision || '', assistantKey: snapshot?.assistantKey || '', revision: snapshot?.revision || '',
         autoContinued: false, autoContinueReason: 'read-only-observation'
       })).catch((error) => sendResponse?.({ ok: false, statusCode: '', error: String(error?.message || error), documentId }));
+      return true;
+    }
+    if (message?.type === 'CHATGPT_WATCHDOG_CONTINUE_COMMAND') {
+      performWatchdogContinuation(message?.conversationId || '').then((result) => sendResponse?.(result))
+        .catch((error) => sendResponse?.({ ok: false, clicked: false, reason: 'watchdog-continuation-command-error', error: String(error?.message || error), documentId }));
       return true;
     }
     if (message?.type === 'CHATGPT_CONTINUE_COMMAND') {
@@ -349,6 +448,7 @@
     latestAssistantSnapshot,
     waitForTerminalStatus,
     performContinuation,
+    performWatchdogContinuation,
     timestampedContinueText,
     dispose() {
       try { abortController.abort(); } catch {}
@@ -357,6 +457,6 @@
     }
   };
   globalThis.__chatgptNotifierStatusRuntime = runtime;
-  globalThis.__chatgptNotifierStatusDom = Object.freeze({ latestAssistantSnapshot, waitForTerminalStatus, performContinuation, timestampedContinueText });
+  globalThis.__chatgptNotifierStatusDom = Object.freeze({ latestAssistantSnapshot, waitForTerminalStatus, performContinuation, performWatchdogContinuation, timestampedContinueText });
   globalThis.__chatgptNotifierStatusDomInstalled = true;
 })();
