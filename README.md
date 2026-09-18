@@ -9,6 +9,7 @@ Persistent, independently stacked Windows notifications for GitHub-backed ChatGP
 - does **not** poll ChatGPT APIs, fetch conversation data, or request authentication/session data;
 - recognizes only the canonical GitHub work-session status codes mirrored from `DevelopmentInfrastructure/GITHUB-WORK-STATUS-POLICY.md`;
 - automatically responds to a completed `INCOMPLETE_LIMIT` turn with `continue until you finish or need something from me` through the existing ChatGPT composer when it is safe to do so;
+- for an enrolled monitored chat, starts a 30-minute local watchdog from the last sent message; if no GitHub status code appears it sends the same continuation text up to three times, while machine-actionable incomplete codes reset the counter and any other valid terminal code stops the watchdog;
 - falls back to the ordinary `INCOMPLETE_LIMIT` notification if the composer is focused, non-empty, unavailable, still generating, changes underneath the attempt, or cannot confirm that Send was accepted;
 - locally remembers an in-progress conversation so monitoring can recover after a page refresh or Chrome restart;
 - creates one persistent Windows notification window per eligible completed response that still requires notification;
