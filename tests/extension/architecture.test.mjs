@@ -585,6 +585,8 @@ test('notifier-owned Quick Continue light mirrors popup automation states withou
   assert.match(attachment, /Auto-continues exhausted/);
   assert.match(attachment, /setInterval\(tickAutomationStatus, 1000\)/);
   assert.match(monitor, /codeWatchdogMaxSends: CODE_WATCHDOG_MAX_SENDS/);
+  assert.match(monitor, /function codeWatchdogOverviewSignature\(record\)/);
+  assert.match(monitor, /watchdogChanged[\s\S]*publishAutomationOverview\(senderTarget\)/);
   assert.doesNotMatch(attachment, /automationBusy \? '\\.62'/);
   assert.doesNotMatch(attachment, /AUTOMATION_REFRESH_MS/);
   assert.doesNotMatch(attachment, /setInterval\(maintainAutomationIndicator/);
