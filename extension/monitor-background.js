@@ -507,6 +507,26 @@
     }
   }
 
+  function codeWatchdogNoCodeEligibility(snapshot = {}) {
+    if (snapshot.stopGenerating === true) return { eligible: false, reason: 'generation-active' };
+    if (snapshot.toolActivity === true) return { eligible: false, reason: 'tool-activity' };
+
+    const requestPhase = String(snapshot.requestPhase || '');
+    if (!['completed', 'error'].includes(requestPhase)) {
+      return { eligible: false, reason: 'request-not-settled' };
+    }
+
+    if (String(snapshot.assistantKey || '')) {
+      return snapshot.stableTerminal === true
+        ? { eligible: true, reason: 'stable-terminal-no-code' }
+        : { eligible: false, reason: 'assistant-not-stable' };
+    }
+
+    return Number(snapshot.silentIdleConfirmations || 0) >= 2
+      ? { eligible: true, reason: 'silent-stop-confirmed' }
+      : { eligible: false, reason: 'silent-stop-unconfirmed' };
+  }
+
   async function handleCodeWatchdogAlarm(conversationId) {
     let record = await readCodeWatchdog(conversationId);
     if (!record || record.stopped === true) return;
@@ -550,6 +570,12 @@
       const refreshed = await readCodeWatchdog(conversationId);
       if (!refreshed || refreshed.stopped === true || Number(refreshed.deadlineAt || 0) > Date.now() + 1000) return;
       record = refreshed;
+    }
+
+    const noCodeEligibility = codeWatchdogNoCodeEligibility(live);
+    if (noCodeEligibility.eligible !== true) {
+      await scheduleCodeWatchdog(record, Date.now() + CODE_WATCHDOG_RETRY_MS);
+      return;
     }
 
     const result = await sendCodeWatchdogContinuation(tab.id, conversationId);
