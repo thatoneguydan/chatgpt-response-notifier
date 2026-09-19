@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 7;
+  const RUNTIME_VERSION = 8;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me.';
   const DEFAULT_WAIT_MS = 30000;
@@ -260,7 +260,7 @@
       { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'aria-disabled', 'data-testid', 'aria-label'] });
   }
   function waitForWatchdogSendButton(node) {
-    return waitUntil(() => enabledSend(node), node?.closest?.('form') || document.body || document.documentElement, READY_WAIT_MS,
+    return waitUntil(() => !stopPresent() && enabledSend(node), node?.closest?.('form') || document.body || document.documentElement, READY_WAIT_MS,
       { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'aria-disabled', 'data-testid', 'aria-label'] });
   }
   function matchesExpected(current, expected) {
@@ -311,11 +311,16 @@
   }
 
 
-  async function performWatchdogContinuation(expectedConversationId = '') {
+  async function performWatchdogContinuation(expectedConversationId = '', expectedPromptKey = '') {
     const expectedId = String(expectedConversationId || '');
+    const expectedPrompt = String(expectedPromptKey || '');
     const identity = conversationIdentity();
     if (!identity?.id || (expectedId && identity.id !== expectedId)) {
       return { ok: false, clicked: false, reason: 'watchdog-conversation-changed', documentId };
+    }
+    const initialPromptKey = latestAssistantSnapshot()?.promptKey || latestUserSnapshot()?.key || '';
+    if (expectedPrompt && initialPromptKey !== expectedPrompt) {
+      return { ok: false, clicked: false, reason: 'watchdog-prompt-changed', documentId };
     }
 
     const observed = latestAssistantSnapshot();
@@ -339,6 +344,7 @@
     if (!composer) return { ok: false, clicked: false, reason: 'composer-not-found', documentId };
     const initialBlock = activeUserBlockReason(composer);
     if (initialBlock) return { ok: false, clicked: false, reason: initialBlock, documentId };
+    if (stopPresent()) return { ok: false, clicked: false, reason: 'response-still-generating', documentId };
     const text = timestampedContinueText();
     const previousUserKey = latestUserSnapshot()?.key || '';
     if (!writeComposer(composer, text)) return { ok: false, clicked: false, reason: 'composer-write-failed', documentId };
@@ -353,6 +359,11 @@
     if (!beforeSendIdentity?.id || (expectedId && beforeSendIdentity.id !== expectedId)) {
       if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
       return { ok: false, clicked: false, reason: 'watchdog-conversation-changed-before-send', documentId };
+    }
+    const beforeSendPromptKey = latestAssistantSnapshot()?.promptKey || latestUserSnapshot()?.key || '';
+    if (expectedPrompt && beforeSendPromptKey !== expectedPrompt) {
+      if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
+      return { ok: false, clicked: false, reason: 'watchdog-prompt-changed-before-send', documentId };
     }
 
     const beforeSendStatusCode = String(latestAssistantSnapshot()?.statusCode || '');
@@ -371,6 +382,10 @@
     }
 
     if (composerText(composer) !== cleanComposer(text)) return { ok: false, clicked: false, reason: 'composer-changed-before-send', documentId };
+    if (stopPresent()) {
+      writeComposer(composer, '');
+      return { ok: false, clicked: false, reason: 'response-still-generating-before-send', documentId };
+    }
 
     const beforeSendBlock = activeUserBlockReason(composer);
     if (beforeSendBlock && beforeSendBlock !== 'composer-not-empty') {
@@ -418,7 +433,7 @@
       return true;
     }
     if (message?.type === 'CHATGPT_WATCHDOG_CONTINUE_COMMAND') {
-      performWatchdogContinuation(message?.conversationId || '').then((result) => sendResponse?.(result))
+      performWatchdogContinuation(message?.conversationId || '', message?.promptKey || '').then((result) => sendResponse?.(result))
         .catch((error) => sendResponse?.({ ok: false, clicked: false, reason: 'watchdog-continuation-command-error', error: String(error?.message || error), documentId }));
       return true;
     }

@@ -486,11 +486,12 @@
     }
   }
 
-  async function sendCodeWatchdogContinuation(tabId, conversationId) {
+  async function sendCodeWatchdogContinuation(tabId, conversationId, promptKey = '') {
     try {
       return await chrome.tabs.sendMessage(tabId, {
         type: 'CHATGPT_WATCHDOG_CONTINUE_COMMAND',
-        conversationId
+        conversationId,
+        promptKey: String(promptKey || '')
       });
     } catch {}
     try {
@@ -500,11 +501,41 @@
       });
       return await chrome.tabs.sendMessage(tabId, {
         type: 'CHATGPT_WATCHDOG_CONTINUE_COMMAND',
-        conversationId
+        conversationId,
+        promptKey: String(promptKey || '')
       });
     } catch (error) {
       return { ok: false, clicked: false, reason: 'watchdog-runtime-unavailable', error: String(error?.message || error) };
     }
+  }
+
+  function codeWatchdogNoCodeEligibility(snapshot = {}) {
+    if (snapshot.observable === false) return { eligible: false, reason: 'page-unobservable' };
+    if (snapshot.online === false) return { eligible: false, reason: 'offline' };
+    if (snapshot.manualStopped === true) return { eligible: false, reason: 'manual-stop' };
+    if (snapshot.authRequired === true) return { eligible: false, reason: 'auth-required' };
+    if (snapshot.approvalRequired === true) return { eligible: false, reason: 'approval-required' };
+    if (snapshot.rateLimited === true) return { eligible: false, reason: 'rate-limited' };
+    if (snapshot.hasDraft === true) return { eligible: false, reason: 'draft-present' };
+    if (snapshot.hasUpload === true) return { eligible: false, reason: 'upload-present' };
+    if (snapshot.stopGenerating === true) return { eligible: false, reason: 'generation-active' };
+    if (snapshot.toolActivity === true) return { eligible: false, reason: 'tool-activity' };
+    if (snapshot.applicationStateIdentityMatched === false) return { eligible: false, reason: 'application-state-identity-mismatch' };
+
+    const requestPhase = String(snapshot.requestPhase || '');
+    if (!['completed', 'error'].includes(requestPhase)) {
+      return { eligible: false, reason: 'request-not-settled' };
+    }
+
+    if (String(snapshot.assistantKey || '')) {
+      return snapshot.stableTerminal === true
+        ? { eligible: true, reason: 'stable-terminal-no-code' }
+        : { eligible: false, reason: 'assistant-not-stable' };
+    }
+
+    return Number(snapshot.silentIdleConfirmations || 0) >= 2
+      ? { eligible: true, reason: 'silent-stop-confirmed' }
+      : { eligible: false, reason: 'silent-stop-unconfirmed' };
   }
 
   async function handleCodeWatchdogAlarm(conversationId) {
@@ -538,7 +569,7 @@
         await clearCodeWatchdog(conversationId);
         return;
       }
-      const result = await sendCodeWatchdogContinuation(tab.id, conversationId);
+      const result = await sendCodeWatchdogContinuation(tab.id, conversationId, String(live.promptKey || ''));
       record = await resetCodeWatchdogForIncomplete(live, { tab }, record, result?.ok === true ? Date.now() : 0, result?.continuationUserKey || '');
       if (result?.ok !== true) await scheduleCodeWatchdog(record, Date.now() + CODE_WATCHDOG_RETRY_MS);
       return;
@@ -552,7 +583,13 @@
       record = refreshed;
     }
 
-    const result = await sendCodeWatchdogContinuation(tab.id, conversationId);
+    const noCodeEligibility = codeWatchdogNoCodeEligibility(live);
+    if (noCodeEligibility.eligible !== true) {
+      await scheduleCodeWatchdog(record, Date.now() + CODE_WATCHDOG_RETRY_MS);
+      return;
+    }
+
+    const result = await sendCodeWatchdogContinuation(tab.id, conversationId, String(live.promptKey || ''));
     const racedStatusCode = String(result?.statusCode || '');
     if (globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(racedStatusCode)) {
       if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(racedStatusCode) === true) {
