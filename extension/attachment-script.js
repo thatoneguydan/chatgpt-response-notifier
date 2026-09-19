@@ -210,7 +210,7 @@
     if (!continueButton) return null;
 
     const indicator = buildAutomationIndicator();
-    continueButton.insertAdjacentElement('afterend', indicator);
+    continueButton.insertAdjacentElement('beforebegin', indicator);
     return indicator;
   }
 
