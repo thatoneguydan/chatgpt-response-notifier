@@ -486,11 +486,12 @@
     }
   }
 
-  async function sendCodeWatchdogContinuation(tabId, conversationId) {
+  async function sendCodeWatchdogContinuation(tabId, conversationId, promptKey = '') {
     try {
       return await chrome.tabs.sendMessage(tabId, {
         type: 'CHATGPT_WATCHDOG_CONTINUE_COMMAND',
-        conversationId
+        conversationId,
+        promptKey: String(promptKey || '')
       });
     } catch {}
     try {
@@ -500,7 +501,8 @@
       });
       return await chrome.tabs.sendMessage(tabId, {
         type: 'CHATGPT_WATCHDOG_CONTINUE_COMMAND',
-        conversationId
+        conversationId,
+        promptKey: String(promptKey || '')
       });
     } catch (error) {
       return { ok: false, clicked: false, reason: 'watchdog-runtime-unavailable', error: String(error?.message || error) };
@@ -567,7 +569,7 @@
         await clearCodeWatchdog(conversationId);
         return;
       }
-      const result = await sendCodeWatchdogContinuation(tab.id, conversationId);
+      const result = await sendCodeWatchdogContinuation(tab.id, conversationId, String(live.promptKey || ''));
       record = await resetCodeWatchdogForIncomplete(live, { tab }, record, result?.ok === true ? Date.now() : 0, result?.continuationUserKey || '');
       if (result?.ok !== true) await scheduleCodeWatchdog(record, Date.now() + CODE_WATCHDOG_RETRY_MS);
       return;
@@ -587,7 +589,7 @@
       return;
     }
 
-    const result = await sendCodeWatchdogContinuation(tab.id, conversationId);
+    const result = await sendCodeWatchdogContinuation(tab.id, conversationId, String(live.promptKey || ''));
     const racedStatusCode = String(result?.statusCode || '');
     if (globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(racedStatusCode)) {
       if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(racedStatusCode) === true) {
