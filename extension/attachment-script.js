@@ -88,7 +88,7 @@
       return {
         key: 'warning',
         label: 'Resume',
-        color: '#d8a85c',
+        color: '#f59e0b',
         desired: true,
         resume: true,
         disabled: false
@@ -108,7 +108,7 @@
       return {
         key: 'enabled',
         label: 'Pause',
-        color: '#8fb58f',
+        color: '#22c55e',
         desired: false,
         resume: false,
         disabled: false
@@ -117,7 +117,7 @@
     return {
       key: 'ready',
       label: 'Monitor',
-      color: '#888888',
+      color: '#3b82f6',
       desired: true,
       resume: false,
       disabled: false
