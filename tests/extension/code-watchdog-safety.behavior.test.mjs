@@ -17,6 +17,30 @@ function loadEligibility() {
   return context.__eligibility;
 }
 
+test('watchdog no-code path preserves normal safety vetoes', () => {
+  const eligibility = loadEligibility();
+  const cases = [
+    ['observable', false, 'page-unobservable'],
+    ['online', false, 'offline'],
+    ['manualStopped', true, 'manual-stop'],
+    ['authRequired', true, 'auth-required'],
+    ['approvalRequired', true, 'approval-required'],
+    ['rateLimited', true, 'rate-limited'],
+    ['hasDraft', true, 'draft-present'],
+    ['hasUpload', true, 'upload-present'],
+    ['stopGenerating', true, 'generation-active'],
+    ['toolActivity', true, 'tool-activity'],
+    ['applicationStateIdentityMatched', false, 'application-state-identity-mismatch']
+  ];
+  for (const [field, value, reason] of cases) {
+    assert.deepEqual(
+      { ...eligibility({ requestPhase: 'completed', assistantKey: 'assistant-1', stableTerminal: true, [field]: value }) },
+      { eligible: false, reason },
+      field
+    );
+  }
+});
+
 test('watchdog no-code path never acts on active or unsettled work', () => {
   const eligibility = loadEligibility();
 
