@@ -32,6 +32,7 @@
   let scheduled = null;
   let scheduledWithAnimationFrame = false;
   let clockTimer = null;
+  let toolbarHideTimer = null;
   let busy = false;
   let currentConfig = null;
   let configLoadPromise = null;
@@ -807,6 +808,22 @@
     } catch {}
   }
 
+  function scheduleToolbarHide(root) {
+    if (toolbarHideTimer !== null) return;
+    toolbarHideTimer = setTimeout(() => {
+      toolbarHideTimer = null;
+      const composer = composerElement();
+      const anchor = composerAnchor(composer);
+      if (!composer || !anchor || !visible(anchor)) root.style.display = 'none';
+    }, 200);
+  }
+
+  function cancelToolbarHide() {
+    if (toolbarHideTimer === null) return;
+    clearTimeout(toolbarHideTimer);
+    toolbarHideTimer = null;
+  }
+
   function syncToolbar() {
     scheduled = null;
     suppressLegacyNotifierToolbar();
@@ -816,16 +833,16 @@
     observeGeometry(composer, anchor);
 
     if (!composer || !anchor || !visible(anchor)) {
-      root.style.display = 'none';
+      scheduleToolbarHide(root);
       return;
     }
 
+    cancelToolbarHide();
     const now = new Date();
     updateAvailability(composer);
     if (clock) clock.textContent = formatClock(now);
 
     root.style.display = 'flex';
-    root.style.visibility = 'hidden';
     const rect = anchor.getBoundingClientRect();
     const width = root.offsetWidth;
     const height = root.offsetHeight;
@@ -865,7 +882,7 @@
   clockTimer = setInterval(scheduleSync, 30_000);
 
   globalThis.__chatgptQuickContinueRuntime = Object.freeze({
-    version: 3,
+    version: 4,
     dispose() {
       try { observer?.disconnect(); } catch {}
       try { resizeObserver?.disconnect(); } catch {}
@@ -877,6 +894,7 @@
         }
       } catch {}
       try { if (clockTimer !== null) clearInterval(clockTimer); } catch {}
+      try { if (toolbarHideTimer !== null) clearTimeout(toolbarHideTimer); } catch {}
       try { if (statusTimer !== null) clearTimeout(statusTimer); } catch {}
       try { toolbar?.remove(); } catch {}
     }

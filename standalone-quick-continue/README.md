@@ -14,6 +14,7 @@ When ChatGPT Response Notifier is also enabled, the notifier may add its own sma
 - **Other project…** remains available for one-off names.
 - **Edit** opens the current raw JSON config directly inside the Project menu. **Save** validates and applies it immediately without reloading the extension or refreshing ChatGPT.
 - The Project menu normally opens upward. If that would cross the viewport top, it flips below the toolbar; if neither side fully fits, it uses the side with more room.
+- Toolbar layout syncs keep the existing toolbar visible; brief ChatGPT composer rerenders are given a 200 ms grace period before the toolbar is hidden, preventing one-frame flicker.
 
 The bundled `config.json` is the readable/default configuration:
 
