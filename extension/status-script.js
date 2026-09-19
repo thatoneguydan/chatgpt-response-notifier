@@ -311,11 +311,16 @@
   }
 
 
-  async function performWatchdogContinuation(expectedConversationId = '') {
+  async function performWatchdogContinuation(expectedConversationId = '', expectedPromptKey = '') {
     const expectedId = String(expectedConversationId || '');
+    const expectedPrompt = String(expectedPromptKey || '');
     const identity = conversationIdentity();
     if (!identity?.id || (expectedId && identity.id !== expectedId)) {
       return { ok: false, clicked: false, reason: 'watchdog-conversation-changed', documentId };
+    }
+    const initialPromptKey = latestAssistantSnapshot()?.promptKey || latestUserSnapshot()?.key || '';
+    if (expectedPrompt && initialPromptKey !== expectedPrompt) {
+      return { ok: false, clicked: false, reason: 'watchdog-prompt-changed', documentId };
     }
 
     const observed = latestAssistantSnapshot();
@@ -354,6 +359,11 @@
     if (!beforeSendIdentity?.id || (expectedId && beforeSendIdentity.id !== expectedId)) {
       if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
       return { ok: false, clicked: false, reason: 'watchdog-conversation-changed-before-send', documentId };
+    }
+    const beforeSendPromptKey = latestAssistantSnapshot()?.promptKey || latestUserSnapshot()?.key || '';
+    if (expectedPrompt && beforeSendPromptKey !== expectedPrompt) {
+      if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
+      return { ok: false, clicked: false, reason: 'watchdog-prompt-changed-before-send', documentId };
     }
 
     const beforeSendStatusCode = String(latestAssistantSnapshot()?.statusCode || '');
@@ -423,7 +433,7 @@
       return true;
     }
     if (message?.type === 'CHATGPT_WATCHDOG_CONTINUE_COMMAND') {
-      performWatchdogContinuation(message?.conversationId || '').then((result) => sendResponse?.(result))
+      performWatchdogContinuation(message?.conversationId || '', message?.promptKey || '').then((result) => sendResponse?.(result))
         .catch((error) => sendResponse?.({ ok: false, clicked: false, reason: 'watchdog-continuation-command-error', error: String(error?.message || error), documentId }));
       return true;
     }
