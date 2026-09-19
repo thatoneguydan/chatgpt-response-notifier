@@ -3,6 +3,8 @@
 (() => {
   const QUICK_CONTINUE_TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const AUTOMATION_INDICATOR_ID = 'chatgpt-notifier-automation-indicator';
+  const AUTOMATION_STATUS_ID = 'chatgpt-notifier-automation-status';
+  const AUTOMATION_DUE_REFRESH_MS = 5000;
 
   let extensionVersion = '';
   try { extensionVersion = String(chrome.runtime.getManifest().version || ''); } catch {}
@@ -60,9 +62,12 @@
 
   let automationIndicator = null;
   let automationDot = null;
+  let automationStatus = null;
   let automationBusy = false;
   let automationOverview = null;
   let automationIndicatorObserver = null;
+  let automationCountdownTimerId = null;
+  let automationDueRefreshAt = 0;
 
   function recoveryPauseReason(overview) {
     const recovery = overview?.recovery;
@@ -77,7 +82,7 @@
       return {
         key: 'unavailable',
         label: 'Monitor unavailable',
-        color: '#666666',
+        color: '#888888',
         desired: true,
         resume: false,
         disabled: true
@@ -87,7 +92,7 @@
       return {
         key: 'warning',
         label: 'Resume',
-        color: '#f59e0b',
+        color: '#888888',
         desired: true,
         resume: true,
         disabled: false
@@ -97,7 +102,7 @@
       return {
         key: 'warning',
         label: 'Resume',
-        color: '#f59e0b',
+        color: '#888888',
         desired: true,
         resume: true,
         disabled: false
@@ -116,11 +121,104 @@
     return {
       key: 'ready',
       label: 'Monitor',
-      color: '#3b82f6',
+      color: '#888888',
       desired: true,
       resume: false,
       disabled: false
     };
+  }
+
+  function formatCountdown(milliseconds) {
+    const seconds = Math.max(0, Math.ceil(Number(milliseconds || 0) / 1000));
+    const minutes = Math.floor(seconds / 60);
+    const remainder = seconds % 60;
+    return `${minutes}:${String(remainder).padStart(2, '0')}`;
+  }
+
+  function automationStatusText(overview = automationOverview, now = Date.now()) {
+    if (overview?.automationEnabled !== true) return '';
+    const watchdog = overview?.codeWatchdog || null;
+    const maxSends = Math.max(1, Number(overview?.codeWatchdogMaxSends || 3));
+    const sendCount = Math.max(0, Number(watchdog?.sendCount || 0));
+    const remaining = Math.max(0, maxSends - sendCount);
+
+    if (remaining <= 0 || (watchdog?.stopped === true && String(watchdog?.stopReason || '') === 'retry-cap-reached')) {
+      return 'Auto-continues exhausted';
+    }
+
+    const remainingText = `${remaining} left`;
+    const deadlineAt = Math.max(0, Number(watchdog?.deadlineAt || 0));
+    if (deadlineAt > 0) {
+      if (deadlineAt <= Number(now)) return `Next auto-continue due · ${remainingText}`;
+      return `Next auto-continue ${formatCountdown(deadlineAt - Number(now))} · ${remainingText}`;
+    }
+
+    if (watchdog?.stopped === true) return `Auto-continue stopped · ${remainingText}`;
+    return `Auto-continue waiting · ${remainingText}`;
+  }
+
+  function ensureAutomationStatus() {
+    const toolbar = document.getElementById(QUICK_CONTINUE_TOOLBAR_ID);
+    if (!toolbar) {
+      automationStatus = null;
+      return null;
+    }
+
+    const existing = document.getElementById(AUTOMATION_STATUS_ID);
+    if (existing && existing.parentElement === toolbar) {
+      automationStatus = existing;
+      return existing;
+    }
+    if (existing) {
+      try { existing.remove(); } catch {}
+    }
+
+    const status = document.createElement('div');
+    status.id = AUTOMATION_STATUS_ID;
+    status.hidden = true;
+    status.setAttribute('role', 'status');
+    Object.assign(status.style, {
+      position: 'absolute',
+      left: '22px',
+      bottom: 'calc(100% + 3px)',
+      padding: '2px 4px',
+      borderRadius: '5px',
+      background: 'var(--main-surface-primary, #fff)',
+      color: 'var(--text-secondary, #666)',
+      fontSize: '9px',
+      lineHeight: '1.2',
+      fontVariantNumeric: 'tabular-nums',
+      whiteSpace: 'nowrap',
+      pointerEvents: 'none',
+      opacity: '.78'
+    });
+    toolbar.append(status);
+    automationStatus = status;
+    return status;
+  }
+
+  function renderAutomationStatus(overview = automationOverview) {
+    const status = ensureAutomationStatus();
+    if (!status) return;
+    const text = automationStatusText(overview);
+    status.hidden = !text;
+    status.textContent = text;
+  }
+
+  function tickAutomationStatus() {
+    renderAutomationStatus();
+    const watchdog = automationOverview?.codeWatchdog;
+    const deadlineAt = Math.max(0, Number(watchdog?.deadlineAt || 0));
+    const now = Date.now();
+    if (
+      automationOverview?.automationEnabled === true
+      && deadlineAt > 0
+      && deadlineAt <= now
+      && now >= automationDueRefreshAt
+    ) {
+      automationDueRefreshAt = now + AUTOMATION_DUE_REFRESH_MS;
+      refreshAutomationIndicator().catch(() => {});
+    }
   }
 
   function renderAutomationIndicator(overview = automationOverview) {
@@ -136,6 +234,7 @@
         : `Build automation: ${mode.label}. Click to ${mode.label.toLowerCase()}.`
     );
     automationIndicator.dataset.state = mode.key;
+    renderAutomationStatus(overview);
     if (mode.disabled) {
       automationDot.style.visibility = 'hidden';
       return;
@@ -197,6 +296,7 @@
     if (!toolbar) {
       automationIndicator = null;
       automationDot = null;
+      automationStatus = null;
       return null;
     }
 
@@ -217,6 +317,7 @@
 
     const indicator = buildAutomationIndicator();
     continueButton.insertAdjacentElement('beforebegin', indicator);
+    ensureAutomationStatus();
     return indicator;
   }
 
@@ -298,6 +399,7 @@
   function maintainAutomationIndicator() {
     const previousIndicator = automationIndicator;
     const indicator = ensureAutomationIndicator();
+    ensureAutomationStatus();
     if (!indicator || document.visibilityState === 'hidden') return;
     if (indicator !== previousIndicator || !automationOverview) {
       refreshAutomationIndicator().catch(() => {});
@@ -331,18 +433,21 @@
   });
   automationIndicatorObserver.observe(document.documentElement, { childList: true, subtree: true });
   setTimeout(() => { maintainAutomationIndicator(); }, 100);
+  automationCountdownTimerId = setInterval(tickAutomationStatus, 1000);
 
   globalThis.__chatgptNotifierAttachmentRuntime = Object.freeze({
-    version: 4,
+    version: 5,
     extensionVersion,
     dispose() {
       try { if (heartbeatTimerId !== null) clearInterval(heartbeatTimerId); } catch {}
       try { if (heartbeatInitialTimerId !== null) clearTimeout(heartbeatInitialTimerId); } catch {}
       try { automationIndicatorObserver?.disconnect(); } catch {}
+      try { if (automationCountdownTimerId !== null) clearInterval(automationCountdownTimerId); } catch {}
       try { chrome.runtime.onMessage.removeListener(handleAutomationStateMessage); } catch {}
       try { document.removeEventListener('visibilitychange', handleVisibilityChange, true); } catch {}
       try { window.removeEventListener('focus', handleWindowFocus, true); } catch {}
       try { document.getElementById(AUTOMATION_INDICATOR_ID)?.remove(); } catch {}
+      try { document.getElementById(AUTOMATION_STATUS_ID)?.remove(); } catch {}
     }
   });
 })();

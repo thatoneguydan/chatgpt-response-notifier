@@ -29,6 +29,7 @@
   let attentionFlushPromise = null;
   const requestTabs = new Map();
   const tabConversations = new Map();
+  const codeWatchdogOverviewSignatures = new Map();
 
   function conversationFromUrl(rawUrl) {
     try {
@@ -296,6 +297,18 @@
     const value = String(name || '');
     if (!value.startsWith(CODE_WATCHDOG_ALARM_PREFIX)) return '';
     try { return decodeURIComponent(value.slice(CODE_WATCHDOG_ALARM_PREFIX.length)); } catch { return ''; }
+  }
+
+  function codeWatchdogOverviewSignature(record) {
+    if (!record) return '';
+    return [
+      Math.max(0, Number(record.sendCount || 0)),
+      Math.max(0, Number(record.deadlineAt || 0)),
+      record.stopped === true ? 1 : 0,
+      String(record.stopReason || ''),
+      record.waitingForRequestStart === true ? 1 : 0,
+      Math.max(0, Number(record.lastRequestStartedAt || 0))
+    ].join('|');
   }
 
   async function readCodeWatchdog(conversationId) {
@@ -833,8 +846,12 @@
     }
 
     const run = await updateRun(clean, sender);
-    await reconcileCodeWatchdog(clean, sender);
-    if (enrollmentChanged && senderTarget) publishAutomationOverview(senderTarget).catch(() => {});
+    const codeWatchdog = await reconcileCodeWatchdog(clean, sender);
+    const watchdogSignature = codeWatchdogOverviewSignature(codeWatchdog);
+    const previousWatchdogSignature = codeWatchdogOverviewSignatures.get(clean.conversationId);
+    const watchdogChanged = watchdogSignature !== previousWatchdogSignature;
+    if (watchdogChanged) codeWatchdogOverviewSignatures.set(clean.conversationId, watchdogSignature);
+    if ((enrollmentChanged || watchdogChanged) && senderTarget) publishAutomationOverview(senderTarget).catch(() => {});
     return run;
   }
 
@@ -943,6 +960,7 @@
       attention,
       profile,
       codeWatchdog,
+      codeWatchdogMaxSends: CODE_WATCHDOG_MAX_SENDS,
       helperConnected
     };
   }
