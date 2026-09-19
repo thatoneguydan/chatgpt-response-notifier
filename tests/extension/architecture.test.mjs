@@ -580,6 +580,12 @@ test('notifier-owned Quick Continue light mirrors popup automation states withou
   assert.match(attachment, /#22c55e/);
   assert.match(attachment, /#f59e0b/);
   assert.doesNotMatch(attachment, /automationBusy \? '\\.62'/);
+  assert.doesNotMatch(attachment, /AUTOMATION_REFRESH_MS/);
+  assert.doesNotMatch(attachment, /setInterval\(maintainAutomationIndicator/);
+  assert.match(attachment, /if \(!overview\) return automationOverview/);
+  assert.match(attachment, /visibility = 'hidden'/);
+  assert.match(attachment, /boxShadow = 'none'/);
+  assert.match(attachment, /new MutationObserver/);
   assert.doesNotMatch(attachment, /transition\s*:/);
   assert.doesNotMatch(attachment, /animation\s*:/);
   assert.doesNotMatch(attachment, /@keyframes/);

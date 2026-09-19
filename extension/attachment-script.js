@@ -3,7 +3,6 @@
 (() => {
   const QUICK_CONTINUE_TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const AUTOMATION_INDICATOR_ID = 'chatgpt-notifier-automation-indicator';
-  const AUTOMATION_REFRESH_MS = 5000;
 
   let extensionVersion = '';
   try { extensionVersion = String(chrome.runtime.getManifest().version || ''); } catch {}
@@ -63,7 +62,7 @@
   let automationDot = null;
   let automationBusy = false;
   let automationOverview = null;
-  let automationRefreshTimerId = null;
+  let automationIndicatorObserver = null;
 
   function recoveryPauseReason(overview) {
     const recovery = overview?.recovery;
@@ -129,7 +128,7 @@
     const mode = automationMode(overview);
     automationIndicator.disabled = automationBusy || mode.disabled;
     automationIndicator.style.cursor = automationIndicator.disabled ? 'default' : 'pointer';
-    automationIndicator.style.opacity = mode.disabled ? '.46' : '1';
+    automationIndicator.style.opacity = '1';
     automationIndicator.setAttribute(
       'aria-label',
       mode.disabled
@@ -137,8 +136,13 @@
         : `Build automation: ${mode.label}. Click to ${mode.label.toLowerCase()}.`
     );
     automationIndicator.dataset.state = mode.key;
+    if (mode.disabled) {
+      automationDot.style.visibility = 'hidden';
+      return;
+    }
+    automationDot.style.visibility = 'visible';
     automationDot.style.background = mode.color;
-    automationDot.style.boxShadow = `0 0 0 1px color-mix(in srgb, ${mode.color} 72%, transparent), 0 0 5px color-mix(in srgb, ${mode.color} 42%, transparent)`;
+    automationDot.style.boxShadow = 'none';
   }
 
   function buildAutomationIndicator() {
@@ -167,7 +171,9 @@
       width: '8px',
       height: '8px',
       borderRadius: '999px',
-      background: '#666666'
+      background: 'transparent',
+      visibility: 'hidden',
+      boxShadow: 'none'
     });
     button.append(dot);
 
@@ -229,6 +235,7 @@
     const indicator = ensureAutomationIndicator();
     if (!indicator || document.visibilityState === 'hidden') return automationOverview;
     const overview = await readAutomationOverview();
+    if (!overview) return automationOverview;
     automationOverview = overview;
     renderAutomationIndicator(overview);
     return overview;
@@ -245,8 +252,8 @@
     automationBusy = true;
     renderAutomationIndicator();
     try {
-      const before = await readAutomationOverview();
-      automationOverview = before;
+      const before = (await readAutomationOverview()) || automationOverview;
+      if (before) automationOverview = before;
       const mode = automationMode(before);
       if (!before || mode.disabled) return;
 
@@ -289,16 +296,20 @@
   }
 
   function maintainAutomationIndicator() {
+    const previousIndicator = automationIndicator;
     const indicator = ensureAutomationIndicator();
     if (!indicator || document.visibilityState === 'hidden') return;
-    refreshAutomationIndicator().catch(() => {});
+    if (indicator !== previousIndicator || !automationOverview) {
+      refreshAutomationIndicator().catch(() => {});
+    }
   }
 
   function handleAutomationStateMessage(message) {
     if (message?.type !== 'BUILD_AUTOMATION_STATE_CHANGED') return false;
     const indicator = ensureAutomationIndicator();
     if (!indicator) return false;
-    automationOverview = message.overview || null;
+    if (!message.overview) return false;
+    automationOverview = message.overview;
     renderAutomationIndicator(automationOverview);
     return false;
   }
@@ -315,17 +326,19 @@
   try { chrome.runtime.onMessage.addListener(handleAutomationStateMessage); } catch {}
   document.addEventListener('visibilitychange', handleVisibilityChange, true);
   window.addEventListener('focus', handleWindowFocus, true);
-  setTimeout(() => { maintainAutomationIndicator(); }, 400);
-  automationRefreshTimerId = setInterval(maintainAutomationIndicator, AUTOMATION_REFRESH_MS);
+  automationIndicatorObserver = new MutationObserver(() => {
+    maintainAutomationIndicator();
+  });
+  automationIndicatorObserver.observe(document.documentElement, { childList: true, subtree: true });
+  setTimeout(() => { maintainAutomationIndicator(); }, 100);
 
   globalThis.__chatgptNotifierAttachmentRuntime = Object.freeze({
-    version: 3,
+    version: 4,
     extensionVersion,
-    indicatorTimerId: automationRefreshTimerId,
     dispose() {
       try { if (heartbeatTimerId !== null) clearInterval(heartbeatTimerId); } catch {}
       try { if (heartbeatInitialTimerId !== null) clearTimeout(heartbeatInitialTimerId); } catch {}
-      try { if (automationRefreshTimerId !== null) clearInterval(automationRefreshTimerId); } catch {}
+      try { automationIndicatorObserver?.disconnect(); } catch {}
       try { chrome.runtime.onMessage.removeListener(handleAutomationStateMessage); } catch {}
       try { document.removeEventListener('visibilitychange', handleVisibilityChange, true); } catch {}
       try { window.removeEventListener('focus', handleWindowFocus, true); } catch {}
