@@ -167,19 +167,16 @@
       width: '8px',
       height: '8px',
       borderRadius: '999px',
-      background: '#666666',
-      transition: 'box-shadow 90ms ease, transform 90ms ease'
+      background: '#666666'
     });
     button.append(dot);
 
     button.addEventListener('mouseenter', () => {
       if (button.disabled) return;
       button.style.background = 'var(--main-surface-tertiary, rgba(127,127,127,.14))';
-      dot.style.transform = 'scale(1.08)';
     });
     button.addEventListener('mouseleave', () => {
       button.style.background = 'transparent';
-      dot.style.transform = 'scale(1)';
     });
     button.addEventListener('click', cycleAutomationState);
 
