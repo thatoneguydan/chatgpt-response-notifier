@@ -943,6 +943,7 @@
       attention,
       profile,
       codeWatchdog,
+      codeWatchdogMaxSends: CODE_WATCHDOG_MAX_SENDS,
       helperConnected
     };
   }
