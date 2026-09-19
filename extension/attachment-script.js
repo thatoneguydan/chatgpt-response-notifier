@@ -98,7 +98,7 @@
       return {
         key: 'warning',
         label: 'Resume',
-        color: '#d8a85c',
+        color: '#f59e0b',
         desired: true,
         resume: true,
         disabled: false
@@ -129,7 +129,7 @@
     const mode = automationMode(overview);
     automationIndicator.disabled = automationBusy || mode.disabled;
     automationIndicator.style.cursor = automationIndicator.disabled ? 'default' : 'pointer';
-    automationIndicator.style.opacity = automationBusy ? '.62' : mode.disabled ? '.46' : '1';
+    automationIndicator.style.opacity = mode.disabled ? '.46' : '1';
     automationIndicator.setAttribute(
       'aria-label',
       mode.disabled
@@ -281,7 +281,6 @@
 
       automationOverview = result;
     } catch {
-      automationOverview = null;
       setTimeout(() => { refreshAutomationIndicator().catch(() => {}); }, 800);
     } finally {
       automationBusy = false;
