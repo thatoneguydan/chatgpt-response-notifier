@@ -1,0 +1,142 @@
+name: Apply live notifier v0.9.37
+
+on:
+  push:
+    branches: [ops/apply-live-v0.9.37]
+    paths:
+      - .github/workflows/apply-live-v0.9.37.yml
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 10
+    steps:
+      - name: Apply managed update to interactive notifier
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expectedVersion = '0.9.37'
+          $expectedSource = 'aa90f2dad4503987f70fc23ff564a7fe2ef16274'
+          $port = 38473
+
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class NotifierSessionNative937
+          {
+              [DllImport("kernel32.dll")]
+              public static extern uint WTSGetActiveConsoleSessionId();
+          }
+          '@
+
+          function Get-ActiveConsoleSession {
+            $session = [NotifierSessionNative937]::WTSGetActiveConsoleSessionId()
+            if ($session -eq [uint32]::MaxValue) { throw 'Windows reports no active console session.' }
+            return [int]$session
+          }
+
+          function Get-BridgeOwner {
+            $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $listener) { return $null }
+            $process = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
+            if (-not $process) { return $null }
+            return [pscustomobject]@{ Pid = [int]$process.Id; SessionId = [int]$process.SessionId }
+          }
+
+          function Invoke-BridgeMessage([hashtable]$Message, [int]$TimeoutSeconds = 20) {
+            $socket = [System.Net.WebSockets.ClientWebSocket]::new()
+            $socket.Options.SetRequestHeader('Origin', 'chrome-extension://lciedmoiiapbgemklkpoadimhffaaaah')
+            $cts = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds($TimeoutSeconds))
+            try {
+              $socket.ConnectAsync([Uri]"ws://127.0.0.1:$port/bridge", $cts.Token).GetAwaiter().GetResult()
+              $json = $Message | ConvertTo-Json -Compress
+              $bytes = [Text.Encoding]::UTF8.GetBytes($json)
+              $socket.SendAsync([ArraySegment[byte]]::new($bytes), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $cts.Token).GetAwaiter().GetResult()
+
+              $buffer = New-Object byte[] 65536
+              for ($attempt = 0; $attempt -lt 30; $attempt++) {
+                $result = $socket.ReceiveAsync([ArraySegment[byte]]::new($buffer), $cts.Token).GetAwaiter().GetResult()
+                if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { break }
+                $event = ([Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count) | ConvertFrom-Json)
+                if ([string]$event.requestId -eq [string]$Message.requestId) { return $event }
+              }
+              return $null
+            } finally {
+              try { $socket.Dispose() } catch {}
+              $cts.Dispose()
+            }
+          }
+
+          function Ping-Bridge([int]$TimeoutSeconds = 20) {
+            $requestId = [Guid]::NewGuid().ToString('N')
+            return Invoke-BridgeMessage @{ type = 'ping'; requestId = $requestId } $TimeoutSeconds
+          }
+
+          $activeSession = Get-ActiveConsoleSession
+          $owner = Get-BridgeOwner
+          if (-not $owner) { throw 'No notifier helper is listening on the production localhost bridge.' }
+          if ($owner.SessionId -ne $activeSession) {
+            throw 'Production notifier bridge is not owned by the interactive Windows session.'
+          }
+
+          $before = Ping-Bridge 20
+          if (-not $before) { throw 'Interactive notifier helper did not answer the pre-update ping.' }
+
+          Write-Host ("PRECHECK " + (@{
+            version = [string]$before.installedExtensionVersion
+            sourceMatchesExpected = ([string]$before.installedSourceCommit -eq $expectedSource)
+            bridgeOwnerInteractive = $true
+          } | ConvertTo-Json -Compress))
+
+          $alreadyCurrent = (
+            [string]$before.installedExtensionVersion -eq $expectedVersion -and
+            [string]$before.installedSourceCommit -eq $expectedSource
+          )
+
+          if (-not $alreadyCurrent) {
+            $requestId = [Guid]::NewGuid().ToString('N')
+            try {
+              $result = Invoke-BridgeMessage @{ type = 'update.check'; requestId = $requestId } 180
+              Write-Host ("UPDATE_RESULT " + (@{
+                received = ($null -ne $result)
+                state = [string]$result.updateStatus.state
+                currentVersion = [string]$result.updateStatus.currentVersion
+                availableVersion = [string]$result.updateStatus.availableVersion
+                errorPresent = -not [string]::IsNullOrWhiteSpace([string]$result.updateStatus.error)
+              } | ConvertTo-Json -Compress))
+            } catch {
+              Write-Host 'UPDATE_RESULT connection-replaced-during-update'
+            }
+          }
+
+          $deadline = [DateTime]::UtcNow.AddMinutes(4)
+          $verified = $null
+          do {
+            Start-Sleep -Seconds 2
+            $currentOwner = Get-BridgeOwner
+            if (-not $currentOwner -or $currentOwner.SessionId -ne $activeSession) { continue }
+            try { $pong = Ping-Bridge 10 } catch { $pong = $null }
+            if (
+              $pong -and
+              [string]$pong.installedExtensionVersion -eq $expectedVersion -and
+              [string]$pong.installedSourceCommit -eq $expectedSource
+            ) {
+              $verified = $pong
+              break
+            }
+          } while ([DateTime]::UtcNow -lt $deadline)
+
+          if (-not $verified) {
+            throw 'Live interactive notifier did not report the expected v0.9.37 version/source after managed update.'
+          }
+
+          Write-Host ("VERIFIED " + (@{
+            version = [string]$verified.installedExtensionVersion
+            sourceMatchesExpected = ([string]$verified.installedSourceCommit -eq $expectedSource)
+            bridgeOwnerInteractive = $true
+            managedUpdateApplied = (-not $alreadyCurrent)
+            alreadyCurrent = $alreadyCurrent
+          } | ConvertTo-Json -Compress))
