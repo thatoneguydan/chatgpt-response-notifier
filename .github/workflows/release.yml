@@ -91,15 +91,15 @@ jobs:
           $version = (Get-Content -LiteralPath .\VERSION.txt -Raw).Trim()
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'VERSION.txt is empty.' }
           $tag = "v$version"
-          $releaseNotes = @(
-            'Adds bounded read-only diagnostics to compare the forked notifier registration against the original unpacked notifier that remains persistent on Glass.',
-            '',
-            '- The Chrome Web Store migration remains paused; v0.9.29 does not change the extension distribution or installation method.',
-            '- The interactive helper compares only extension registration metadata needed to explain the persistence difference: state/location, disable reasons, safe path category/existence, manifest readability/version, and key-derived ID consistency.',
-            '- Raw Chrome profile contents and raw extension paths are not exported. The comparison adapter enforces a sanitized evidence schema before upload.',
-            '- The diagnostic path is read-only: it does not write Chrome Preferences or Secure Preferences and does not load, reload, enable, disable, move, or reinstall either extension.',
-            '- Existing notification behavior, bounded recovery, and the v0.9.28 cross-desktop click fallback are retained unchanged.'
-          ) -join [Environment]::NewLine
+          $releaseNotesPath = '.\RELEASE_NOTES.md'
+          if (-not (Test-Path -LiteralPath $releaseNotesPath -PathType Leaf)) { throw 'RELEASE_NOTES.md is missing.' }
+          $releaseNotes = (Get-Content -LiteralPath $releaseNotesPath -Raw).Trim()
+          if ([string]::IsNullOrWhiteSpace($releaseNotes)) { throw 'RELEASE_NOTES.md is empty.' }
+          $expectedReleaseHeading = "# ChatGPT Response Notifier $version"
+          $releaseHeading = (($releaseNotes -split "`r?`n", 2)[0]).Trim()
+          if ($releaseHeading -ne $expectedReleaseHeading) {
+            throw "RELEASE_NOTES.md heading mismatch. Expected '$expectedReleaseHeading', found '$releaseHeading'."
+          }
           $artifactRoot = Join-Path $env:RUNNER_TEMP "chatgpt-response-notifier-release-$version"
           Remove-Item -LiteralPath $artifactRoot -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
