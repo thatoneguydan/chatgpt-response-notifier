@@ -4,6 +4,8 @@ A tiny, separately installable Chrome extension for timestamped continuation pro
 
 It is intentionally independent from ChatGPT Response Notifier. It has no service worker, notification system, response monitoring, recovery loop, helper connection, `webRequest`, or background network behavior. The only added Chrome permission is `storage`, used for the live local JSON config.
 
+When ChatGPT Response Notifier is also enabled, the notifier may add its own small monitoring-state light immediately after **Continue**. Quick Continue does not read or write notifier state itself; disabling the notifier removes that integration without changing Quick Continue's send controls.
+
 ## Controls
 
 - **Continue** immediately sends the configured timestamped Continue text.
