@@ -341,6 +341,7 @@ test('native toast renders persisted completion time, keeps failed clicks retrya
   const app = readText('src/ChatGPTResponseNotifier.Host/NativeHostApplication.cs');
   const manifest = JSON.parse(readText('extension/manifest.json'));
   const version = readText('VERSION.txt').trim();
+  const releaseNotes = readText('RELEASE_NOTES.md');
 
   assert.match(toast, /FormatCompletedAt\(record\.CompletedAt\)/);
   assert.match(toast, /value\.ToLocalTime\(\)/);
@@ -366,6 +367,7 @@ test('native toast renders persisted completion time, keeps failed clicks retrya
   assert.doesNotMatch(app, /click-shell-fallback/);
   assert.equal(version, '0.9.40');
   assert.equal(manifest.version, version);
+  assert.equal(releaseNotes.split(/\r?\n/, 1)[0].trim(), `# ChatGPT Response Notifier ${version}`);
 });
 
 test('Chrome registration diagnostics v2 remain bounded and read-only', () => {
