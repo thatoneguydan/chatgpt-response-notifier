@@ -92,6 +92,19 @@ test('page-side watchdog has an independent active-generation veto', () => {
   assert.match(watchdog, /response-still-generating-before-send/);
 });
 
+test('watchdog command is bound to the exact prompt at both send boundaries', () => {
+  assert.match(monitorSource, /promptKey:\s*String\(promptKey \|\| ''\)/);
+  assert.match(monitorSource, /sendCodeWatchdogContinuation\(tab\.id, conversationId, String\(live\.promptKey \|\| ''\)\)/);
+
+  const start = statusSource.indexOf('async function performWatchdogContinuation');
+  const end = statusSource.indexOf('async function waitForTerminalStatus', start);
+  const watchdog = statusSource.slice(start, end);
+  assert.match(watchdog, /expectedPromptKey/);
+  assert.match(watchdog, /watchdog-prompt-changed/);
+  assert.match(watchdog, /watchdog-prompt-changed-before-send/);
+  assert.match(statusSource, /performWatchdogContinuation\(message\?\.conversationId \|\| '', message\?\.promptKey \|\| ''\)/);
+});
+
 test('settlement repair preserves watchdog timing and retry cap', () => {
   assert.match(monitorSource, /CODE_WATCHDOG_DELAY_MS = 30 \* 60_000/);
   assert.match(monitorSource, /CODE_WATCHDOG_RETRY_MS = 60_000/);
