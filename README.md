@@ -21,7 +21,7 @@ Persistent, independently stacked Windows notifications for GitHub-backed ChatGP
 - clicking a Windows notification focuses an existing matching chat or opens the saved chat URL;
 - communicates with the Windows helper only over a loopback WebSocket (`127.0.0.1`);
 - checks, downloads, verifies, and installs updates silently in the Windows helper;
-- when the standalone Quick Continue toolbar is present, adds a small monitoring-state light immediately after **Continue**: gray for Monitor/ready, green for active/Pause, and amber for Resume/paused or recovery-guarded; clicking it uses the same verified Monitor → Pause → Resume control path as the popup;
+- when the standalone Quick Continue toolbar is present, adds a small monitoring-state light immediately before **Continue**: blue for Monitor/ready, saturated green for active/Pause, and saturated amber for Resume/paused or recovery-guarded; clicking it uses the same verified Monitor → Pause → Resume control path as the popup;
 - plays the existing two-note completion chime from the helper.
 
 The Windows toast is intentionally compact and light themed. It renders the full Chrome tab title, the GitHub work-session status code, and the dismiss button. The response preview and completion timestamp remain in the notification payload/persisted model for popup history and possible future toast layouts, but are not rendered in the Windows toast.
