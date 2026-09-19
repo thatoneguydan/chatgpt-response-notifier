@@ -771,7 +771,9 @@
     if (!clean.conversationId || !clean.promptKey) return null;
     if (Number.isInteger(sender?.tab?.id)) tabConversations.set(sender.tab.id, clean.conversationId);
 
-    let enrollment = await migrateProvisionalIfReady(clean, sender) || await getEnrollment(clean.conversationId);
+    const migratedEnrollment = await migrateProvisionalIfReady(clean, sender);
+    let enrollmentChanged = Boolean(migratedEnrollment);
+    let enrollment = migratedEnrollment || await getEnrollment(clean.conversationId);
     const statusIsValid = Boolean(globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(clean.statusCode));
     const freshRequestEvidence = clean.requestStartedAt > 0 && ['started', 'completed', 'error'].includes(clean.requestPhase);
     const recognizedScope = freshRequestEvidence && (clean.workStartSignal === true || statusIsValid);
@@ -781,10 +783,21 @@
         true,
         clean.workStartSignal === true ? 'work-start-signal' : 'coded-turn'
       );
+      enrollmentChanged = true;
     }
-    if (enrollment?.enabled !== true || enrollment?.userPaused === true) return null;
+
+    const senderTarget = Number.isInteger(sender?.tab?.id)
+      ? { tab: sender.tab, id: clean.conversationId, url: clean.conversationUrl }
+      : null;
+
+    if (enrollment?.enabled !== true || enrollment?.userPaused === true) {
+      if (enrollmentChanged && senderTarget) publishAutomationOverview(senderTarget).catch(() => {});
+      return null;
+    }
+
     const run = await updateRun(clean, sender);
     await reconcileCodeWatchdog(clean, sender);
+    if (enrollmentChanged && senderTarget) publishAutomationOverview(senderTarget).catch(() => {});
     return run;
   }
 
@@ -837,13 +850,23 @@
     }
   }
 
+  function chatTargetFromTab(tab) {
+    if (!Number.isInteger(tab?.id)) return null;
+    let parsed = null;
+    try { parsed = new URL(String(tab.url || '')); } catch { return null; }
+    if (!['chatgpt.com', 'www.chatgpt.com'].includes(parsed.hostname)) return null;
+    const identity = conversationFromUrl(tab.url || '');
+    return { tab, id: identity?.id || '', url: identity?.url || String(tab.url || '') };
+  }
+
+  function senderChatTarget(sender) {
+    return chatTargetFromTab(sender?.tab);
+  }
+
   async function activeChatTarget() {
     let tabs = [];
     try { tabs = await chrome.tabs.query({ active: true, currentWindow: true, url: ['https://chatgpt.com/*'] }); } catch { return null; }
-    const tab = tabs[0];
-    if (!Number.isInteger(tab?.id)) return null;
-    const identity = conversationFromUrl(tab.url || '');
-    return { tab, id: identity?.id || '', url: identity?.url || String(tab.url || '') };
+    return chatTargetFromTab(tabs[0]);
   }
 
   async function activeChatIdentity() {
@@ -887,34 +910,48 @@
     };
   }
 
-  async function setActiveAutomation(message) {
-    const active = await activeChatTarget();
-    if (!active) return { ok: false, error: 'Open ChatGPT to change build automation.' };
-    if (Number.isInteger(message?.tabId) && message.tabId !== active.tab.id) return { ok: false, error: 'The active ChatGPT tab changed before the command was applied.', reason: 'target-tab-changed' };
-    if (message?.conversationId && String(message.conversationId) !== String(active.id || '')) return { ok: false, error: 'The active ChatGPT conversation changed before the command was applied.', reason: 'target-conversation-changed' };
+  async function publishAutomationOverview(target, overview = null) {
+    if (!target || !Number.isInteger(target?.tab?.id)) return false;
+    const next = overview || await monitorOverview(target);
+    try {
+      await chrome.tabs.sendMessage(target.tab.id, {
+        type: 'BUILD_AUTOMATION_STATE_CHANGED',
+        overview: next
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function setAutomationForTarget(message, target) {
+    if (!target) return { ok: false, error: 'Open ChatGPT to change build automation.' };
+    if (Number.isInteger(message?.tabId) && message.tabId !== target.tab.id) return { ok: false, error: 'The ChatGPT tab changed before the command was applied.', reason: 'target-tab-changed' };
+    if (message?.conversationId && String(message.conversationId) !== String(target.id || '')) return { ok: false, error: 'The ChatGPT conversation changed before the command was applied.', reason: 'target-conversation-changed' };
 
     const enabled = message?.enabled === true;
     const source = enabled ? (message?.resumeExistingRun === true ? 'operator-resume' : 'operator') : 'operator-pause';
     try {
-      if (active.id) {
-        await setEnrollment(active, enabled, source, { expectedRevision: message?.expectedRevision });
+      if (target.id) {
+        await setEnrollment(target, enabled, source, { expectedRevision: message?.expectedRevision });
         if (enabled) {
           try {
-            const result = await chrome.tabs.sendMessage(active.tab.id, { type: 'CHATGPT_MONITOR_QUERY' });
+            const result = await chrome.tabs.sendMessage(target.tab.id, { type: 'CHATGPT_MONITOR_QUERY' });
             const snapshot = result?.snapshot || result;
-            if (snapshot?.conversationId) await handleSnapshot(snapshot, { tab: active.tab, documentId: snapshot.documentId || '' });
+            if (snapshot?.conversationId) await handleSnapshot(snapshot, { tab: target.tab, documentId: snapshot.documentId || '' });
           } catch {}
           if (message?.resumeExistingRun === true) {
-            try { await globalThis.__chatgptNotifierBoundedRecovery?.resumeConversation?.(active.id); } catch {}
+            try { await globalThis.__chatgptNotifierBoundedRecovery?.resumeConversation?.(target.id); } catch {}
           }
         }
       } else {
-        await setProvisional(active.tab.id, enabled, source, message?.expectedRevision);
+        await setProvisional(target.tab.id, enabled, source, message?.expectedRevision);
       }
-      const overview = await monitorOverview(active);
+      const overview = await monitorOverview(target);
+      publishAutomationOverview(target, overview).catch(() => {});
       return { ok: true, requestId: String(message?.requestId || ''), ...overview };
     } catch (error) {
-      const overview = await monitorOverview(active).catch(() => null);
+      const overview = await monitorOverview(target).catch(() => null);
       return {
         ok: false,
         error: String(error?.message || error),
@@ -923,6 +960,14 @@
         ...(overview || {})
       };
     }
+  }
+
+  async function setActiveAutomation(message) {
+    return await setAutomationForTarget(message, await activeChatTarget());
+  }
+
+  async function setSenderAutomation(message, sender) {
+    return await setAutomationForTarget(message, senderChatTarget(sender));
   }
 
   async function noteTabClosedQuiet(tabId) {
@@ -1001,8 +1046,25 @@
       return true;
     }
 
+    if (message?.type === 'GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER') {
+      const target = senderChatTarget(sender);
+      if (!target) {
+        sendResponse?.({ ok: false, error: 'This control is not attached to a ChatGPT tab.' });
+        return false;
+      }
+      monitorOverview(target).then((overview) => sendResponse?.({ ok: true, ...overview }))
+        .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
+      return true;
+    }
+
     if (message?.type === 'SET_BUILD_AUTOMATION_STATE') {
       setActiveAutomation(message).then((result) => sendResponse?.(result))
+        .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
+      return true;
+    }
+
+    if (message?.type === 'SET_BUILD_AUTOMATION_STATE_FOR_SENDER') {
+      setSenderAutomation(message, sender).then((result) => sendResponse?.(result))
         .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
       return true;
     }
@@ -1056,6 +1118,7 @@
         }
         await setEnrollment(identity, provisional.enabled === true, provisional.userPaused ? 'operator-pause' : 'operator-provisional');
         await deleteRecord(PROFILE_STORE, provisionalKey(tabId));
+        publishAutomationOverview({ tab, id: identity.id, url: identity.url }).catch(() => {});
       })().catch(() => {});
     }
   });
@@ -1081,6 +1144,9 @@
     latestRunForConversation,
     monitorOverview,
     setActiveAutomation,
+    setSenderAutomation,
+    chatTargetFromTab,
+    publishAutomationOverview,
     ensureAttention,
     raiseAttention: ensureAttention,
     resolveAttentionForRun,

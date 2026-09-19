@@ -316,6 +316,70 @@ test('one write commits monitoring and recovery together and revision conflicts 
   assert.equal(stale.stateRevision, 1);
 });
 
+test('sender-scoped in-page automation control mirrors popup Monitor Pause Resume semantics on its own tab', async () => {
+  const monitor = loadMonitor({ initialTabs: [
+    { id: 1, url: 'https://chatgpt.com/c/conversation-1', title: 'Other build', discarded: false, frozen: false, active: true },
+    { id: 2, url: 'https://chatgpt.com/c/conversation-2', title: 'Indicator build', discarded: false, frozen: false, active: false }
+  ] });
+  await tick();
+
+  const sender = { tab: { id: 2, url: 'https://chatgpt.com/c/conversation-2', title: 'Indicator build' } };
+  const initial = await monitor.message({ type: 'GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER' }, sender);
+  assert.equal(initial.ok, true);
+  assert.equal(initial.activeTabId, 2);
+  assert.equal(initial.activeConversationId, 'conversation-2');
+  assert.equal(initial.automationEnabled, false);
+  assert.equal(initial.stateRevision, 0);
+
+  const enabled = await monitor.message({
+    type: 'SET_BUILD_AUTOMATION_STATE_FOR_SENDER',
+    enabled: true,
+    resumeExistingRun: false,
+    tabId: 2,
+    conversationId: 'conversation-2',
+    expectedRevision: 0,
+    requestId: 'indicator-monitor'
+  }, sender);
+  assert.equal(enabled.ok, true);
+  assert.equal(enabled.requestId, 'indicator-monitor');
+  assert.equal(enabled.activeTabId, 2);
+  assert.equal(enabled.automationEnabled, true);
+  assert.equal(enabled.monitoring, true);
+  assert.equal(enabled.recoveryEnabled, true);
+  assert.equal(enabled.pausedByUser, false);
+  assert.equal(enabled.stateRevision, 1);
+
+  const paused = await monitor.message({
+    type: 'SET_BUILD_AUTOMATION_STATE_FOR_SENDER',
+    enabled: false,
+    resumeExistingRun: false,
+    tabId: 2,
+    conversationId: 'conversation-2',
+    expectedRevision: 1,
+    requestId: 'indicator-pause'
+  }, sender);
+  assert.equal(paused.ok, true);
+  assert.equal(paused.automationEnabled, false);
+  assert.equal(paused.pausedByUser, true);
+  assert.equal(paused.stateRevision, 2);
+
+  const resumed = await monitor.message({
+    type: 'SET_BUILD_AUTOMATION_STATE_FOR_SENDER',
+    enabled: true,
+    resumeExistingRun: true,
+    tabId: 2,
+    conversationId: 'conversation-2',
+    expectedRevision: 2,
+    requestId: 'indicator-resume'
+  }, sender);
+  assert.equal(resumed.ok, true);
+  assert.equal(resumed.automationEnabled, true);
+  assert.equal(resumed.monitoring, true);
+  assert.equal(resumed.recoveryEnabled, true);
+  assert.equal(resumed.pausedByUser, false);
+  assert.equal(resumed.stateRevision, 3);
+});
+
 test('operator Pause is persistent and fresh START or terminal status cannot silently undo it', async () => {
   const monitor = loadMonitor();
   await tick();
