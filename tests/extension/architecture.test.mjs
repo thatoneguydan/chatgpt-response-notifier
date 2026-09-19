@@ -572,13 +572,13 @@ test('notifier-owned Quick Continue light mirrors popup automation states withou
   assert.match(attachment, /chatgpt-notifier-automation-indicator/);
   assert.match(attachment, /GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER/);
   assert.match(attachment, /SET_BUILD_AUTOMATION_STATE_FOR_SENDER/);
-  assert.match(attachment, /continueButton\.insertAdjacentElement\('afterend', indicator\)/);
+  assert.match(attachment, /continueButton\.insertAdjacentElement\('beforebegin', indicator\)/);
   assert.match(attachment, /key: 'ready'[\s\S]*label: 'Monitor'/);
   assert.match(attachment, /key: 'enabled'[\s\S]*label: 'Pause'/);
   assert.match(attachment, /key: 'warning'[\s\S]*label: 'Resume'/);
-  assert.match(attachment, /#888888/);
-  assert.match(attachment, /#8fb58f/);
-  assert.match(attachment, /#d8a85c/);
+  assert.match(attachment, /#3b82f6/);
+  assert.match(attachment, /#22c55e/);
+  assert.match(attachment, /#f59e0b/);
   assert.doesNotMatch(attachment, /\bfetch\s*\(/);
   assert.doesNotMatch(attachment, /XMLHttpRequest/);
   assert.match(monitor, /function senderChatTarget\(sender\)/);
