@@ -1,0 +1,70 @@
+name: Validate Quick Continue monitor light
+
+on:
+  push:
+    branches: [feature/quick-continue-monitor-light]
+    paths:
+      - extension/**
+      - tests/**
+      - VERSION.txt
+      - .github/workflows/validate-quick-continue-monitor-light.yml
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate notifier source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($script in @(
+            '.\extension\background.js',
+            '.\extension\diagnostics-bootstrap.js',
+            '.\extension\cross-desktop-click-fallback-background.js',
+            '.\extension\attachment-script.js',
+            '.\extension\coordinator-background.js',
+            '.\extension\service-worker.js',
+            '.\extension\content-script.js',
+            '.\extension\quick-prompts-script.js',
+            '.\extension\persistence-script.js',
+            '.\extension\status-code.js',
+            '.\extension\status-policy.js',
+            '.\extension\status-script.js',
+            '.\extension\recovery-background.js',
+            '.\extension\recovery-script.js',
+            '.\extension\history-background.js',
+            '.\extension\monitor-background.js',
+            '.\extension\monitor-script.js',
+            '.\extension\recovery-model.js',
+            '.\extension\monitor-query-compat-background.js',
+            '.\extension\recovery-control-background.js',
+            '.\extension\recovery-live-fix-background.js',
+            '.\extension\recovery-live-fix-content.js',
+            '.\extension\bounded-recovery-background.js',
+            '.\extension\bounded-recovery-attachment-background.js',
+            '.\extension\quick-prompts-attachment-background.js',
+            '.\extension\bounded-recovery-script.js',
+            '.\extension\normal-continuation-budget-hook.js',
+            '.\extension\response-stream-status-main.js',
+            '.\extension\response-stream-status-bridge.js',
+            '.\extension\response-stream-status-background.js',
+            '.\extension\hidden-window-diagnostics-main.js',
+            '.\extension\hidden-window-diagnostics-page.js',
+            '.\extension\hidden-window-diagnostics-background.js',
+            '.\extension\popup.js'
+          )) {
+            node --check $script
+            if ($LASTEXITCODE -ne 0) { throw "JavaScript syntax validation failed: $script" }
+          }
+
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Invoke-ExtensionTestSuite.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Extension architecture/behavior tests failed.' }
