@@ -579,6 +579,10 @@ test('notifier-owned Quick Continue light mirrors popup automation states withou
   assert.match(attachment, /#3b82f6/);
   assert.match(attachment, /#22c55e/);
   assert.match(attachment, /#f59e0b/);
+  assert.doesNotMatch(attachment, /automationBusy \? '\\.62'/);
+  assert.doesNotMatch(attachment, /transition\s*:/);
+  assert.doesNotMatch(attachment, /animation\s*:/);
+  assert.doesNotMatch(attachment, /@keyframes/);
   assert.doesNotMatch(attachment, /\bfetch\s*\(/);
   assert.doesNotMatch(attachment, /XMLHttpRequest/);
   assert.match(monitor, /function senderChatTarget\(sender\)/);
