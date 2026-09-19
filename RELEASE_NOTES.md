@@ -1,6 +1,6 @@
-# ChatGPT Response Notifier 0.9.41
+# ChatGPT Response Notifier 0.9.42
 
-- Makes the 30-minute coded-work watchdog settlement-aware: reaching the timer only wakes the watchdog and no longer authorizes a Continue while the response is still generating or the request has not settled.
-- Requires positively settled no-code evidence before watchdog continuation: either a stable assistant response after the existing missing-footer grace or the existing two-confirmation silent-stop proof.
-- Adds independent page-side Stop-generating vetoes before composer mutation and immediately before Send, preserving fail-closed behavior if the page state changes during the watchdog action.
-- Preserves the existing 30-minute wake interval, three-send watchdog cap, recoverable `INCOMPLETE_*` continuation behavior, request-owned delivery deduplication, profile traffic governor, and no-ChatGPT-API/no-background-polling design.
+- Simplifies the Quick Continue monitoring light to two visual states: gray when automation is inactive, paused, guarded, or ready to start; green only while automation is actively monitoring and allowed to continue.
+- Adds a compact status line above the Quick Continue and Project controls for active chats, showing the notifier watchdog's persisted minute:second countdown and the number of automatic Continues remaining.
+- Shows `Auto-continues exhausted` after the three-send watchdog budget is spent, and keeps waiting/due states tied to the real persisted watchdog record instead of a cosmetic independent timer.
+- Preserves the v0.9.41 settlement-aware watchdog safety checks, three-send cap, profile traffic governor, and no-ChatGPT-API/no-background-polling design.
