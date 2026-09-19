@@ -565,6 +565,27 @@ test('local JavaScript is syntactically valid', () => {
   }
 });
 
+test('notifier-owned Quick Continue light mirrors popup automation states without ChatGPT network traffic', () => {
+  const attachment = text('extension/attachment-script.js');
+  const monitor = text('extension/monitor-background.js');
+  assert.match(attachment, /chatgpt-quick-continue-toolbar/);
+  assert.match(attachment, /chatgpt-notifier-automation-indicator/);
+  assert.match(attachment, /GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER/);
+  assert.match(attachment, /SET_BUILD_AUTOMATION_STATE_FOR_SENDER/);
+  assert.match(attachment, /continueButton\.insertAdjacentElement\('afterend', indicator\)/);
+  assert.match(attachment, /key: 'ready'[\s\S]*label: 'Monitor'/);
+  assert.match(attachment, /key: 'enabled'[\s\S]*label: 'Pause'/);
+  assert.match(attachment, /key: 'warning'[\s\S]*label: 'Resume'/);
+  assert.match(attachment, /#888888/);
+  assert.match(attachment, /#8fb58f/);
+  assert.match(attachment, /#d8a85c/);
+  assert.doesNotMatch(attachment, /\bfetch\s*\(/);
+  assert.doesNotMatch(attachment, /XMLHttpRequest/);
+  assert.match(monitor, /function senderChatTarget\(sender\)/);
+  assert.match(monitor, /async function setSenderAutomation\(message, sender\)/);
+  assert.match(monitor, /BUILD_AUTOMATION_STATE_CHANGED/);
+});
+
 test('Glass release acceptance cannot stop or bind over the live notifier', () => {
   const setup = text('installer/Program.cs');
   const release = text('.github/workflows/release.yml');
