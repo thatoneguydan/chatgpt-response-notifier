@@ -215,7 +215,10 @@ test('in-page auto-continue status is an opaque allowance-reset control scoped t
   assert.match(attachment, /opacity: '1'/);
   assert.doesNotMatch(attachment, /opacity: '\.78'/);
   assert.match(attachment, /mouseenter/);
-  assert.match(attachment, /boxShadow/);
+  assert.match(attachment, /border: '1px solid transparent'/);
+  assert.match(attachment, /status\.style\.borderColor = 'currentColor'/);
+  assert.match(attachment, /status\.style\.borderColor = 'transparent'/);
+  assert.doesNotMatch(attachment, /0 0 0 1px var\(--border-light/);
 
   assert.match(monitor, /function codeWatchdogBudgetReset/);
   assert.match(monitor, /sendCount: 0/);
@@ -693,12 +696,12 @@ test('extension update hot-activates reload-safe watchdog page runtimes in alrea
   const attachment = text('extension/attachment-script.js');
   const monitor = text('extension/monitor-background.js');
 
-  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 9/);
+  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 10/);
   assert.match(attachment, /CHATGPT_NOTIFIER_ATTACHMENT_PING/);
   assert.match(attachment, /runtimeVersion: ATTACHMENT_RUNTIME_VERSION/);
   assert.match(attachment, /extensionVersion/);
 
-  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 9/);
+  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 10/);
   assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 8/);
   assert.match(monitor, /HOT_PAGE_STATUS_RUNTIME_VERSION = 10/);
   assert.match(monitor, /HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3/);
