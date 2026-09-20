@@ -216,7 +216,7 @@ test('post-refresh interruption fallback persists exact stalled response identit
 
 test('normal coded continuation uses the same timestamp shape instead of plain post-refresh text', () => {
   const status = readText('extension/status-script.js');
-  assert.match(status, /const RUNTIME_VERSION = 9/);
+  assert.match(status, /const RUNTIME_VERSION = 10/);
   assert.match(status, /const AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me\.'/);
   assert.match(status, /function timestampedContinueText/);
   assert.match(status, /month: 'short'/);
