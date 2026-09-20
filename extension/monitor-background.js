@@ -18,9 +18,9 @@
   const CODE_WATCHDOG_RETRY_MS = 60_000;
   const CODE_WATCHDOG_MAX_SENDS = 3;
   const CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS = 15_000;
-  const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 7;
-  const HOT_PAGE_MONITOR_RUNTIME_VERSION = 7;
-  const HOT_PAGE_STATUS_RUNTIME_VERSION = 9;
+  const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 8;
+  const HOT_PAGE_MONITOR_RUNTIME_VERSION = 8;
+  const HOT_PAGE_STATUS_RUNTIME_VERSION = 10;
   const HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3;
   const HOT_PAGE_RUNTIME_FILES = Object.freeze([
     'status-code.js',
@@ -396,6 +396,30 @@
     });
   }
 
+  async function parkCodeWatchdogForTerminalStatus(clean, sender, existingValue = null) {
+    const conversationId = String(clean?.conversationId || existingValue?.conversationId || '');
+    if (!conversationId) return null;
+    const requestStartedAt = Math.max(
+      0,
+      Number(clean?.requestStartedAt || 0),
+      Number(existingValue?.lastRequestStartedAt || 0)
+    );
+    await cancelCodeWatchdogAlarm(conversationId);
+    return await putCodeWatchdog(conversationId, {
+      ...(existingValue || {}),
+      conversationUrl: String(clean?.conversationUrl || existingValue?.conversationUrl || ''),
+      ownerTabId: Number.isInteger(sender?.tab?.id) ? sender.tab.id : (existingValue?.ownerTabId ?? null),
+      stopped: true,
+      stopReason: `status:${String(clean?.statusCode || "terminal")}`,
+      waitingForRequestStart: false,
+      lastRequestStartedAt: requestStartedAt,
+      lastStatusCode: String(clean?.statusCode || existingValue?.lastStatusCode || ''),
+      deadlineAt: 0,
+      retryAt: 0,
+      retryReason: ''
+    });
+  }
+
   async function resetCodeWatchdogForIncomplete(clean, sender, existingValue = null, automaticSentAt = 0, automaticPromptKey = '') {
     const conversationId = String(clean?.conversationId || existingValue?.conversationId || '');
     if (!conversationId) return null;
@@ -445,8 +469,7 @@
         }
         return await resetCodeWatchdogForIncomplete(clean, sender, current);
       }
-      await clearCodeWatchdog(conversationId);
-      return null;
+      return await parkCodeWatchdogForTerminalStatus(clean, sender, current);
     }
 
     if (!requestStartedAt) return current;
@@ -614,7 +637,7 @@
     const statusCode = String(live.statusCode || '');
     if (globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode)) {
       if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(statusCode) !== true) {
-        await clearCodeWatchdog(conversationId);
+        await parkCodeWatchdogForTerminalStatus(live, { tab }, record);
         return;
       }
       const result = await sendCodeWatchdogContinuation(tab.id, conversationId, String(live.promptKey || ''));
@@ -660,7 +683,7 @@
           await scheduleCodeWatchdogRetry(record, result?.reason || 'continue-send-failed');
         }
       } else {
-        await clearCodeWatchdog(conversationId);
+        await parkCodeWatchdogForTerminalStatus({ ...live, statusCode: racedStatusCode }, { tab }, record);
       }
       return;
     }
@@ -1331,6 +1354,7 @@
     readProfileState,
     readCodeWatchdog,
     reconcileCodeWatchdog,
+    parkCodeWatchdogForTerminalStatus,
     handleCodeWatchdogAlarm,
     ensureHotPageRuntime,
     queryHotPageRuntime,
