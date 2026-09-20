@@ -325,19 +325,19 @@
 
     const observed = latestAssistantSnapshot();
     const observedStatusCode = String(observed?.statusCode || '');
+    let watchdogStatusCode = '';
     if (observedStatusCode) {
-      if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(observedStatusCode) === true) {
-        const result = await performContinuation(observed);
-        return { ...result, statusCode: observedStatusCode, watchdogDisposition: 'incomplete-reset' };
+      if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(observedStatusCode) !== true) {
+        return {
+          ok: false,
+          clicked: false,
+          reason: 'terminal-status-observed',
+          statusCode: observedStatusCode,
+          watchdogDisposition: 'stop',
+          documentId
+        };
       }
-      return {
-        ok: false,
-        clicked: false,
-        reason: 'terminal-status-observed',
-        statusCode: observedStatusCode,
-        watchdogDisposition: 'stop',
-        documentId
-      };
+      watchdogStatusCode = observedStatusCode;
     }
 
     const composer = composerElement();
@@ -367,17 +367,18 @@
 
     const beforeSendStatusCode = String(latestAssistantSnapshot()?.statusCode || '');
     if (beforeSendStatusCode) {
-      if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
-      return {
-        ok: false,
-        clicked: false,
-        reason: 'terminal-status-observed',
-        statusCode: beforeSendStatusCode,
-        watchdogDisposition: globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(beforeSendStatusCode) === true
-          ? 'incomplete-reset'
-          : 'stop',
-        documentId
-      };
+      if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(beforeSendStatusCode) !== true) {
+        if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
+        return {
+          ok: false,
+          clicked: false,
+          reason: 'terminal-status-observed',
+          statusCode: beforeSendStatusCode,
+          watchdogDisposition: 'stop',
+          documentId
+        };
+      }
+      watchdogStatusCode = beforeSendStatusCode;
     }
 
     if (composerText(composer) !== cleanComposer(text)) return { ok: false, clicked: false, reason: 'composer-changed-before-send', documentId };
@@ -401,7 +402,8 @@
       ok: true,
       clicked: true,
       reason: 'watchdog-continuation-user-turn-confirmed',
-      watchdogDisposition: 'retry-sent',
+      statusCode: watchdogStatusCode,
+      watchdogDisposition: watchdogStatusCode ? 'incomplete-reset' : 'retry-sent',
       documentId,
       continuationUserKey: sent.userTurn.key
     };
