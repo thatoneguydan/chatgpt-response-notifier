@@ -3,7 +3,7 @@
 (() => {
   const QUICK_CONTINUE_TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const AUTOMATION_DUE_REFRESH_MS = 5000;
-  const ATTACHMENT_RUNTIME_VERSION = 8;
+  const ATTACHMENT_RUNTIME_VERSION = 9;
   const AUTOMATION_INDICATOR_ID = `chatgpt-notifier-automation-indicator-v${ATTACHMENT_RUNTIME_VERSION}`;
   const AUTOMATION_STATUS_ID = `chatgpt-notifier-automation-status-v${ATTACHMENT_RUNTIME_VERSION}`;
   const AUTOMATION_RUNTIME_STYLE_ID = 'chatgpt-notifier-automation-runtime-style';
@@ -68,6 +68,7 @@
   let automationDot = null;
   let automationStatus = null;
   let automationBusy = false;
+  let automationBudgetBusy = false;
   let automationOverview = null;
   let automationIndicatorObserver = null;
   let automationCountdownTimerId = null;
@@ -268,25 +269,39 @@
       try { existing.remove(); } catch {}
     }
 
-    const status = document.createElement('div');
+    const status = document.createElement('button');
     status.id = AUTOMATION_STATUS_ID;
+    status.type = 'button';
     status.hidden = true;
-    status.setAttribute('role', 'status');
+    status.setAttribute('aria-label', 'Reset auto-continues remaining');
     Object.assign(status.style, {
       position: 'absolute',
       left: '22px',
       bottom: 'calc(100% + 3px)',
       padding: '2px 4px',
+      border: '0',
       borderRadius: '5px',
       background: 'var(--main-surface-primary, #fff)',
       color: 'var(--text-secondary, #666)',
+      font: 'inherit',
       fontSize: '9px',
       lineHeight: '1.2',
       fontVariantNumeric: 'tabular-nums',
       whiteSpace: 'nowrap',
-      pointerEvents: 'none',
-      opacity: '.78'
+      pointerEvents: 'auto',
+      cursor: 'pointer',
+      opacity: '1',
+      boxShadow: 'none'
     });
+    status.addEventListener('mouseenter', () => {
+      if (status.disabled) return;
+      status.style.boxShadow = '0 0 0 1px var(--border-light, #b4b4b4)';
+    });
+    status.addEventListener('mouseleave', () => {
+      status.style.boxShadow = 'none';
+    });
+    status.addEventListener('click', resetAutomationBudget);
+
     toolbar.append(status);
     automationStatus = status;
     return status;
@@ -297,6 +312,8 @@
     if (!status) return;
     const text = automationStatusText(overview);
     status.hidden = !text;
+    status.disabled = automationBudgetBusy || overview?.automationEnabled !== true;
+    status.style.cursor = status.disabled ? 'default' : 'pointer';
     status.textContent = text;
   }
 
@@ -435,6 +452,40 @@
     const overview = await readAutomationOverview();
     if (!overview) return automationOverview;
     return applyAutomationOverview(overview);
+  }
+
+  async function resetAutomationBudget(event) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    if (automationBudgetBusy || automationBusy) return;
+
+    const status = ensureAutomationStatus();
+    if (!status || automationOverview?.automationEnabled !== true) return;
+
+    automationBudgetBusy = true;
+    renderAutomationStatus();
+    try {
+      const observedBefore = await readAutomationOverview();
+      const before = observedBefore && automationOverviewIsFresh(observedBefore)
+        ? applyAutomationOverview(observedBefore)
+        : automationOverview;
+      if (!before?.automationEnabled || !before.activeConversationId) return;
+
+      const requestId = crypto.randomUUID();
+      const result = await chrome.runtime.sendMessage({
+        type: 'RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER',
+        conversationId: before.activeConversationId,
+        requestId
+      });
+      if (!result?.ok) throw new Error(result?.error || result?.reason || 'Auto-continue reset was rejected.');
+      if (String(result.requestId || '') !== requestId) throw new Error('Auto-continue reset confirmation did not match this request.');
+      applyAutomationOverview(result);
+    } catch {
+      setTimeout(() => { refreshAutomationIndicator().catch(() => {}); }, 800);
+    } finally {
+      automationBudgetBusy = false;
+      renderAutomationStatus();
+    }
   }
 
   async function cycleAutomationState(event) {
