@@ -18,6 +18,18 @@
   const CODE_WATCHDOG_RETRY_MS = 60_000;
   const CODE_WATCHDOG_MAX_SENDS = 3;
   const CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS = 15_000;
+  const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 7;
+  const HOT_PAGE_MONITOR_RUNTIME_VERSION = 6;
+  const HOT_PAGE_STATUS_RUNTIME_VERSION = 9;
+  const HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3;
+  const HOT_PAGE_RUNTIME_FILES = Object.freeze([
+    'status-code.js',
+    'status-policy.js',
+    'attachment-script.js',
+    'monitor-script.js',
+    'bounded-recovery-script.js',
+    'status-script.js'
+  ]);
   const REQUEST_FILTER = {
     urls: [
       'https://chatgpt.com/backend-api/f/conversation*',
@@ -921,6 +933,58 @@
     });
   }
 
+  async function queryHotPageRuntime(tabId) {
+    const expectedExtensionVersion = (() => {
+      try { return String(chrome.runtime.getManifest().version || ''); } catch { return ''; }
+    })();
+    let attachment = null;
+    let monitor = null;
+    let status = null;
+    let bounded = null;
+    try { attachment = await chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_NOTIFIER_ATTACHMENT_PING' }); } catch {}
+    try { monitor = await chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_MONITOR_QUERY' }); } catch {}
+    try { status = await chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_STATUS_RUNTIME_PING' }); } catch {}
+    try { bounded = await chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_BOUNDED_RECOVERY_PING' }); } catch {}
+    return {
+      attachmentCurrent: attachment?.ok === true
+        && Number(attachment.runtimeVersion || 0) >= HOT_PAGE_ATTACHMENT_RUNTIME_VERSION
+        && String(attachment.extensionVersion || '') === expectedExtensionVersion,
+      monitorCurrent: Number(monitor?.snapshot?.monitorRuntimeVersion || monitor?.monitorRuntimeVersion || 0) >= HOT_PAGE_MONITOR_RUNTIME_VERSION,
+      statusCurrent: status?.ok === true && Number(status.runtimeVersion || 0) >= HOT_PAGE_STATUS_RUNTIME_VERSION,
+      boundedCurrent: bounded?.ok === true && Number(bounded.runtimeVersion || 0) >= HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION
+    };
+  }
+
+  function hotPageRuntimeCurrent(state) {
+    return state?.attachmentCurrent === true
+      && state?.monitorCurrent === true
+      && state?.statusCurrent === true
+      && state?.boundedCurrent === true;
+  }
+
+  async function ensureHotPageRuntime(tabId) {
+    if (!Number.isInteger(tabId)) return false;
+    let tab = null;
+    try { tab = await chrome.tabs.get(tabId); } catch { return false; }
+    if (tab?.discarded === true || tab?.frozen === true) return false;
+    const rawUrl = String(tab?.url || '');
+    if (!/^https:\/\/chatgpt\.com\//i.test(rawUrl)) return false;
+
+    const before = await queryHotPageRuntime(tabId);
+    if (hotPageRuntimeCurrent(before)) return true;
+
+    try {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: [...HOT_PAGE_RUNTIME_FILES]
+      });
+    } catch {
+      return false;
+    }
+
+    return hotPageRuntimeCurrent(await queryHotPageRuntime(tabId));
+  }
+
   async function injectMonitorIntoExistingTabs() {
     let tabs = [];
     try { tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] }); } catch { return; }
@@ -935,7 +999,7 @@
         }
         continue;
       }
-      try { await chrome.scripting.executeScript({ target: { tabId: tab.id }, files: ['status-code.js', 'status-policy.js', 'monitor-script.js'] }); } catch {}
+      await ensureHotPageRuntime(tab.id);
     }
   }
 
@@ -1246,7 +1310,7 @@
   }
 
   globalThis.__chatgptNotifierMonitorBackground = Object.freeze({
-    version: 4,
+    version: 5,
     automationSchemaVersion: AUTOMATION_SCHEMA_VERSION,
     getEnrollment,
     setEnrollment,
@@ -1264,6 +1328,8 @@
     readCodeWatchdog,
     reconcileCodeWatchdog,
     handleCodeWatchdogAlarm,
+    ensureHotPageRuntime,
+    queryHotPageRuntime,
     updateRun,
     flushAttention
   });

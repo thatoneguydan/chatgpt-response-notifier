@@ -1,9 +1,9 @@
-# ChatGPT Response Notifier 0.9.45
+# ChatGPT Response Notifier 0.9.46
 
-- Stops monitored-chat watchdog state from moving backward when an older request snapshot arrives after a newer request or automatic Continue has already advanced the conversation.
-- Prevents repeated stale recoverable-status observations from clearing a newly scheduled watchdog deadline back into `Auto-continue waiting`.
-- Persists the next 30-minute deadline atomically after a successful no-code watchdog Continue, removing the transient zero-deadline state that could be rendered as `Auto-continue waiting`.
-- Gives successful recoverable-code watchdog Continues their next 30-minute deadline immediately instead of exposing an unscheduled waiting gap.
-- Rejects out-of-order watchdog overview updates in the toolbar when their persisted watchdog `updatedAt` is older than the state already displayed.
-- Preserves v0.9.44's hard 30-minute no-code contract, three-send cap, exact conversation/prompt checks, immediate pre-send status-code race check, and profile traffic protections.
+- Fixes the live-update gap exposed after v0.9.45: an already-open ChatGPT tab no longer needs F5 to receive the repaired watchdog toolbar/runtime.
+- Adds an attachment-runtime identity handshake containing both page-runtime version and installed extension version.
+- On worker startup after an extension update, verifies the attachment, monitor, status, and bounded-recovery page runtimes in every existing non-frozen ChatGPT tab.
+- If any watchdog page runtime is stale, re-injects only the runtimes that have safe dispose/idempotent replacement semantics and verifies the replacement before considering the page current.
+- Does not re-inject legacy detector/persistence/recovery scripts that lack safe disposal, does not reload or foreground tabs, and creates no ChatGPT network traffic.
+- Preserves v0.9.45's monotonic watchdog state repair and v0.9.44's hard 30-minute no-code contract.
 
