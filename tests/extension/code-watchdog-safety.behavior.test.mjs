@@ -72,6 +72,16 @@ test('page-side watchdog can queue the deadline Continue while generation is act
   assert.match(watchdog, /beforeSendStatusCode/);
 });
 
+test('recoverable status codes use the same immediate watchdog follow-up path', () => {
+  const start = statusSource.indexOf('async function performWatchdogContinuation');
+  const end = statusSource.indexOf('async function waitForTerminalStatus', start);
+  const watchdog = statusSource.slice(start, end);
+  assert.doesNotMatch(watchdog, /performContinuation\(observed\)/);
+  assert.match(watchdog, /watchdogStatusCode = observedStatusCode/);
+  assert.match(watchdog, /watchdogStatusCode = beforeSendStatusCode/);
+  assert.match(watchdog, /watchdogDisposition: watchdogStatusCode \? 'incomplete-reset' : 'retry-sent'/);
+});
+
 test('watchdog command is bound to the exact prompt at both send boundaries', () => {
   assert.match(monitorSource, /promptKey:\s*String\(promptKey \|\| ''\)/);
   assert.match(monitorSource, /sendCodeWatchdogContinuation\(tab\.id, conversationId, String\(live\.promptKey \|\| ''\)\)/);
