@@ -3,7 +3,7 @@
 (() => {
   const QUICK_CONTINUE_TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const AUTOMATION_DUE_REFRESH_MS = 5000;
-  const ATTACHMENT_RUNTIME_VERSION = 9;
+  const ATTACHMENT_RUNTIME_VERSION = 10;
   const AUTOMATION_INDICATOR_ID = `chatgpt-notifier-automation-indicator-v${ATTACHMENT_RUNTIME_VERSION}`;
   const AUTOMATION_STATUS_ID = `chatgpt-notifier-automation-status-v${ATTACHMENT_RUNTIME_VERSION}`;
   const AUTOMATION_RUNTIME_STYLE_ID = 'chatgpt-notifier-automation-runtime-style';
@@ -279,7 +279,7 @@
       left: '22px',
       bottom: 'calc(100% + 3px)',
       padding: '2px 4px',
-      border: '0',
+      border: '1px solid transparent',
       borderRadius: '5px',
       background: 'var(--main-surface-primary, #fff)',
       color: 'var(--text-secondary, #666)',
@@ -295,10 +295,10 @@
     });
     status.addEventListener('mouseenter', () => {
       if (status.disabled) return;
-      status.style.boxShadow = '0 0 0 1px var(--border-light, #b4b4b4)';
+      status.style.borderColor = 'currentColor';
     });
     status.addEventListener('mouseleave', () => {
-      status.style.boxShadow = 'none';
+      status.style.borderColor = 'transparent';
     });
     status.addEventListener('click', resetAutomationBudget);
 
