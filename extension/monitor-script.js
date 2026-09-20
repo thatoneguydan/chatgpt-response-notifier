@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 6;
+  const RUNTIME_VERSION = 7;
   try { globalThis.__chatgptNotifierMonitorRuntime?.dispose?.(); } catch {}
 
   const abortController = new AbortController();
@@ -147,6 +147,13 @@
     return '';
   }
 
+  function userHasCanonicalProjectStart(value) {
+    const normalized = normalize(value);
+    if (!normalized) return false;
+    const withoutTimestamp = normalized.replace(/^\[[^\]\r\n]{1,80}\]\s+/, '');
+    return /^Continue\s+.+\s+from canonical GitHub state(?:\s+until\s+you\s+finish\s+or\s+need\s+me\.)?$/i.test(withoutTimestamp);
+  }
+
   function assistantHasWorkStart(turn) {
     try {
       const parser = globalThis.ChatGPTNotifierStatusCode?.isWorkStartSignal;
@@ -194,7 +201,7 @@
     let userIndex = -1;
     for (let index = 0; index < nodes.length; index += 1) if (roleOf(nodes[index]) === 'user') userIndex = index;
     if (!identity || userIndex < 0) {
-      return { identity, nodes, userIndex, assistantIndex: -1, promptKey: '', promptRevision: '', assistantKey: '', assistantRevision: '', statusCode: '', hasStatusEvidence: false, workStartSignal: false };
+      return { identity, nodes, userIndex, assistantIndex: -1, promptKey: '', promptRevision: '', assistantKey: '', assistantRevision: '', statusCode: '', hasStatusEvidence: false, workStartSignal: false, projectStartSignal: false };
     }
 
     const userId = turnId(nodes[userIndex], 'user', userIndex);
@@ -221,7 +228,8 @@
       assistantRevision: assistantText ? revisionOf(assistantText) : '',
       statusCode: String(parsed?.statusCode || domStatusCode || ''),
       hasStatusEvidence: Boolean(domStatusCode || (assistantText && assistantHasStatusEvidence(assistantText))),
-      workStartSignal: assistantIndex >= 0 && assistantHasWorkStart(nodes[assistantIndex])
+      workStartSignal: assistantIndex >= 0 && assistantHasWorkStart(nodes[assistantIndex]),
+      projectStartSignal: userHasCanonicalProjectStart(userText)
     };
   }
 
@@ -356,6 +364,7 @@
       statusCode: turnState.statusCode,
       hasStatusEvidence: turnState.hasStatusEvidence === true,
       workStartSignal: turnState.workStartSignal === true,
+      projectStartSignal: turnState.projectStartSignal === true,
       observable,
       online: navigator.onLine !== false,
       manualStopped,
