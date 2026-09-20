@@ -150,10 +150,15 @@ test('successful watchdog send persists only the next deadline, not a visible ze
   assert.doesNotMatch(handler, /putCodeWatchdog\(conversationId,[\s\S]{0,500}deadlineAt: 0/);
 });
 
-test('successful recoverable-code watchdog sends immediately receive the next 30-minute deadline', () => {
+test('successful recoverable-code watchdog sends atomically receive the next 30-minute deadline', () => {
+  const resetStart = monitorSource.indexOf('async function resetCodeWatchdogForIncomplete');
+  const resetEnd = monitorSource.indexOf('async function reconcileCodeWatchdog', resetStart);
+  const reset = monitorSource.slice(resetStart, resetEnd);
+  assert.match(reset, /deadlineAt: Math\.max\(0, Number\(automaticSentAt \|\| 0\)\) > 0/);
+  assert.match(reset, /CODE_WATCHDOG_DELAY_MS/);
+
   const start = monitorSource.indexOf('async function handleCodeWatchdogAlarm');
   const end = monitorSource.indexOf('function closeDerivedReason', start);
   const handler = monitorSource.slice(start, end);
-  assert.match(handler, /automaticSentAt \+ CODE_WATCHDOG_DELAY_MS/);
   assert.match(handler, /scheduleCodeWatchdog\(record, automaticSentAt \+ CODE_WATCHDOG_DELAY_MS\)/);
 });
