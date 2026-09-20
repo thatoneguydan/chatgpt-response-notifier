@@ -617,6 +617,35 @@ test('notifier-owned Quick Continue light mirrors popup automation states withou
   assert.match(monitor, /BUILD_AUTOMATION_STATE_CHANGED/);
 });
 
+test('extension update hot-activates reload-safe watchdog page runtimes in already-open chats', () => {
+  const attachment = text('extension/attachment-script.js');
+  const monitor = text('extension/monitor-background.js');
+
+  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 7/);
+  assert.match(attachment, /CHATGPT_NOTIFIER_ATTACHMENT_PING/);
+  assert.match(attachment, /runtimeVersion: ATTACHMENT_RUNTIME_VERSION/);
+  assert.match(attachment, /extensionVersion/);
+
+  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 7/);
+  assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 6/);
+  assert.match(monitor, /HOT_PAGE_STATUS_RUNTIME_VERSION = 9/);
+  assert.match(monitor, /HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3/);
+  assert.match(monitor, /async function queryHotPageRuntime/);
+  assert.match(monitor, /async function ensureHotPageRuntime/);
+  assert.match(monitor, /CHATGPT_NOTIFIER_ATTACHMENT_PING/);
+  assert.match(monitor, /CHATGPT_STATUS_RUNTIME_PING/);
+  assert.match(monitor, /CHATGPT_BOUNDED_RECOVERY_PING/);
+  assert.match(monitor, /CHATGPT_MONITOR_QUERY/);
+  assert.match(monitor, /String\(attachment\.extensionVersion \|\| ''\) === expectedExtensionVersion/);
+  assert.match(monitor, /files: \[\.\.\.HOT_PAGE_RUNTIME_FILES\]/);
+  assert.match(monitor, /await ensureHotPageRuntime\(tab\.id\)/);
+  assert.doesNotMatch(monitor, /HOT_PAGE_RUNTIME_FILES[\s\S]{0,400}'content-script\.js'/);
+  assert.doesNotMatch(monitor, /HOT_PAGE_RUNTIME_FILES[\s\S]{0,400}'persistence-script\.js'/);
+  assert.doesNotMatch(monitor, /HOT_PAGE_RUNTIME_FILES[\s\S]{0,400}'recovery-script\.js'/);
+  assert.doesNotMatch(monitor, /ensureHotPageRuntime[\s\S]{0,1400}tabs\.reload/);
+  assert.doesNotMatch(monitor, /ensureHotPageRuntime[\s\S]{0,1400}tabs\.update\([^)]*active:\s*true/);
+});
+
 test('Glass release acceptance cannot stop or bind over the live notifier', () => {
   const setup = text('installer/Program.cs');
   const release = text('.github/workflows/release.yml');
