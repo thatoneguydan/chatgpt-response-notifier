@@ -203,6 +203,30 @@ test('monitored chats use a 30-minute local code watchdog with a three-send cap 
   assert.doesNotMatch(monitor, /\bfetch\s*\(/);
 });
 
+test('in-page auto-continue status is an opaque allowance-reset control scoped to its sender conversation', () => {
+  const attachment = text('extension/attachment-script.js');
+  const monitor = text('extension/monitor-background.js');
+
+  assert.match(attachment, /document\.createElement\('button'\)/);
+  assert.match(attachment, /RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER/);
+  assert.match(attachment, /resetAutomationBudget/);
+  assert.match(attachment, /pointerEvents: 'auto'/);
+  assert.match(attachment, /cursor: 'pointer'/);
+  assert.match(attachment, /opacity: '1'/);
+  assert.doesNotMatch(attachment, /opacity: '\.78'/);
+  assert.match(attachment, /mouseenter/);
+  assert.match(attachment, /boxShadow/);
+
+  assert.match(monitor, /function codeWatchdogBudgetReset/);
+  assert.match(monitor, /sendCount: 0/);
+  assert.match(monitor, /stopReason \|\| ''\) === 'retry-cap-reached'/);
+  assert.match(monitor, /deadlineAt: resetAt \+ CODE_WATCHDOG_DELAY_MS/);
+  assert.match(monitor, /RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER/);
+  assert.match(monitor, /resetSenderCodeWatchdogBudget/);
+  assert.match(monitor, /target-conversation-changed/);
+  assert.match(monitor, /automation-not-active/);
+});
+
 test('manual pre-conversation Monitor is provisional and binds only after the next observed request', () => {
   const monitor = text('extension/monitor-background.js');
   assert.match(monitor, /automation-provisional:/);
@@ -669,12 +693,12 @@ test('extension update hot-activates reload-safe watchdog page runtimes in alrea
   const attachment = text('extension/attachment-script.js');
   const monitor = text('extension/monitor-background.js');
 
-  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 8/);
+  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 9/);
   assert.match(attachment, /CHATGPT_NOTIFIER_ATTACHMENT_PING/);
   assert.match(attachment, /runtimeVersion: ATTACHMENT_RUNTIME_VERSION/);
   assert.match(attachment, /extensionVersion/);
 
-  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 8/);
+  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 9/);
   assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 8/);
   assert.match(monitor, /HOT_PAGE_STATUS_RUNTIME_VERSION = 10/);
   assert.match(monitor, /HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3/);
