@@ -80,7 +80,7 @@
       style.id = AUTOMATION_RUNTIME_STYLE_ID;
       (document.head || document.documentElement).append(style);
     }
-    style.textContent = `
+    const css = `
       #${LEGACY_AUTOMATION_INDICATOR_ID},
       #${LEGACY_AUTOMATION_STATUS_ID},
       [id^="chatgpt-notifier-automation-indicator-v"]:not(#${AUTOMATION_INDICATOR_ID}),
@@ -88,6 +88,7 @@
         display: none !important;
       }
     `;
+    if (style.textContent !== css) style.textContent = css;
     return style;
   }
 
@@ -534,8 +535,7 @@
   document.addEventListener('visibilitychange', handleVisibilityChange, true);
   window.addEventListener('focus', handleWindowFocus, true);
   automationIndicatorObserver = new MutationObserver(() => {
-    ensureAutomationRuntimeStyle();
-    removeStaleAutomationNodes();
+    if (!document.getElementById(AUTOMATION_RUNTIME_STYLE_ID)) ensureAutomationRuntimeStyle();
     maintainAutomationIndicator();
   });
   automationIndicatorObserver.observe(document.documentElement, { childList: true, subtree: true });
