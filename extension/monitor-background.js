@@ -304,6 +304,8 @@
     return [
       Math.max(0, Number(record.sendCount || 0)),
       Math.max(0, Number(record.deadlineAt || 0)),
+      Math.max(0, Number(record.retryAt || 0)),
+      String(record.retryReason || ''),
       record.stopped === true ? 1 : 0,
       String(record.stopReason || ''),
       record.waitingForRequestStart === true ? 1 : 0,
@@ -344,8 +346,26 @@
     const record = recordValue || null;
     if (!record?.conversationId || record.stopped === true) return record;
     const deadlineAt = Math.max(Date.now() + 1000, Number(when || 0));
-    const updated = await putCodeWatchdog(record.conversationId, { ...record, deadlineAt });
+    const updated = await putCodeWatchdog(record.conversationId, {
+      ...record,
+      deadlineAt,
+      retryAt: 0,
+      retryReason: ''
+    });
     try { chrome.alarms.create(codeWatchdogAlarmName(record.conversationId), { when: deadlineAt }); } catch {}
+    return updated;
+  }
+
+  async function scheduleCodeWatchdogRetry(recordValue, reason = 'retry') {
+    const record = recordValue || null;
+    if (!record?.conversationId || record.stopped === true) return record;
+    const retryAt = Date.now() + CODE_WATCHDOG_RETRY_MS;
+    const updated = await putCodeWatchdog(record.conversationId, {
+      ...record,
+      retryAt,
+      retryReason: String(reason || 'retry')
+    });
+    try { chrome.alarms.create(codeWatchdogAlarmName(record.conversationId), { when: retryAt }); } catch {}
     return updated;
   }
 
@@ -357,7 +377,9 @@
       ...record,
       stopped: true,
       stopReason: String(reason || 'stopped'),
-      deadlineAt: 0
+      deadlineAt: 0,
+      retryAt: 0,
+      retryReason: ''
     });
   }
 
@@ -377,7 +399,9 @@
       lastStatusCode: String(clean?.statusCode || ''),
       lastAutomaticSentAt: Math.max(0, Number(automaticSentAt || 0)),
       lastAutomaticPromptKey: String(automaticPromptKey || ''),
-      deadlineAt: 0
+      deadlineAt: 0,
+      retryAt: 0,
+      retryReason: ''
     });
   }
 
@@ -566,13 +590,13 @@
 
     const tab = await tabForCodeWatchdog(record);
     if (!tab) {
-      await scheduleCodeWatchdog(record, Date.now() + CODE_WATCHDOG_RETRY_MS);
+      await scheduleCodeWatchdogRetry(record, 'page-unavailable');
       return;
     }
 
     const live = await ensureCodeWatchdogPageRuntime(tab.id);
     if (!live || String(live.conversationId || '') !== conversationId) {
-      await scheduleCodeWatchdog(record, Date.now() + CODE_WATCHDOG_RETRY_MS);
+      await scheduleCodeWatchdogRetry(record, 'runtime-unavailable');
       return;
     }
 
@@ -584,7 +608,7 @@
       }
       const result = await sendCodeWatchdogContinuation(tab.id, conversationId, String(live.promptKey || ''));
       record = await resetCodeWatchdogForIncomplete(live, { tab }, record, result?.ok === true ? Date.now() : 0, result?.continuationUserKey || '');
-      if (result?.ok !== true) await scheduleCodeWatchdog(record, Date.now() + CODE_WATCHDOG_RETRY_MS);
+      if (result?.ok !== true) await scheduleCodeWatchdogRetry(record, result?.reason || 'continue-send-failed');
       return;
     }
 
@@ -598,7 +622,7 @@
 
     const noCodeEligibility = codeWatchdogNoCodeEligibility(live);
     if (noCodeEligibility.eligible !== true) {
-      await scheduleCodeWatchdog(record, Date.now() + CODE_WATCHDOG_RETRY_MS);
+      await scheduleCodeWatchdogRetry(record, noCodeEligibility.reason);
       return;
     }
 
@@ -613,7 +637,7 @@
           result?.ok === true ? Date.now() : 0,
           result?.continuationUserKey || ''
         );
-        if (result?.ok !== true) await scheduleCodeWatchdog(record, Date.now() + CODE_WATCHDOG_RETRY_MS);
+        if (result?.ok !== true) await scheduleCodeWatchdogRetry(record, result?.reason || 'continue-send-failed');
       } else {
         await clearCodeWatchdog(conversationId);
       }
@@ -621,7 +645,7 @@
     }
 
     if (result?.ok !== true) {
-      await scheduleCodeWatchdog(record, Date.now() + CODE_WATCHDOG_RETRY_MS);
+      await scheduleCodeWatchdogRetry(record, result?.reason || 'continue-send-failed');
       return;
     }
 
@@ -634,7 +658,9 @@
       lastAutomaticSentAt: sentAt,
       lastAutomaticPromptKey: String(result?.continuationUserKey || ''),
       waitingForRequestStart: false,
-      deadlineAt: 0
+      deadlineAt: 0,
+      retryAt: 0,
+      retryReason: ''
     });
     if (nextCount >= CODE_WATCHDOG_MAX_SENDS) {
       await parkCodeWatchdog(record, 'retry-cap-reached');
