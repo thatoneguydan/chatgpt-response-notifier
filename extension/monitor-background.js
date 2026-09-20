@@ -18,7 +18,7 @@
   const CODE_WATCHDOG_RETRY_MS = 60_000;
   const CODE_WATCHDOG_MAX_SENDS = 3;
   const CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS = 15_000;
-  const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 8;
+  const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 9;
   const HOT_PAGE_MONITOR_RUNTIME_VERSION = 8;
   const HOT_PAGE_STATUS_RUNTIME_VERSION = 10;
   const HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3;
@@ -1097,6 +1097,56 @@
     };
   }
 
+  async function resetCodeWatchdogBudgetForTarget(message, target) {
+    if (!target?.id || !Number.isInteger(target?.tab?.id)) {
+      return { ok: false, error: 'Open a monitored ChatGPT conversation to reset auto-continues.', reason: 'watchdog-target-unavailable' };
+    }
+    if (message?.conversationId && String(message.conversationId) !== String(target.id)) {
+      return { ok: false, error: 'The ChatGPT conversation changed before the reset was applied.', reason: 'target-conversation-changed' };
+    }
+
+    const enrollment = await getEnrollment(target.id);
+    if (enrollment?.enabled !== true || enrollment?.userPaused === true) {
+      const overview = await monitorOverview(target);
+      return { ok: false, error: 'Build automation is not active for this conversation.', reason: 'automation-not-active', requestId: String(message?.requestId || ''), ...overview };
+    }
+
+    let record = await readCodeWatchdog(target.id);
+    if (record) {
+      const resetAt = Date.now();
+      const capExhausted = record.stopped === true && String(record.stopReason || '') === 'retry-cap-reached';
+      record = await putCodeWatchdog(target.id, {
+        ...record,
+        sendCount: 0,
+        budgetResetAt: resetAt,
+        ...(capExhausted ? {
+          stopped: false,
+          stopReason: '',
+          waitingForRequestStart: false,
+          deadlineAt: resetAt + CODE_WATCHDOG_DELAY_MS,
+          retryAt: 0,
+          retryReason: ''
+        } : {})
+      });
+      if (capExhausted) {
+        try { chrome.alarms.create(codeWatchdogAlarmName(target.id), { when: record.deadlineAt }); } catch {}
+      }
+    }
+
+    const overview = await monitorOverview(target);
+    publishAutomationOverview(target, overview).catch(() => {});
+    return {
+      ok: true,
+      requestId: String(message?.requestId || ''),
+      reset: true,
+      ...overview
+    };
+  }
+
+  async function resetSenderCodeWatchdogBudget(message, sender) {
+    return await resetCodeWatchdogBudgetForTarget(message, senderChatTarget(sender));
+  }
+
   async function publishAutomationOverview(target, overview = null) {
     if (!target || !Number.isInteger(target?.tab?.id)) return false;
     const next = overview || await monitorOverview(target);
@@ -1256,6 +1306,12 @@
       return true;
     }
 
+    if (message?.type === 'RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER') {
+      resetSenderCodeWatchdogBudget(message, sender).then((result) => sendResponse?.(result))
+        .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error), requestId: String(message?.requestId || '') }));
+      return true;
+    }
+
     if (message?.type === 'SET_ACTIVE_CHAT_MONITORING') {
       setActiveAutomation({
         enabled: message.enabled === true,
@@ -1350,6 +1406,8 @@
     monitorOverview,
     setActiveAutomation,
     setSenderAutomation,
+    resetCodeWatchdogBudgetForTarget,
+    resetSenderCodeWatchdogBudget,
     chatTargetFromTab,
     publishAutomationOverview,
     ensureAttention,
