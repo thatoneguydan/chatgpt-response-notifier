@@ -54,6 +54,10 @@ test('30-minute no-code deadline is authoritative even while generation is activ
   }
 });
 
+test('status runtime generation advances for the hard-deadline page behavior', () => {
+  assert.match(statusSource, /const RUNTIME_VERSION = 9/);
+});
+
 test('page-side watchdog can queue the deadline Continue while generation is active', () => {
   const waitStart = statusSource.indexOf('function waitForWatchdogSendButton');
   const waitEnd = statusSource.indexOf('function matchesExpected', waitStart);
