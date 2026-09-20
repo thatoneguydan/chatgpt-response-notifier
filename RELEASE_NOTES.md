@@ -1,9 +1,8 @@
-# ChatGPT Response Notifier 0.9.49
+# ChatGPT Response Notifier 0.9.50
 
-- Makes the in-page auto-continue countdown/status box clickable. Clicking it resets the automatic Continue allowance to the full three remaining sends for that monitored conversation.
-- Resetting while a watchdog countdown is active preserves the existing deadline; it does not restart the timer.
-- If automatic Continues were exhausted, the reset reopens only the retry-cap stop with a fresh 30-minute deadline. Terminal-status stops such as `BLOCKED_HUMAN` remain stopped.
-- Makes the countdown/status box fully opaque and adds a non-animated hover outline so its clickability is visible.
-- Attachment runtime v9 hot-activates the updated control in already-open ChatGPT tabs without requiring F5.
-- Preserves v0.9.48 terminal tombstones/runtime-generation isolation and the existing traffic-safety constraints.
+- Fixes the timer/reset control hover affordance that was not visibly distinguishable in the live ChatGPT theme.
+- Replaces the theme-dependent outer box-shadow with a real 1px border reserved at rest as transparent and changed to the control's current text color on hover.
+- The reserved border prevents geometry shift; there is no animation.
+- Preserves the v0.9.49 opaque clickable timer, three-send allowance reset behavior, terminal-stop preservation, and no-F5 hot activation.
+- Attachment runtime v10 hot-activates the corrected hover treatment in already-open ChatGPT tabs.
 
