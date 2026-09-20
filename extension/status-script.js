@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 8;
+  const RUNTIME_VERSION = 9;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me.';
   const DEFAULT_WAIT_MS = 30000;
@@ -260,7 +260,7 @@
       { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'aria-disabled', 'data-testid', 'aria-label'] });
   }
   function waitForWatchdogSendButton(node) {
-    return waitUntil(() => !stopPresent() && enabledSend(node), node?.closest?.('form') || document.body || document.documentElement, READY_WAIT_MS,
+    return waitUntil(() => enabledSend(node), node?.closest?.('form') || document.body || document.documentElement, READY_WAIT_MS,
       { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'aria-disabled', 'data-testid', 'aria-label'] });
   }
   function matchesExpected(current, expected) {
@@ -325,26 +325,25 @@
 
     const observed = latestAssistantSnapshot();
     const observedStatusCode = String(observed?.statusCode || '');
+    let watchdogStatusCode = '';
     if (observedStatusCode) {
-      if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(observedStatusCode) === true) {
-        const result = await performContinuation(observed);
-        return { ...result, statusCode: observedStatusCode, watchdogDisposition: 'incomplete-reset' };
+      if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(observedStatusCode) !== true) {
+        return {
+          ok: false,
+          clicked: false,
+          reason: 'terminal-status-observed',
+          statusCode: observedStatusCode,
+          watchdogDisposition: 'stop',
+          documentId
+        };
       }
-      return {
-        ok: false,
-        clicked: false,
-        reason: 'terminal-status-observed',
-        statusCode: observedStatusCode,
-        watchdogDisposition: 'stop',
-        documentId
-      };
+      watchdogStatusCode = observedStatusCode;
     }
 
     const composer = composerElement();
     if (!composer) return { ok: false, clicked: false, reason: 'composer-not-found', documentId };
     const initialBlock = activeUserBlockReason(composer);
     if (initialBlock) return { ok: false, clicked: false, reason: initialBlock, documentId };
-    if (stopPresent()) return { ok: false, clicked: false, reason: 'response-still-generating', documentId };
     const text = timestampedContinueText();
     const previousUserKey = latestUserSnapshot()?.key || '';
     if (!writeComposer(composer, text)) return { ok: false, clicked: false, reason: 'composer-write-failed', documentId };
@@ -368,25 +367,21 @@
 
     const beforeSendStatusCode = String(latestAssistantSnapshot()?.statusCode || '');
     if (beforeSendStatusCode) {
-      if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
-      return {
-        ok: false,
-        clicked: false,
-        reason: 'terminal-status-observed',
-        statusCode: beforeSendStatusCode,
-        watchdogDisposition: globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(beforeSendStatusCode) === true
-          ? 'incomplete-reset'
-          : 'stop',
-        documentId
-      };
+      if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(beforeSendStatusCode) !== true) {
+        if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
+        return {
+          ok: false,
+          clicked: false,
+          reason: 'terminal-status-observed',
+          statusCode: beforeSendStatusCode,
+          watchdogDisposition: 'stop',
+          documentId
+        };
+      }
+      watchdogStatusCode = beforeSendStatusCode;
     }
 
     if (composerText(composer) !== cleanComposer(text)) return { ok: false, clicked: false, reason: 'composer-changed-before-send', documentId };
-    if (stopPresent()) {
-      writeComposer(composer, '');
-      return { ok: false, clicked: false, reason: 'response-still-generating-before-send', documentId };
-    }
-
     const beforeSendBlock = activeUserBlockReason(composer);
     if (beforeSendBlock && beforeSendBlock !== 'composer-not-empty') {
       writeComposer(composer, '');
@@ -407,7 +402,8 @@
       ok: true,
       clicked: true,
       reason: 'watchdog-continuation-user-turn-confirmed',
-      watchdogDisposition: 'retry-sent',
+      statusCode: watchdogStatusCode,
+      watchdogDisposition: watchdogStatusCode ? 'incomplete-reset' : 'retry-sent',
       documentId,
       continuationUserKey: sent.userTurn.key
     };

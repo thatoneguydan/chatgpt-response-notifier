@@ -137,15 +137,10 @@
 
   function automationHoldText(reason) {
     const labels = {
-      'generation-active': 'generation to finish',
-      'request-not-settled': 'response to settle',
-      'assistant-not-stable': 'response to stabilize',
-      'silent-stop-unconfirmed': 'idle confirmation',
       'page-unobservable': 'page observation',
       'page-unavailable': 'page availability',
       'runtime-unavailable': 'page runtime',
       'offline': 'connection',
-      'manual-stop': 'manual stop state',
       'auth-required': 'sign-in',
       'approval-required': 'approval',
       'rate-limited': 'rate-limit clearance',

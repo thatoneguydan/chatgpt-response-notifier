@@ -549,30 +549,13 @@
   function codeWatchdogNoCodeEligibility(snapshot = {}) {
     if (snapshot.observable === false) return { eligible: false, reason: 'page-unobservable' };
     if (snapshot.online === false) return { eligible: false, reason: 'offline' };
-    if (snapshot.manualStopped === true) return { eligible: false, reason: 'manual-stop' };
     if (snapshot.authRequired === true) return { eligible: false, reason: 'auth-required' };
     if (snapshot.approvalRequired === true) return { eligible: false, reason: 'approval-required' };
     if (snapshot.rateLimited === true) return { eligible: false, reason: 'rate-limited' };
     if (snapshot.hasDraft === true) return { eligible: false, reason: 'draft-present' };
     if (snapshot.hasUpload === true) return { eligible: false, reason: 'upload-present' };
-    if (snapshot.stopGenerating === true) return { eligible: false, reason: 'generation-active' };
-    if (snapshot.toolActivity === true) return { eligible: false, reason: 'tool-activity' };
     if (snapshot.applicationStateIdentityMatched === false) return { eligible: false, reason: 'application-state-identity-mismatch' };
-
-    const requestPhase = String(snapshot.requestPhase || '');
-    if (!['completed', 'error'].includes(requestPhase)) {
-      return { eligible: false, reason: 'request-not-settled' };
-    }
-
-    if (String(snapshot.assistantKey || '')) {
-      return snapshot.stableTerminal === true
-        ? { eligible: true, reason: 'stable-terminal-no-code' }
-        : { eligible: false, reason: 'assistant-not-stable' };
-    }
-
-    return Number(snapshot.silentIdleConfirmations || 0) >= 2
-      ? { eligible: true, reason: 'silent-stop-confirmed' }
-      : { eligible: false, reason: 'silent-stop-unconfirmed' };
+    return { eligible: true, reason: 'deadline-no-code' };
   }
 
   async function handleCodeWatchdogAlarm(conversationId) {
@@ -1209,6 +1192,25 @@
     tabConversations.delete(tabId);
   });
 
+  async function restoreCodeWatchdogAlarms(now = Date.now()) {
+    const records = (await getAll(PROFILE_STORE))
+      .filter((record) => String(record?.key || '').startsWith(CODE_WATCHDOG_RECORD_PREFIX));
+    for (const record of records) {
+      const conversationId = String(record?.conversationId || '');
+      if (!conversationId || record.stopped === true) continue;
+      const enrollment = await getEnrollment(conversationId);
+      if (enrollment?.enabled !== true || enrollment?.userPaused === true) continue;
+
+      const deadlineAt = Math.max(0, Number(record.deadlineAt || 0));
+      const retryAt = Math.max(0, Number(record.retryAt || 0));
+      let when = 0;
+      if (deadlineAt > 0) when = deadlineAt <= now ? now + 1000 : deadlineAt;
+      else if (retryAt > 0) when = retryAt <= now ? now + 1000 : retryAt;
+      if (when <= 0) continue;
+      try { chrome.alarms.create(codeWatchdogAlarmName(conversationId), { when }); } catch {}
+    }
+  }
+
   async function pruneOldRuns(now = Date.now()) {
     const records = await getAll(RUN_STORE);
     for (const record of records) {
@@ -1241,6 +1243,7 @@
   });
 
   injectMonitorIntoExistingTabs().catch(() => {});
+  restoreCodeWatchdogAlarms().catch(() => {});
   pruneOldRuns().catch(() => {});
   flushAttention().catch(() => {});
 })();
