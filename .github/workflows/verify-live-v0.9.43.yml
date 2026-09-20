@@ -1,0 +1,77 @@
+name: Verify live notifier v0.9.43
+
+on:
+  push:
+    branches: [ops/apply-live-v0.9.43]
+    paths:
+      - .github/workflows/verify-live-v0.9.43.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 5
+    steps:
+      - name: Checkout canonical v0.9.43 source
+        uses: actions/checkout@v4
+        with:
+          ref: b9093623e097382b295cd4d3128907ad42582ccd
+          fetch-depth: 0
+
+      - name: Verify live runtime and fixed registration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expectedVersion = '0.9.43'
+          $expectedSource = 'b9093623e097382b295cd4d3128907ad42582ccd'
+          $output = Join-Path $env:RUNNER_TEMP 'notifier-v0943-live-evidence.json'
+
+          [ordered]@{
+            schemaVersion = 2
+            readOnly = $true
+            sourceCommit = $expectedSource
+            chrome = [ordered]@{}
+          } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $output -Encoding UTF8
+
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Add-NotifierSafeEvidence.ps1 -EvidencePath $output
+          if ($LASTEXITCODE -ne 0) { throw "Safe runtime evidence adapter failed with exit code $LASTEXITCODE." }
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Add-NotifierChromeRegistrationEvidence.ps1 -EvidencePath $output
+          if ($LASTEXITCODE -ne 0) { throw "Chrome registration evidence adapter failed with exit code $LASTEXITCODE." }
+
+          $evidence = Get-Content -LiteralPath $output -Raw -Encoding UTF8 | ConvertFrom-Json
+          $safe = $evidence.safeRuntimeEvidence
+          $registration = $evidence.chrome.registration
+
+          if ([string]$safe.installedVersion -ne $expectedVersion) {
+            throw "Installed version mismatch: expected $expectedVersion, got $($safe.installedVersion)."
+          }
+          if ([string]$safe.sourceCommit -ne $expectedSource) {
+            throw "Installed source mismatch: expected $expectedSource, got $($safe.sourceCommit)."
+          }
+          if ([string]$safe.currentExtensionVersion -ne $expectedVersion) {
+            throw "Current live extension mismatch: expected $expectedVersion, got $($safe.currentExtensionVersion)."
+          }
+          if ([string]$safe.historicalExtensionVersion -ne $expectedVersion) {
+            throw "Historical live extension mismatch: expected $expectedVersion, got $($safe.historicalExtensionVersion)."
+          }
+          if ($safe.extensionConnectionLive -ne $true -or $evidence.chrome.loadedExtensionRuntimeIdentitySupported -ne $true) {
+            throw 'Live extension runtime identity is not fresh/connected.'
+          }
+          if ([string]$registration.state -ne 'present') {
+            throw "Chrome fixed registration is not present: $($registration.state)."
+          }
+          if ([string]$registration.calculatedExtensionId -ne 'lciedmoiiapbgemklkpoadimhffaaaah') {
+            throw "Calculated extension ID mismatch: $($registration.calculatedExtensionId)."
+          }
+
+          Write-Host ("LIVE_VERIFIED " + (@{
+            installedVersion=[string]$safe.installedVersion
+            currentExtensionVersion=[string]$safe.currentExtensionVersion
+            historicalExtensionVersion=[string]$safe.historicalExtensionVersion
+            sourceMatchesExpected=([string]$safe.sourceCommit -eq $expectedSource)
+            liveRuntimeIdentity=$evidence.chrome.loadedExtensionRuntimeIdentitySupported
+            registrationState=[string]$registration.state
+            fixedIdMatches=([string]$registration.calculatedExtensionId -eq 'lciedmoiiapbgemklkpoadimhffaaaah')
+          } | ConvertTo-Json -Compress))
