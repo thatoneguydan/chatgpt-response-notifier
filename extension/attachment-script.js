@@ -135,6 +135,28 @@
     return `${minutes}:${String(remainder).padStart(2, '0')}`;
   }
 
+  function automationHoldText(reason) {
+    const labels = {
+      'generation-active': 'generation to finish',
+      'request-not-settled': 'response to settle',
+      'assistant-not-stable': 'response to stabilize',
+      'silent-stop-unconfirmed': 'idle confirmation',
+      'page-unobservable': 'page observation',
+      'page-unavailable': 'page availability',
+      'runtime-unavailable': 'page runtime',
+      'offline': 'connection',
+      'manual-stop': 'manual stop state',
+      'auth-required': 'sign-in',
+      'approval-required': 'approval',
+      'rate-limited': 'rate-limit clearance',
+      'draft-present': 'draft to clear',
+      'upload-present': 'upload to clear',
+      'application-state-identity-mismatch': 'current response identity',
+      'watchdog-runtime-unavailable': 'watchdog runtime'
+    };
+    return labels[String(reason || '')] || '';
+  }
+
   function automationStatusText(overview = automationOverview, now = Date.now()) {
     if (overview?.automationEnabled !== true) return '';
     const watchdog = overview?.codeWatchdog || null;
@@ -148,11 +170,21 @@
 
     const remainingText = `${remaining} left`;
     const deadlineAt = Math.max(0, Number(watchdog?.deadlineAt || 0));
+    const retryAt = Math.max(0, Number(watchdog?.retryAt || 0));
+    const holdText = automationHoldText(watchdog?.retryReason);
+
     if (deadlineAt > 0) {
-      if (deadlineAt <= Number(now)) return `Next auto-continue due · ${remainingText}`;
+      if (deadlineAt <= Number(now)) {
+        return holdText
+          ? `Auto-continue due · waiting for ${holdText} · ${remainingText}`
+          : `Auto-continue due · ${remainingText}`;
+      }
       return `Next auto-continue ${formatCountdown(deadlineAt - Number(now))} · ${remainingText}`;
     }
 
+    if (retryAt > Number(now)) {
+      return `Retrying auto-continue ${formatCountdown(retryAt - Number(now))} · ${remainingText}`;
+    }
     if (watchdog?.stopped === true) return `Auto-continue stopped · ${remainingText}`;
     return `Auto-continue waiting · ${remainingText}`;
   }
@@ -209,11 +241,13 @@
     renderAutomationStatus();
     const watchdog = automationOverview?.codeWatchdog;
     const deadlineAt = Math.max(0, Number(watchdog?.deadlineAt || 0));
+    const retryAt = Math.max(0, Number(watchdog?.retryAt || 0));
+    const refreshBoundaryAt = deadlineAt > 0 ? deadlineAt : retryAt;
     const now = Date.now();
     if (
       automationOverview?.automationEnabled === true
-      && deadlineAt > 0
-      && deadlineAt <= now
+      && refreshBoundaryAt > 0
+      && refreshBoundaryAt <= now
       && now >= automationDueRefreshAt
     ) {
       automationDueRefreshAt = now + AUTOMATION_DUE_REFRESH_MS;
