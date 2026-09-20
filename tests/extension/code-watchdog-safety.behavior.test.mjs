@@ -112,3 +112,18 @@ test('settlement repair preserves watchdog timing and retry cap', () => {
   assert.match(monitorSource, /const noCodeEligibility = codeWatchdogNoCodeEligibility\(live\)/);
   assert.match(monitorSource, /if \(noCodeEligibility\.eligible !== true\)/);
 });
+
+test('overdue watchdog observation retries do not replace the continuation deadline', () => {
+  const retryStart = monitorSource.indexOf('async function scheduleCodeWatchdogRetry');
+  const retryEnd = monitorSource.indexOf('async function parkCodeWatchdog', retryStart);
+  assert.ok(retryStart >= 0 && retryEnd > retryStart, 'watchdog retry scheduler must exist');
+  const retrySource = monitorSource.slice(retryStart, retryEnd);
+
+  assert.match(retrySource, /retryAt/);
+  assert.match(retrySource, /retryReason/);
+  assert.doesNotMatch(retrySource, /deadlineAt\s*:/);
+  assert.match(monitorSource, /scheduleCodeWatchdogRetry\(record, noCodeEligibility\.reason\)/);
+  assert.match(monitorSource, /scheduleCodeWatchdogRetry\(record, 'page-unavailable'\)/);
+  assert.match(monitorSource, /scheduleCodeWatchdogRetry\(record, 'runtime-unavailable'\)/);
+  assert.match(monitorSource, /deadlineAt,[\s\S]*retryAt: 0,[\s\S]*retryReason: ''/);
+});
