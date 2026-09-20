@@ -1192,6 +1192,25 @@
     tabConversations.delete(tabId);
   });
 
+  async function restoreCodeWatchdogAlarms(now = Date.now()) {
+    const records = (await getAll(PROFILE_STORE))
+      .filter((record) => String(record?.key || '').startsWith(CODE_WATCHDOG_RECORD_PREFIX));
+    for (const record of records) {
+      const conversationId = String(record?.conversationId || '');
+      if (!conversationId || record.stopped === true) continue;
+      const enrollment = await getEnrollment(conversationId);
+      if (enrollment?.enabled !== true || enrollment?.userPaused === true) continue;
+
+      const deadlineAt = Math.max(0, Number(record.deadlineAt || 0));
+      const retryAt = Math.max(0, Number(record.retryAt || 0));
+      let when = 0;
+      if (deadlineAt > 0) when = deadlineAt <= now ? now + 1000 : deadlineAt;
+      else if (retryAt > 0) when = retryAt <= now ? now + 1000 : retryAt;
+      if (when <= 0) continue;
+      try { chrome.alarms.create(codeWatchdogAlarmName(conversationId), { when }); } catch {}
+    }
+  }
+
   async function pruneOldRuns(now = Date.now()) {
     const records = await getAll(RUN_STORE);
     for (const record of records) {
@@ -1224,6 +1243,7 @@
   });
 
   injectMonitorIntoExistingTabs().catch(() => {});
+  restoreCodeWatchdogAlarms().catch(() => {});
   pruneOldRuns().catch(() => {});
   flushAttention().catch(() => {});
 })();
