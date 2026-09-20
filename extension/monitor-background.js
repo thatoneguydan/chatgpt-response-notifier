@@ -399,7 +399,9 @@
       lastStatusCode: String(clean?.statusCode || ''),
       lastAutomaticSentAt: Math.max(0, Number(automaticSentAt || 0)),
       lastAutomaticPromptKey: String(automaticPromptKey || ''),
-      deadlineAt: 0,
+      deadlineAt: Math.max(0, Number(automaticSentAt || 0)) > 0
+        ? Math.max(0, Number(automaticSentAt || 0)) + CODE_WATCHDOG_DELAY_MS
+        : 0,
       retryAt: 0,
       retryReason: ''
     });
