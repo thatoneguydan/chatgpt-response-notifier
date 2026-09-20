@@ -582,6 +582,9 @@ test('notifier-owned Quick Continue light mirrors popup automation states withou
   assert.match(attachment, /#888888/);
   assert.match(attachment, /chatgpt-notifier-automation-status/);
   assert.match(attachment, /Next auto-continue/);
+  assert.match(attachment, /Auto-continue due · waiting for/);
+  assert.match(attachment, /Retrying auto-continue/);
+  assert.match(attachment, /response to settle/);
   assert.match(attachment, /Auto-continues exhausted/);
   assert.match(attachment, /setInterval\(tickAutomationStatus, 1000\)/);
   assert.match(monitor, /codeWatchdogMaxSends: CODE_WATCHDOG_MAX_SENDS/);

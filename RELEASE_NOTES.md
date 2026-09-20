@@ -1,6 +1,7 @@
-# ChatGPT Response Notifier 0.9.42
+# ChatGPT Response Notifier 0.9.43
 
-- Simplifies the Quick Continue monitoring light to two visual states: gray when automation is inactive, paused, guarded, or ready to start; green only while automation is actively monitoring and allowed to continue.
-- Adds a compact status line above the Quick Continue and Project controls for active chats, showing the notifier watchdog's persisted minute:second countdown and the number of automatic Continues remaining.
-- Shows `Auto-continues exhausted` after the three-send watchdog budget is spent, and keeps waiting/due states tied to the real persisted watchdog record instead of a cosmetic independent timer.
-- Preserves the v0.9.41 settlement-aware watchdog safety checks, three-send cap, profile traffic governor, and no-ChatGPT-API/no-background-polling design.
+- Separates the user-facing 30-minute auto-continue deadline from the watchdog's internal one-minute safety rechecks, so an overdue chat no longer jumps back to a fake 1:00 countdown while still showing the full Continue budget.
+- Keeps an overdue watchdog visibly due and surfaces the current hold reason, such as waiting for generation to finish, the request to settle, the response to stabilize, page observation, or connection recovery.
+- Preserves the v0.9.41 settlement-aware send gate, exact-prompt checks, three-send cap, profile traffic governor, and page-side Stop-generating vetoes; internal observation retries still occur once per minute without consuming a Continue.
+- Records the successful ordinary Windows restart observation for the fixed-ID notifier and standalone Quick Continue installations; no reload, reinstall, or re-registration was needed.
+
