@@ -617,6 +617,28 @@ test('notifier-owned Quick Continue light mirrors popup automation states withou
   assert.match(monitor, /BUILD_AUTOMATION_STATE_CHANGED/);
 });
 
+test('canonical project continuation prompts are fresh enrollment evidence without weakening explicit Pause', () => {
+  const monitorPage = text('extension/monitor-script.js');
+  const monitorWorker = text('extension/monitor-background.js');
+
+  assert.match(monitorPage, /RUNTIME_VERSION = 7/);
+  assert.match(monitorPage, /function userHasCanonicalProjectStart/);
+  assert.match(monitorPage, /from canonical GitHub state/);
+  assert.match(monitorPage, /projectStartSignal: userHasCanonicalProjectStart\(userText\)/);
+  assert.match(monitorPage, /projectStartSignal: turnState\.projectStartSignal === true/);
+
+  assert.match(monitorWorker, /projectStartSignal: snapshot\.projectStartSignal === true/);
+  assert.match(monitorWorker, /clean\.projectStartSignal === true \|\| clean\.workStartSignal === true \|\| statusIsValid/);
+  assert.match(monitorWorker, /'project-start-signal'/);
+  assert.match(monitorWorker, /enrollment\?\.enabled !== true && enrollment\?\.userPaused !== true/);
+
+  const provisionalMigrationStart = monitorWorker.indexOf('async function migrateProvisionalIfReady');
+  const provisionalMigrationEnd = monitorWorker.indexOf('async function handleSnapshot', provisionalMigrationStart);
+  const provisionalMigration = monitorWorker.slice(provisionalMigrationStart, provisionalMigrationEnd);
+  assert.match(provisionalMigration, /if \(Number\(provisional\.armedAt \|\| 0\) <= 0\) \{\s*return null;/);
+  assert.doesNotMatch(provisionalMigration, /deleteRecord\(PROFILE_STORE, provisionalKey\(tabId\)\)[\s\S]{0,120}return null/);
+});
+
 test('extension update hot-activates reload-safe watchdog page runtimes in already-open chats', () => {
   const attachment = text('extension/attachment-script.js');
   const monitor = text('extension/monitor-background.js');
@@ -627,7 +649,7 @@ test('extension update hot-activates reload-safe watchdog page runtimes in alrea
   assert.match(attachment, /extensionVersion/);
 
   assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 7/);
-  assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 6/);
+  assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 7/);
   assert.match(monitor, /HOT_PAGE_STATUS_RUNTIME_VERSION = 9/);
   assert.match(monitor, /HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3/);
   assert.match(monitor, /async function queryHotPageRuntime/);

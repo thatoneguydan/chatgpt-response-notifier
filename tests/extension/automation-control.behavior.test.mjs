@@ -149,6 +149,7 @@ function baseSnapshot(overrides = {}) {
     assistantRevision: '1:b',
     statusCode: '',
     workStartSignal: false,
+    projectStartSignal: false,
     observable: true,
     online: true,
     manualStopped: false,
@@ -404,6 +405,42 @@ test('operator Pause is persistent and fresh START or terminal status cannot sil
   assert.equal(enrollment.revision, 2);
 });
 
+test('fresh canonical project-start evidence auto-enrolls unless the operator explicitly paused', async () => {
+  const monitor = loadMonitor();
+  await tick();
+
+  const projectStarted = await monitor.message({
+    type: 'CHATGPT_MONITOR_STATE',
+    snapshot: baseSnapshot({ projectStartSignal: true })
+  }, { tab: { id: 1, url: 'https://chatgpt.com/c/conversation-1', title: 'Project build' }, documentId: 'document-1' });
+  assert.equal(projectStarted.monitored, true);
+  const enrolled = await monitor.api.getEnrollment('conversation-1');
+  assert.equal(enrolled.enabled, true);
+  assert.equal(enrolled.recoveryEnabled, true);
+  assert.equal(enrolled.userPaused, false);
+  assert.equal(enrolled.source, 'project-start-signal');
+
+  const paused = await monitor.message({
+    type: 'SET_BUILD_AUTOMATION_STATE',
+    enabled: false,
+    tabId: 1,
+    conversationId: 'conversation-1',
+    expectedRevision: enrolled.revision,
+    requestId: 'pause-project'
+  });
+  assert.equal(paused.ok, true);
+  assert.equal(paused.pausedByUser, true);
+
+  const repeatedProject = await monitor.message({
+    type: 'CHATGPT_MONITOR_STATE',
+    snapshot: baseSnapshot({ projectStartSignal: true, requestId: 'request-2', requestStartedAt: 2_000 })
+  }, { tab: { id: 1, url: 'https://chatgpt.com/c/conversation-1', title: 'Project build' }, documentId: 'document-1' });
+  assert.equal(repeatedProject.monitored, false);
+  const stillPaused = await monitor.api.getEnrollment('conversation-1');
+  assert.equal(stillPaused.enabled, false);
+  assert.equal(stillPaused.userPaused, true);
+});
+
 test('START and terminal-code fallback enroll only with fresh request evidence', async () => {
   const monitor = loadMonitor();
   await tick();
@@ -437,10 +474,11 @@ test('START and terminal-code fallback enroll only with fresh request evidence',
   assert.equal((await second.api.getEnrollment('conversation-2')).source, 'coded-turn');
 });
 
-test('manual Monitor on a new-chat page binds only after the next ChatGPT request is observed', async () => {
+test('manual Monitor on a new-chat page survives URL assignment before request arming and binds on that request', async () => {
   const monitor = loadMonitor({ initialTabs: [{ id: 7, url: 'https://chatgpt.com/', title: 'New chat', discarded: false, frozen: false, active: true }] });
   await tick();
-  const armed = await monitor.message({
+
+  const enabled = await monitor.message({
     type: 'SET_BUILD_AUTOMATION_STATE',
     enabled: true,
     tabId: 7,
@@ -448,30 +486,39 @@ test('manual Monitor on a new-chat page binds only after the next ChatGPT reques
     expectedRevision: 0,
     requestId: 'provisional'
   });
-  assert.equal(armed.ok, true);
-  assert.equal(armed.provisional, true);
-  assert.equal(armed.automationEnabled, true);
+  assert.equal(enabled.ok, true);
+  assert.equal(enabled.provisional, true);
+  assert.equal(enabled.automationEnabled, true);
 
+  // Reproduce the live race: ChatGPT assigns /c/... before the asynchronous
+  // webRequest arm finishes. URL assignment alone must not bind or discard
+  // the provisional operator choice.
   monitor.setTabs([{ id: 7, url: 'https://chatgpt.com/c/conversation-7', title: 'Build chat', discarded: false, frozen: false, active: true }]);
   await monitor.emit(monitor.events.tabsOnUpdated, 7, { url: 'https://chatgpt.com/c/conversation-7' }, monitor.getTabs()[0]);
   assert.equal(await monitor.api.getEnrollment('conversation-7'), null, 'navigation alone cannot transfer provisional authorization');
 
-  monitor.setTabs([{ id: 7, url: 'https://chatgpt.com/', title: 'New chat', discarded: false, frozen: false, active: true }]);
-  const rearmed = await monitor.message({
-    type: 'SET_BUILD_AUTOMATION_STATE',
-    enabled: true,
+  await monitor.emit(monitor.events.webBefore, {
     tabId: 7,
-    conversationId: '',
-    expectedRevision: 0,
-    requestId: 'provisional-2'
+    method: 'POST',
+    url: 'https://chatgpt.com/backend-api/f/conversation',
+    requestId: 'network-7'
   });
-  assert.equal(rearmed.ok, true);
-  await monitor.emit(monitor.events.webBefore, { tabId: 7, method: 'POST', url: 'https://chatgpt.com/backend-api/f/conversation', requestId: 'network-7' });
-  monitor.setTabs([{ id: 7, url: 'https://chatgpt.com/c/conversation-7', title: 'Build chat', discarded: false, frozen: false, active: true }]);
-  await monitor.emit(monitor.events.tabsOnUpdated, 7, { url: 'https://chatgpt.com/c/conversation-7' }, monitor.getTabs()[0]);
+
+  const observed = await monitor.message({
+    type: 'CHATGPT_MONITOR_STATE',
+    snapshot: baseSnapshot({
+      conversationId: 'conversation-7',
+      conversationUrl: 'https://chatgpt.com/c/conversation-7',
+      promptKey: 'conversation-7|user-1',
+      requestId: 'network-7'
+    })
+  }, { tab: { id: 7, url: 'https://chatgpt.com/c/conversation-7', title: 'Build chat' }, documentId: 'document-7' });
+
+  assert.equal(observed.monitored, true);
   const enrollment = await monitor.api.getEnrollment('conversation-7');
   assert.equal(enrollment.enabled, true);
   assert.equal(enrollment.recoveryEnabled, true);
+  assert.equal(enrollment.userPaused, false);
   assert.equal(enrollment.source, 'operator-provisional');
 });
 

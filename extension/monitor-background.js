@@ -19,7 +19,7 @@
   const CODE_WATCHDOG_MAX_SENDS = 3;
   const CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS = 15_000;
   const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 7;
-  const HOT_PAGE_MONITOR_RUNTIME_VERSION = 6;
+  const HOT_PAGE_MONITOR_RUNTIME_VERSION = 7;
   const HOT_PAGE_STATUS_RUNTIME_VERSION = 9;
   const HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3;
   const HOT_PAGE_RUNTIME_FILES = Object.freeze([
@@ -251,6 +251,7 @@
       assistantRevision: String(snapshot.assistantRevision || ''),
       statusCode: String(snapshot.statusCode || ''),
       workStartSignal: snapshot.workStartSignal === true,
+      projectStartSignal: snapshot.projectStartSignal === true,
       observable: snapshot.observable !== false,
       online: snapshot.online !== false,
       manualStopped: snapshot.manualStopped === true,
@@ -854,7 +855,6 @@
     const provisional = await getProvisional(tabId);
     if (!provisional) return null;
     if (Number(provisional.armedAt || 0) <= 0) {
-      await deleteRecord(PROFILE_STORE, provisionalKey(tabId));
       return null;
     }
     const identity = { id: clean.conversationId, url: clean.conversationUrl };
@@ -873,12 +873,17 @@
     let enrollment = migratedEnrollment || await getEnrollment(clean.conversationId);
     const statusIsValid = Boolean(globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(clean.statusCode));
     const freshRequestEvidence = clean.requestStartedAt > 0 && ['started', 'completed', 'error'].includes(clean.requestPhase);
-    const recognizedScope = freshRequestEvidence && (clean.workStartSignal === true || statusIsValid);
+    const recognizedScope = freshRequestEvidence && (clean.projectStartSignal === true || clean.workStartSignal === true || statusIsValid);
     if (recognizedScope && enrollment?.enabled !== true && enrollment?.userPaused !== true) {
+      const source = clean.projectStartSignal === true
+        ? 'project-start-signal'
+        : clean.workStartSignal === true
+          ? 'work-start-signal'
+          : 'coded-turn';
       enrollment = await setEnrollment(
         { id: clean.conversationId, url: clean.conversationUrl },
         true,
-        clean.workStartSignal === true ? 'work-start-signal' : 'coded-turn'
+        source
       );
       enrollmentChanged = true;
     }
@@ -1267,7 +1272,6 @@
         const provisional = await getProvisional(tabId);
         if (!provisional) return;
         if (Number(provisional.armedAt || 0) <= 0) {
-          await deleteRecord(PROFILE_STORE, provisionalKey(tabId));
           return;
         }
         await setEnrollment(identity, provisional.enabled === true, provisional.userPaused ? 'operator-pause' : 'operator-provisional');
