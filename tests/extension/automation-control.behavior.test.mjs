@@ -505,11 +505,17 @@ test('terminal status parks the watchdog for the request and later no-code snaps
 
   await monitor.message({
     type: 'CHATGPT_MONITOR_STATE',
-    snapshot: baseSnapshot({ statusCode: '' })
+    snapshot: baseSnapshot({
+      statusCode: '',
+      requestId: 'duplicate-phase-for-same-prompt',
+      requestStartedAt: 1_500
+    })
   }, sender);
   const staleNoCode = await monitor.api.readCodeWatchdog('conversation-1');
   assert.equal(staleNoCode.stopped, true);
   assert.equal(staleNoCode.stopReason, 'status:BLOCKED_HUMAN');
+  assert.equal(staleNoCode.lastPromptKey, 'conversation-1|user-1');
+  assert.equal(staleNoCode.lastRequestStartedAt, 1_500);
   assert.equal(staleNoCode.deadlineAt, 0);
 
   await monitor.message({
