@@ -409,19 +409,32 @@
     const conversationId = String(clean?.conversationId || '');
     if (!conversationId) return null;
 
+    let current = await readCodeWatchdog(conversationId);
+    const requestStartedAt = Math.max(0, Number(clean?.requestStartedAt || 0));
+    const persistedRequestStartedAt = Math.max(0, Number(current?.lastRequestStartedAt || 0));
+    if (requestStartedAt > 0 && persistedRequestStartedAt > 0 && requestStartedAt < persistedRequestStartedAt) {
+      return current;
+    }
+
     const statusCode = String(clean?.statusCode || '');
     if (globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode)) {
       if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(statusCode) === true) {
-        return await resetCodeWatchdogForIncomplete(clean, sender, await readCodeWatchdog(conversationId));
+        if (
+          current?.waitingForRequestStart === true
+          && Number(current.lastAutomaticSentAt || 0) > 0
+          && String(current.lastStatusCode || '') === statusCode
+          && requestStartedAt > 0
+          && requestStartedAt === persistedRequestStartedAt
+        ) {
+          return current;
+        }
+        return await resetCodeWatchdogForIncomplete(clean, sender, current);
       }
       await clearCodeWatchdog(conversationId);
       return null;
     }
 
-    const requestStartedAt = Math.max(0, Number(clean?.requestStartedAt || 0));
-    if (!requestStartedAt) return await readCodeWatchdog(conversationId);
-
-    let current = await readCodeWatchdog(conversationId);
+    if (!requestStartedAt) return current;
     if (current?.waitingForRequestStart === true) {
       const resetAt = Math.max(0, Number(current.resetAt || 0));
       if (requestStartedAt < resetAt - CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS) return current;
@@ -590,8 +603,13 @@
         return;
       }
       const result = await sendCodeWatchdogContinuation(tab.id, conversationId, String(live.promptKey || ''));
-      record = await resetCodeWatchdogForIncomplete(live, { tab }, record, result?.ok === true ? Date.now() : 0, result?.continuationUserKey || '');
-      if (result?.ok !== true) await scheduleCodeWatchdogRetry(record, result?.reason || 'continue-send-failed');
+      const automaticSentAt = result?.ok === true ? Date.now() : 0;
+      record = await resetCodeWatchdogForIncomplete(live, { tab }, record, automaticSentAt, result?.continuationUserKey || '');
+      if (result?.ok === true) {
+        await scheduleCodeWatchdog(record, automaticSentAt + CODE_WATCHDOG_DELAY_MS);
+      } else {
+        await scheduleCodeWatchdogRetry(record, result?.reason || 'continue-send-failed');
+      }
       return;
     }
 
@@ -613,14 +631,19 @@
     const racedStatusCode = String(result?.statusCode || '');
     if (globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(racedStatusCode)) {
       if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(racedStatusCode) === true) {
+        const automaticSentAt = result?.ok === true ? Date.now() : 0;
         record = await resetCodeWatchdogForIncomplete(
           { ...live, statusCode: racedStatusCode },
           { tab },
           record,
-          result?.ok === true ? Date.now() : 0,
+          automaticSentAt,
           result?.continuationUserKey || ''
         );
-        if (result?.ok !== true) await scheduleCodeWatchdogRetry(record, result?.reason || 'continue-send-failed');
+        if (result?.ok === true) {
+          await scheduleCodeWatchdog(record, automaticSentAt + CODE_WATCHDOG_DELAY_MS);
+        } else {
+          await scheduleCodeWatchdogRetry(record, result?.reason || 'continue-send-failed');
+        }
       } else {
         await clearCodeWatchdog(conversationId);
       }
@@ -634,22 +657,23 @@
 
     const sentAt = Date.now();
     const nextCount = Math.max(0, Number(record.sendCount || 0)) + 1;
-    record = await putCodeWatchdog(conversationId, {
+    const nextDeadlineAt = sentAt + CODE_WATCHDOG_DELAY_MS;
+    record = {
       ...record,
       ownerTabId: tab.id,
       sendCount: nextCount,
       lastAutomaticSentAt: sentAt,
       lastAutomaticPromptKey: String(result?.continuationUserKey || ''),
       waitingForRequestStart: false,
-      deadlineAt: 0,
+      deadlineAt: nextDeadlineAt,
       retryAt: 0,
       retryReason: ''
-    });
+    };
     if (nextCount >= CODE_WATCHDOG_MAX_SENDS) {
       await parkCodeWatchdog(record, 'retry-cap-reached');
       return;
     }
-    await scheduleCodeWatchdog(record, sentAt + CODE_WATCHDOG_DELAY_MS);
+    await scheduleCodeWatchdog(record, nextDeadlineAt);
   }
 
   function closeDerivedReason(reason) {
