@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 8;
+  const RUNTIME_VERSION = 9;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me.';
   const DEFAULT_WAIT_MS = 30000;
@@ -260,7 +260,7 @@
       { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'aria-disabled', 'data-testid', 'aria-label'] });
   }
   function waitForWatchdogSendButton(node) {
-    return waitUntil(() => !stopPresent() && enabledSend(node), node?.closest?.('form') || document.body || document.documentElement, READY_WAIT_MS,
+    return waitUntil(() => enabledSend(node), node?.closest?.('form') || document.body || document.documentElement, READY_WAIT_MS,
       { childList: true, subtree: true, attributes: true, attributeFilter: ['disabled', 'aria-disabled', 'data-testid', 'aria-label'] });
   }
   function matchesExpected(current, expected) {
@@ -344,7 +344,6 @@
     if (!composer) return { ok: false, clicked: false, reason: 'composer-not-found', documentId };
     const initialBlock = activeUserBlockReason(composer);
     if (initialBlock) return { ok: false, clicked: false, reason: initialBlock, documentId };
-    if (stopPresent()) return { ok: false, clicked: false, reason: 'response-still-generating', documentId };
     const text = timestampedContinueText();
     const previousUserKey = latestUserSnapshot()?.key || '';
     if (!writeComposer(composer, text)) return { ok: false, clicked: false, reason: 'composer-write-failed', documentId };
@@ -382,11 +381,6 @@
     }
 
     if (composerText(composer) !== cleanComposer(text)) return { ok: false, clicked: false, reason: 'composer-changed-before-send', documentId };
-    if (stopPresent()) {
-      writeComposer(composer, '');
-      return { ok: false, clicked: false, reason: 'response-still-generating-before-send', documentId };
-    }
-
     const beforeSendBlock = activeUserBlockReason(composer);
     if (beforeSendBlock && beforeSendBlock !== 'composer-not-empty') {
       writeComposer(composer, '');
