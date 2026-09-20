@@ -128,6 +128,35 @@
     };
   }
 
+  function automationOverviewIsFresh(next, current = automationOverview) {
+    if (!next || !current) return true;
+    const nextConversationId = String(next.activeConversationId || '');
+    const currentConversationId = String(current.activeConversationId || '');
+    if (nextConversationId !== currentConversationId) return true;
+
+    const nextStateRevision = Math.max(0, Number(next.stateRevision || 0));
+    const currentStateRevision = Math.max(0, Number(current.stateRevision || 0));
+    if (nextStateRevision < currentStateRevision) return false;
+
+    const nextWatchdogUpdatedAt = Math.max(0, Number(next.codeWatchdog?.updatedAt || 0));
+    const currentWatchdogUpdatedAt = Math.max(0, Number(current.codeWatchdog?.updatedAt || 0));
+    if (
+      nextWatchdogUpdatedAt > 0
+      && currentWatchdogUpdatedAt > 0
+      && nextWatchdogUpdatedAt < currentWatchdogUpdatedAt
+    ) {
+      return false;
+    }
+    return true;
+  }
+
+  function applyAutomationOverview(next) {
+    if (!next || !automationOverviewIsFresh(next)) return automationOverview;
+    automationOverview = next;
+    renderAutomationIndicator(next);
+    return automationOverview;
+  }
+
   function formatCountdown(milliseconds) {
     const seconds = Math.max(0, Math.ceil(Number(milliseconds || 0) / 1000));
     const minutes = Math.floor(seconds / 60);
@@ -366,9 +395,7 @@
     if (!indicator || document.visibilityState === 'hidden') return automationOverview;
     const overview = await readAutomationOverview();
     if (!overview) return automationOverview;
-    automationOverview = overview;
-    renderAutomationIndicator(overview);
-    return overview;
+    return applyAutomationOverview(overview);
   }
 
   async function cycleAutomationState(event) {
@@ -382,8 +409,10 @@
     automationBusy = true;
     renderAutomationIndicator();
     try {
-      const before = (await readAutomationOverview()) || automationOverview;
-      if (before) automationOverview = before;
+      const observedBefore = await readAutomationOverview();
+      const before = observedBefore && automationOverviewIsFresh(observedBefore)
+        ? applyAutomationOverview(observedBefore)
+        : automationOverview;
       const mode = automationMode(before);
       if (!before || mode.disabled) return;
 
@@ -416,7 +445,7 @@
         throw new Error('Build automation revision did not advance.');
       }
 
-      automationOverview = result;
+      applyAutomationOverview(result);
     } catch {
       setTimeout(() => { refreshAutomationIndicator().catch(() => {}); }, 800);
     } finally {
@@ -440,8 +469,7 @@
     const indicator = ensureAutomationIndicator();
     if (!indicator) return false;
     if (!message.overview) return false;
-    automationOverview = message.overview;
-    renderAutomationIndicator(automationOverview);
+    applyAutomationOverview(message.overview);
     return false;
   }
 
@@ -465,7 +493,7 @@
   automationCountdownTimerId = setInterval(tickAutomationStatus, 1000);
 
   globalThis.__chatgptNotifierAttachmentRuntime = Object.freeze({
-    version: 5,
+    version: 6,
     extensionVersion,
     dispose() {
       try { if (heartbeatTimerId !== null) clearInterval(heartbeatTimerId); } catch {}

@@ -127,3 +127,38 @@ test('worker startup rearms an overdue persisted deadline immediately instead of
   assert.match(restore, /else if \(retryAt > 0\)/);
   assert.match(monitorSource, /restoreCodeWatchdogAlarms\(\)\.catch/);
 });
+
+test('watchdog state cannot regress to an older request snapshot', () => {
+  const start = monitorSource.indexOf('async function reconcileCodeWatchdog');
+  const end = monitorSource.indexOf('async function tabForCodeWatchdog', start);
+  assert.ok(start >= 0 && end > start, 'watchdog reconcile function must exist');
+  const reconcile = monitorSource.slice(start, end);
+  assert.match(reconcile, /persistedRequestStartedAt/);
+  assert.match(reconcile, /requestStartedAt < persistedRequestStartedAt/);
+  assert.match(reconcile, /return current/);
+  assert.match(reconcile, /waitingForRequestStart === true[\s\S]*lastAutomaticSentAt[\s\S]*lastStatusCode[\s\S]*requestStartedAt === persistedRequestStartedAt/);
+});
+
+test('successful watchdog send persists only the next deadline, not a visible zero-deadline intermediate state', () => {
+  const start = monitorSource.indexOf('async function handleCodeWatchdogAlarm');
+  const end = monitorSource.indexOf('function closeDerivedReason', start);
+  assert.ok(start >= 0 && end > start, 'watchdog alarm handler must exist');
+  const handler = monitorSource.slice(start, end);
+  assert.match(handler, /const nextDeadlineAt = sentAt \+ CODE_WATCHDOG_DELAY_MS/);
+  assert.match(handler, /deadlineAt: nextDeadlineAt/);
+  assert.match(handler, /scheduleCodeWatchdog\(record, nextDeadlineAt\)/);
+  assert.doesNotMatch(handler, /putCodeWatchdog\(conversationId,[\s\S]{0,500}deadlineAt: 0/);
+});
+
+test('successful recoverable-code watchdog sends atomically receive the next 30-minute deadline', () => {
+  const resetStart = monitorSource.indexOf('async function resetCodeWatchdogForIncomplete');
+  const resetEnd = monitorSource.indexOf('async function reconcileCodeWatchdog', resetStart);
+  const reset = monitorSource.slice(resetStart, resetEnd);
+  assert.match(reset, /deadlineAt: Math\.max\(0, Number\(automaticSentAt \|\| 0\)\) > 0/);
+  assert.match(reset, /CODE_WATCHDOG_DELAY_MS/);
+
+  const start = monitorSource.indexOf('async function handleCodeWatchdogAlarm');
+  const end = monitorSource.indexOf('function closeDerivedReason', start);
+  const handler = monitorSource.slice(start, end);
+  assert.match(handler, /scheduleCodeWatchdog\(record, automaticSentAt \+ CODE_WATCHDOG_DELAY_MS\)/);
+});

@@ -365,7 +365,7 @@ test('native toast renders persisted completion time, keeps failed clicks retrya
   assert.match(record, /public int\? TargetTabId/);
   assert.match(app, /case "toast\.clickResult"/);
   assert.doesNotMatch(app, /click-shell-fallback/);
-  assert.equal(version, '0.9.44');
+  assert.equal(version, '0.9.45');
   assert.equal(manifest.version, version);
   assert.equal(releaseNotes.split(/\r?\n/, 1)[0].trim(), `# ChatGPT Response Notifier ${version}`);
 });

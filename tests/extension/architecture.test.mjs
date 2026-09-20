@@ -187,7 +187,11 @@ test('monitored chats use a 30-minute local code watchdog with a three-send cap 
   assert.match(monitor, /isAutoContinueStatusCode/);
   assert.match(status, /performWatchdogContinuation/);
   assert.match(status, /function waitForWatchdogSendButton/);
-  assert.match(status, /waitUntil\(\(\) => !stopPresent\(\) && enabledSend\(node\)/);
+  const watchdogWaitStart = status.indexOf('function waitForWatchdogSendButton');
+  const watchdogWaitEnd = status.indexOf('function matchesExpected', watchdogWaitStart);
+  const watchdogWait = status.slice(watchdogWaitStart, watchdogWaitEnd);
+  assert.match(watchdogWait, /waitUntil\(\(\) => enabledSend\(node\)/);
+  assert.doesNotMatch(watchdogWait, /stopPresent\(\)/);
   assert.match(monitor, /lastAutomaticPromptKey/);
   assert.match(monitor, /!requestChanged[\s\S]*Number\(current\.deadlineAt \|\| 0\) > 0[\s\S]*return current/);
   assert.match(status, /terminal-status-observed/);
@@ -589,6 +593,10 @@ test('notifier-owned Quick Continue light mirrors popup automation states withou
   assert.doesNotMatch(attachment, /generation to finish/);
   assert.match(attachment, /Auto-continues exhausted/);
   assert.match(attachment, /setInterval\(tickAutomationStatus, 1000\)/);
+  assert.match(attachment, /function automationOverviewIsFresh/);
+  assert.match(attachment, /nextWatchdogUpdatedAt < currentWatchdogUpdatedAt/);
+  assert.match(attachment, /function applyAutomationOverview/);
+  assert.match(attachment, /return applyAutomationOverview\(overview\)/);
   assert.match(monitor, /codeWatchdogMaxSends: CODE_WATCHDOG_MAX_SENDS/);
   assert.match(monitor, /function codeWatchdogOverviewSignature\(record\)/);
   assert.match(monitor, /watchdogChanged[\s\S]*publishAutomationOverview\(senderTarget\)/);
