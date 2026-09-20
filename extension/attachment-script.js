@@ -2,10 +2,13 @@
 
 (() => {
   const QUICK_CONTINUE_TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
-  const AUTOMATION_INDICATOR_ID = 'chatgpt-notifier-automation-indicator';
-  const AUTOMATION_STATUS_ID = 'chatgpt-notifier-automation-status';
   const AUTOMATION_DUE_REFRESH_MS = 5000;
-  const ATTACHMENT_RUNTIME_VERSION = 7;
+  const ATTACHMENT_RUNTIME_VERSION = 8;
+  const AUTOMATION_INDICATOR_ID = `chatgpt-notifier-automation-indicator-v${ATTACHMENT_RUNTIME_VERSION}`;
+  const AUTOMATION_STATUS_ID = `chatgpt-notifier-automation-status-v${ATTACHMENT_RUNTIME_VERSION}`;
+  const AUTOMATION_RUNTIME_STYLE_ID = 'chatgpt-notifier-automation-runtime-style';
+  const LEGACY_AUTOMATION_INDICATOR_ID = 'chatgpt-notifier-automation-indicator';
+  const LEGACY_AUTOMATION_STATUS_ID = 'chatgpt-notifier-automation-status';
 
   let extensionVersion = '';
   try { extensionVersion = String(chrome.runtime.getManifest().version || ''); } catch {}
@@ -69,6 +72,40 @@
   let automationIndicatorObserver = null;
   let automationCountdownTimerId = null;
   let automationDueRefreshAt = 0;
+
+  function ensureAutomationRuntimeStyle() {
+    let style = document.getElementById(AUTOMATION_RUNTIME_STYLE_ID);
+    if (!style) {
+      style = document.createElement('style');
+      style.id = AUTOMATION_RUNTIME_STYLE_ID;
+      (document.head || document.documentElement).append(style);
+    }
+    style.textContent = `
+      #${LEGACY_AUTOMATION_INDICATOR_ID},
+      #${LEGACY_AUTOMATION_STATUS_ID},
+      [id^="chatgpt-notifier-automation-indicator-v"]:not(#${AUTOMATION_INDICATOR_ID}),
+      [id^="chatgpt-notifier-automation-status-v"]:not(#${AUTOMATION_STATUS_ID}) {
+        display: none !important;
+      }
+    `;
+    return style;
+  }
+
+  function removeStaleAutomationNodes() {
+    for (const selector of [
+      `#${LEGACY_AUTOMATION_INDICATOR_ID}`,
+      `#${LEGACY_AUTOMATION_STATUS_ID}`,
+      '[id^="chatgpt-notifier-automation-indicator-v"]',
+      '[id^="chatgpt-notifier-automation-status-v"]'
+    ]) {
+      let nodes = [];
+      try { nodes = Array.from(document.querySelectorAll(selector)); } catch {}
+      for (const node of nodes) {
+        if (node.id === AUTOMATION_INDICATOR_ID || node.id === AUTOMATION_STATUS_ID) continue;
+        try { node.remove(); } catch {}
+      }
+    }
+  }
 
   function recoveryPauseReason(overview) {
     const recovery = overview?.recovery;
@@ -490,11 +527,15 @@
     refreshAutomationIndicator().catch(() => {});
   }
 
+  ensureAutomationRuntimeStyle();
+  removeStaleAutomationNodes();
   try { document.getElementById(AUTOMATION_INDICATOR_ID)?.remove(); } catch {}
   try { chrome.runtime.onMessage.addListener(handleAutomationStateMessage); } catch {}
   document.addEventListener('visibilitychange', handleVisibilityChange, true);
   window.addEventListener('focus', handleWindowFocus, true);
   automationIndicatorObserver = new MutationObserver(() => {
+    ensureAutomationRuntimeStyle();
+    removeStaleAutomationNodes();
     maintainAutomationIndicator();
   });
   automationIndicatorObserver.observe(document.documentElement, { childList: true, subtree: true });
