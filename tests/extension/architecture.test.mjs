@@ -621,7 +621,7 @@ test('canonical project continuation prompts are fresh enrollment evidence witho
   const monitorPage = text('extension/monitor-script.js');
   const monitorWorker = text('extension/monitor-background.js');
 
-  assert.match(monitorPage, /RUNTIME_VERSION = 7/);
+  assert.match(monitorPage, /RUNTIME_VERSION = 8/);
   assert.match(monitorPage, /function userHasCanonicalProjectStart/);
   assert.match(monitorPage, /from canonical GitHub state/);
   assert.match(monitorPage, /projectStartSignal: userHasCanonicalProjectStart\(userText\)/);
@@ -639,18 +639,44 @@ test('canonical project continuation prompts are fresh enrollment evidence witho
   assert.doesNotMatch(provisionalMigration, /deleteRecord\(PROFILE_STORE, provisionalKey\(tabId\)\)[\s\S]{0,120}return null/);
 });
 
+test('terminal watchdog state is sticky and stale attachment generations cannot repaint the current timer', () => {
+  const monitorPage = text('extension/monitor-script.js');
+  const statusPage = text('extension/status-script.js');
+  const monitorWorker = text('extension/monitor-background.js');
+  const attachment = text('extension/attachment-script.js');
+
+  assert.match(monitorPage, /stickyTerminalPromptKey/);
+  assert.match(monitorPage, /stickyTerminalStatusCode/);
+  assert.match(statusPage, /RUNTIME_VERSION = 10/);
+  assert.match(statusPage, /stickyTerminalPromptKey/);
+  assert.match(statusPage, /stickyTerminalStatusCode/);
+
+  assert.match(monitorWorker, /async function parkCodeWatchdogForTerminalStatus/);
+  assert.match(monitorWorker, /stopReason: `status:\$\{String\(clean\?\.statusCode/);
+  assert.match(monitorWorker, /return await parkCodeWatchdogForTerminalStatus\(clean, sender, current\)/);
+  assert.match(monitorWorker, /await parkCodeWatchdogForTerminalStatus\(live, \{ tab \}, record\)/);
+  assert.match(monitorWorker, /await parkCodeWatchdogForTerminalStatus\(\{ \.\.\.live, statusCode: racedStatusCode \}, \{ tab \}, record\)/);
+
+  assert.match(attachment, /chatgpt-notifier-automation-indicator-v\$\{ATTACHMENT_RUNTIME_VERSION\}/);
+  assert.match(attachment, /chatgpt-notifier-automation-status-v\$\{ATTACHMENT_RUNTIME_VERSION\}/);
+  assert.match(attachment, /AUTOMATION_RUNTIME_STYLE_ID/);
+  assert.match(attachment, /display: none !important/);
+  assert.match(attachment, /\[id\^="chatgpt-notifier-automation-indicator-v"\]:not/);
+  assert.match(attachment, /\[id\^="chatgpt-notifier-automation-status-v"\]:not/);
+});
+
 test('extension update hot-activates reload-safe watchdog page runtimes in already-open chats', () => {
   const attachment = text('extension/attachment-script.js');
   const monitor = text('extension/monitor-background.js');
 
-  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 7/);
+  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 8/);
   assert.match(attachment, /CHATGPT_NOTIFIER_ATTACHMENT_PING/);
   assert.match(attachment, /runtimeVersion: ATTACHMENT_RUNTIME_VERSION/);
   assert.match(attachment, /extensionVersion/);
 
-  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 7/);
-  assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 7/);
-  assert.match(monitor, /HOT_PAGE_STATUS_RUNTIME_VERSION = 9/);
+  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 8/);
+  assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 8/);
+  assert.match(monitor, /HOT_PAGE_STATUS_RUNTIME_VERSION = 10/);
   assert.match(monitor, /HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3/);
   assert.match(monitor, /async function queryHotPageRuntime/);
   assert.match(monitor, /async function ensureHotPageRuntime/);

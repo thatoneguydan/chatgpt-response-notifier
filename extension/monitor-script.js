@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 7;
+  const RUNTIME_VERSION = 8;
   try { globalThis.__chatgptNotifierMonitorRuntime?.dispose?.(); } catch {}
 
   const abortController = new AbortController();
@@ -31,6 +31,8 @@
   let silentIdleConfirmations = 0;
   let stableTerminal = false;
   let lastIdentityKey = '';
+  let stickyTerminalPromptKey = '';
+  let stickyTerminalStatusCode = '';
 
   const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
 
@@ -217,16 +219,27 @@
     }
     const parsed = assistantText ? globalThis.ChatGPTNotifierStatusCode?.parseTerminalStatus?.(assistantText) : null;
     const domStatusCode = assistantIndex >= 0 ? assistantStatusCodeFromDom(nodes[assistantIndex]) : '';
+    const promptKey = `${identity.id}|${userId}`;
+    let statusCode = String(parsed?.statusCode || domStatusCode || '');
+    if (statusCode) {
+      stickyTerminalPromptKey = promptKey;
+      stickyTerminalStatusCode = statusCode;
+    } else if (stickyTerminalPromptKey === promptKey && stickyTerminalStatusCode) {
+      statusCode = stickyTerminalStatusCode;
+    } else if (stickyTerminalPromptKey && stickyTerminalPromptKey !== promptKey) {
+      stickyTerminalPromptKey = '';
+      stickyTerminalStatusCode = '';
+    }
     return {
       identity,
       nodes,
       userIndex,
       assistantIndex,
-      promptKey: `${identity.id}|${userId}`,
+      promptKey,
       promptRevision: revisionOf(userText),
       assistantKey: assistantIndex >= 0 ? turnId(nodes[assistantIndex], 'assistant', assistantIndex) : '',
       assistantRevision: assistantText ? revisionOf(assistantText) : '',
-      statusCode: String(parsed?.statusCode || domStatusCode || ''),
+      statusCode,
       hasStatusEvidence: Boolean(domStatusCode || (assistantText && assistantHasStatusEvidence(assistantText))),
       workStartSignal: assistantIndex >= 0 && assistantHasWorkStart(nodes[assistantIndex]),
       projectStartSignal: userHasCanonicalProjectStart(userText)

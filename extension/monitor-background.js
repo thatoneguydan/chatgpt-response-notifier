@@ -18,9 +18,9 @@
   const CODE_WATCHDOG_RETRY_MS = 60_000;
   const CODE_WATCHDOG_MAX_SENDS = 3;
   const CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS = 15_000;
-  const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 7;
-  const HOT_PAGE_MONITOR_RUNTIME_VERSION = 7;
-  const HOT_PAGE_STATUS_RUNTIME_VERSION = 9;
+  const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 8;
+  const HOT_PAGE_MONITOR_RUNTIME_VERSION = 8;
+  const HOT_PAGE_STATUS_RUNTIME_VERSION = 10;
   const HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3;
   const HOT_PAGE_RUNTIME_FILES = Object.freeze([
     'status-code.js',
@@ -396,6 +396,31 @@
     });
   }
 
+  async function parkCodeWatchdogForTerminalStatus(clean, sender, existingValue = null) {
+    const conversationId = String(clean?.conversationId || existingValue?.conversationId || '');
+    if (!conversationId) return null;
+    const requestStartedAt = Math.max(
+      0,
+      Number(clean?.requestStartedAt || 0),
+      Number(existingValue?.lastRequestStartedAt || 0)
+    );
+    await cancelCodeWatchdogAlarm(conversationId);
+    return await putCodeWatchdog(conversationId, {
+      ...(existingValue || {}),
+      conversationUrl: String(clean?.conversationUrl || existingValue?.conversationUrl || ''),
+      ownerTabId: Number.isInteger(sender?.tab?.id) ? sender.tab.id : (existingValue?.ownerTabId ?? null),
+      stopped: true,
+      stopReason: `status:${String(clean?.statusCode || "terminal")}`,
+      waitingForRequestStart: false,
+      lastRequestStartedAt: requestStartedAt,
+      lastPromptKey: String(clean?.promptKey || existingValue?.lastPromptKey || ''),
+      lastStatusCode: String(clean?.statusCode || existingValue?.lastStatusCode || ''),
+      deadlineAt: 0,
+      retryAt: 0,
+      retryReason: ''
+    });
+  }
+
   async function resetCodeWatchdogForIncomplete(clean, sender, existingValue = null, automaticSentAt = 0, automaticPromptKey = '') {
     const conversationId = String(clean?.conversationId || existingValue?.conversationId || '');
     if (!conversationId) return null;
@@ -445,8 +470,7 @@
         }
         return await resetCodeWatchdogForIncomplete(clean, sender, current);
       }
-      await clearCodeWatchdog(conversationId);
-      return null;
+      return await parkCodeWatchdogForTerminalStatus(clean, sender, current);
     }
 
     if (!requestStartedAt) return current;
@@ -464,14 +488,17 @@
 
     if (current?.stopped === true) {
       const sameRequest = requestStartedAt === Number(current.lastRequestStartedAt || 0);
+      const samePrompt = Boolean(current.lastPromptKey)
+        && String(clean.promptKey || '') === String(current.lastPromptKey);
       const followsAutomaticSend = (current.lastAutomaticPromptKey && String(clean.promptKey || '') === String(current.lastAutomaticPromptKey))
         || (Number(current.lastAutomaticSentAt || 0) > 0
           && Math.abs(requestStartedAt - Number(current.lastAutomaticSentAt || 0)) <= CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS);
-      if (sameRequest || followsAutomaticSend) {
-        if (!sameRequest) {
+      if (sameRequest || samePrompt || followsAutomaticSend) {
+        if (!sameRequest && requestStartedAt > Number(current.lastRequestStartedAt || 0)) {
           current = await putCodeWatchdog(conversationId, {
             ...current,
             lastRequestStartedAt: requestStartedAt,
+            lastPromptKey: String(clean.promptKey || current.lastPromptKey || ''),
             conversationUrl: clean.conversationUrl || current.conversationUrl || '',
             ownerTabId: Number.isInteger(sender?.tab?.id) ? sender.tab.id : (current.ownerTabId ?? null)
           });
@@ -513,6 +540,7 @@
       stopReason: '',
       waitingForRequestStart: false,
       lastRequestStartedAt: requestStartedAt,
+      lastPromptKey: String(clean.promptKey || ''),
       lastStatusCode: '',
       deadlineAt: requestStartedAt + CODE_WATCHDOG_DELAY_MS
     });
@@ -614,7 +642,7 @@
     const statusCode = String(live.statusCode || '');
     if (globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode)) {
       if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(statusCode) !== true) {
-        await clearCodeWatchdog(conversationId);
+        await parkCodeWatchdogForTerminalStatus(live, { tab }, record);
         return;
       }
       const result = await sendCodeWatchdogContinuation(tab.id, conversationId, String(live.promptKey || ''));
@@ -660,7 +688,7 @@
           await scheduleCodeWatchdogRetry(record, result?.reason || 'continue-send-failed');
         }
       } else {
-        await clearCodeWatchdog(conversationId);
+        await parkCodeWatchdogForTerminalStatus({ ...live, statusCode: racedStatusCode }, { tab }, record);
       }
       return;
     }
@@ -1331,6 +1359,7 @@
     readProfileState,
     readCodeWatchdog,
     reconcileCodeWatchdog,
+    parkCodeWatchdogForTerminalStatus,
     handleCodeWatchdogAlarm,
     ensureHotPageRuntime,
     queryHotPageRuntime,

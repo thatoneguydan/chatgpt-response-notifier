@@ -474,6 +474,66 @@ test('START and terminal-code fallback enroll only with fresh request evidence',
   assert.equal((await second.api.getEnrollment('conversation-2')).source, 'coded-turn');
 });
 
+test('terminal status parks the watchdog for the request and later no-code snapshots cannot reopen it', async () => {
+  const monitor = loadMonitor();
+  await tick();
+
+  await monitor.message({
+    type: 'SET_BUILD_AUTOMATION_STATE',
+    enabled: true,
+    tabId: 1,
+    conversationId: 'conversation-1',
+    expectedRevision: 0,
+    requestId: 'enable-terminal-test'
+  });
+
+  const sender = { tab: { id: 1, url: 'https://chatgpt.com/c/conversation-1', title: 'Build chat' }, documentId: 'document-1' };
+  await monitor.message({ type: 'CHATGPT_MONITOR_STATE', snapshot: baseSnapshot() }, sender);
+  const active = await monitor.api.readCodeWatchdog('conversation-1');
+  assert.equal(active.stopped, false);
+  assert.ok(Number(active.deadlineAt) > 0);
+
+  await monitor.message({
+    type: 'CHATGPT_MONITOR_STATE',
+    snapshot: baseSnapshot({ statusCode: 'BLOCKED_HUMAN' })
+  }, sender);
+  const terminal = await monitor.api.readCodeWatchdog('conversation-1');
+  assert.equal(terminal.stopped, true);
+  assert.equal(terminal.stopReason, 'status:BLOCKED_HUMAN');
+  assert.equal(terminal.lastStatusCode, 'BLOCKED_HUMAN');
+  assert.equal(terminal.deadlineAt, 0);
+
+  await monitor.message({
+    type: 'CHATGPT_MONITOR_STATE',
+    snapshot: baseSnapshot({
+      statusCode: '',
+      requestId: 'duplicate-phase-for-same-prompt',
+      requestStartedAt: 1_500
+    })
+  }, sender);
+  const staleNoCode = await monitor.api.readCodeWatchdog('conversation-1');
+  assert.equal(staleNoCode.stopped, true);
+  assert.equal(staleNoCode.stopReason, 'status:BLOCKED_HUMAN');
+  assert.equal(staleNoCode.lastPromptKey, 'conversation-1|user-1');
+  assert.equal(staleNoCode.lastRequestStartedAt, 1_500);
+  assert.equal(staleNoCode.deadlineAt, 0);
+
+  await monitor.message({
+    type: 'CHATGPT_MONITOR_STATE',
+    snapshot: baseSnapshot({
+      promptKey: 'conversation-1|user-2',
+      promptRevision: '2:c',
+      requestId: 'request-2',
+      requestStartedAt: 2_000,
+      statusCode: ''
+    })
+  }, sender);
+  const nextRequest = await monitor.api.readCodeWatchdog('conversation-1');
+  assert.equal(nextRequest.stopped, false);
+  assert.equal(nextRequest.lastRequestStartedAt, 2_000);
+  assert.ok(Number(nextRequest.deadlineAt) > 0);
+});
+
 test('manual Monitor on a new-chat page survives URL assignment before request arming and binds on that request', async () => {
   const monitor = loadMonitor({ initialTabs: [{ id: 7, url: 'https://chatgpt.com/', title: 'New chat', discarded: false, frozen: false, active: true }] });
   await tick();
