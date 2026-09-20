@@ -413,6 +413,7 @@
       stopReason: `status:${String(clean?.statusCode || "terminal")}`,
       waitingForRequestStart: false,
       lastRequestStartedAt: requestStartedAt,
+      lastPromptKey: String(clean?.promptKey || existingValue?.lastPromptKey || ''),
       lastStatusCode: String(clean?.statusCode || existingValue?.lastStatusCode || ''),
       deadlineAt: 0,
       retryAt: 0,
@@ -487,14 +488,17 @@
 
     if (current?.stopped === true) {
       const sameRequest = requestStartedAt === Number(current.lastRequestStartedAt || 0);
+      const samePrompt = Boolean(current.lastPromptKey)
+        && String(clean.promptKey || '') === String(current.lastPromptKey);
       const followsAutomaticSend = (current.lastAutomaticPromptKey && String(clean.promptKey || '') === String(current.lastAutomaticPromptKey))
         || (Number(current.lastAutomaticSentAt || 0) > 0
           && Math.abs(requestStartedAt - Number(current.lastAutomaticSentAt || 0)) <= CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS);
-      if (sameRequest || followsAutomaticSend) {
-        if (!sameRequest) {
+      if (sameRequest || samePrompt || followsAutomaticSend) {
+        if (!sameRequest && requestStartedAt > Number(current.lastRequestStartedAt || 0)) {
           current = await putCodeWatchdog(conversationId, {
             ...current,
             lastRequestStartedAt: requestStartedAt,
+            lastPromptKey: String(clean.promptKey || current.lastPromptKey || ''),
             conversationUrl: clean.conversationUrl || current.conversationUrl || '',
             ownerTabId: Number.isInteger(sender?.tab?.id) ? sender.tab.id : (current.ownerTabId ?? null)
           });
@@ -536,6 +540,7 @@
       stopReason: '',
       waitingForRequestStart: false,
       lastRequestStartedAt: requestStartedAt,
+      lastPromptKey: String(clean.promptKey || ''),
       lastStatusCode: '',
       deadlineAt: requestStartedAt + CODE_WATCHDOG_DELAY_MS
     });
