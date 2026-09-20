@@ -534,6 +534,76 @@ test('terminal status parks the watchdog for the request and later no-code snaps
   assert.ok(Number(nextRequest.deadlineAt) > 0);
 });
 
+test('timer allowance reset restores three sends without moving an active deadline and only reopens cap exhaustion', async () => {
+  const monitor = loadMonitor();
+  await tick();
+
+  const active = monitor.api.codeWatchdogBudgetReset({
+    conversationId: 'conversation-1',
+    sendCount: 2,
+    stopped: false,
+    stopReason: '',
+    deadlineAt: 50_000,
+    retryAt: 0,
+    retryReason: ''
+  }, 10_000);
+  assert.equal(active.sendCount, 0);
+  assert.equal(active.deadlineAt, 50_000);
+  assert.equal(active.stopped, false);
+  assert.equal(active.budgetResetAt, 10_000);
+
+  const exhausted = monitor.api.codeWatchdogBudgetReset({
+    conversationId: 'conversation-1',
+    sendCount: 3,
+    stopped: true,
+    stopReason: 'retry-cap-reached',
+    deadlineAt: 0,
+    retryAt: 0,
+    retryReason: ''
+  }, 20_000);
+  assert.equal(exhausted.sendCount, 0);
+  assert.equal(exhausted.stopped, false);
+  assert.equal(exhausted.stopReason, '');
+  assert.equal(exhausted.deadlineAt, 20_000 + 30 * 60_000);
+
+  const terminal = monitor.api.codeWatchdogBudgetReset({
+    conversationId: 'conversation-1',
+    sendCount: 2,
+    stopped: true,
+    stopReason: 'status:BLOCKED_HUMAN',
+    deadlineAt: 0,
+    retryAt: 0,
+    retryReason: ''
+  }, 30_000);
+  assert.equal(terminal.sendCount, 0);
+  assert.equal(terminal.stopped, true);
+  assert.equal(terminal.stopReason, 'status:BLOCKED_HUMAN');
+  assert.equal(terminal.deadlineAt, 0);
+
+  await monitor.message({
+    type: 'SET_BUILD_AUTOMATION_STATE',
+    enabled: true,
+    tabId: 1,
+    conversationId: 'conversation-1',
+    expectedRevision: 0,
+    requestId: 'enable-reset-test'
+  });
+  const sender = { tab: { id: 1, url: 'https://chatgpt.com/c/conversation-1', title: 'Build chat' }, documentId: 'document-1' };
+  await monitor.message({ type: 'CHATGPT_MONITOR_STATE', snapshot: baseSnapshot() }, sender);
+  const before = await monitor.api.readCodeWatchdog('conversation-1');
+
+  const reset = await monitor.message({
+    type: 'RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER',
+    conversationId: 'conversation-1',
+    requestId: 'reset-budget'
+  }, sender);
+  assert.equal(reset.ok, true);
+  assert.equal(reset.requestId, 'reset-budget');
+  assert.equal(reset.codeWatchdog.sendCount, 0);
+  assert.equal(reset.codeWatchdog.deadlineAt, before.deadlineAt);
+  assert.ok(Number(reset.codeWatchdog.budgetResetAt) > 0);
+});
+
 test('manual Monitor on a new-chat page survives URL assignment before request arming and binds on that request', async () => {
   const monitor = loadMonitor({ initialTabs: [{ id: 7, url: 'https://chatgpt.com/', title: 'New chat', discarded: false, frozen: false, active: true }] });
   await tick();
