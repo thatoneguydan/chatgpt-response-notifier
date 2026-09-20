@@ -1097,6 +1097,26 @@
     };
   }
 
+  function codeWatchdogBudgetReset(recordValue, now = Date.now()) {
+    const record = recordValue || null;
+    if (!record) return null;
+    const resetAt = Math.max(0, Number(now || Date.now()));
+    const capExhausted = record.stopped === true && String(record.stopReason || '') === 'retry-cap-reached';
+    return {
+      ...record,
+      sendCount: 0,
+      budgetResetAt: resetAt,
+      ...(capExhausted ? {
+        stopped: false,
+        stopReason: '',
+        waitingForRequestStart: false,
+        deadlineAt: resetAt + CODE_WATCHDOG_DELAY_MS,
+        retryAt: 0,
+        retryReason: ''
+      } : {})
+    };
+  }
+
   async function resetCodeWatchdogBudgetForTarget(message, target) {
     if (!target?.id || !Number.isInteger(target?.tab?.id)) {
       return { ok: false, error: 'Open a monitored ChatGPT conversation to reset auto-continues.', reason: 'watchdog-target-unavailable' };
@@ -1113,21 +1133,8 @@
 
     let record = await readCodeWatchdog(target.id);
     if (record) {
-      const resetAt = Date.now();
       const capExhausted = record.stopped === true && String(record.stopReason || '') === 'retry-cap-reached';
-      record = await putCodeWatchdog(target.id, {
-        ...record,
-        sendCount: 0,
-        budgetResetAt: resetAt,
-        ...(capExhausted ? {
-          stopped: false,
-          stopReason: '',
-          waitingForRequestStart: false,
-          deadlineAt: resetAt + CODE_WATCHDOG_DELAY_MS,
-          retryAt: 0,
-          retryReason: ''
-        } : {})
-      });
+      record = await putCodeWatchdog(target.id, codeWatchdogBudgetReset(record));
       if (capExhausted) {
         try { chrome.alarms.create(codeWatchdogAlarmName(target.id), { when: record.deadlineAt }); } catch {}
       }
@@ -1406,6 +1413,7 @@
     monitorOverview,
     setActiveAutomation,
     setSenderAutomation,
+    codeWatchdogBudgetReset,
     resetCodeWatchdogBudgetForTarget,
     resetSenderCodeWatchdogBudget,
     chatTargetFromTab,
