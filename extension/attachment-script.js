@@ -5,6 +5,7 @@
   const AUTOMATION_INDICATOR_ID = 'chatgpt-notifier-automation-indicator';
   const AUTOMATION_STATUS_ID = 'chatgpt-notifier-automation-status';
   const AUTOMATION_DUE_REFRESH_MS = 5000;
+  const ATTACHMENT_RUNTIME_VERSION = 7;
 
   let extensionVersion = '';
   try { extensionVersion = String(chrome.runtime.getManifest().version || ''); } catch {}
@@ -464,7 +465,15 @@
     }
   }
 
-  function handleAutomationStateMessage(message) {
+  function handleAutomationStateMessage(message, _sender, sendResponse) {
+    if (message?.type === 'CHATGPT_NOTIFIER_ATTACHMENT_PING') {
+      sendResponse?.({
+        ok: true,
+        runtimeVersion: ATTACHMENT_RUNTIME_VERSION,
+        extensionVersion
+      });
+      return false;
+    }
     if (message?.type !== 'BUILD_AUTOMATION_STATE_CHANGED') return false;
     const indicator = ensureAutomationIndicator();
     if (!indicator) return false;
@@ -493,7 +502,7 @@
   automationCountdownTimerId = setInterval(tickAutomationStatus, 1000);
 
   globalThis.__chatgptNotifierAttachmentRuntime = Object.freeze({
-    version: 6,
+    version: ATTACHMENT_RUNTIME_VERSION,
     extensionVersion,
     dispose() {
       try { if (heartbeatTimerId !== null) clearInterval(heartbeatTimerId); } catch {}
