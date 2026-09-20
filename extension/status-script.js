@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 9;
+  const RUNTIME_VERSION = 10;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me.';
   const DEFAULT_WAIT_MS = 30000;
@@ -13,6 +13,8 @@
   const abortController = new AbortController();
   const documentId = (() => { try { return crypto.randomUUID(); } catch { return `${Date.now()}-${Math.random()}`; } })();
   let lastTrustedInteractionAt = 0;
+  let stickyTerminalPromptKey = '';
+  let stickyTerminalStatusCode = '';
 
   const inline = (value) => String(value || '').replace(/\s+/g, ' ').trim();
   const cleanComposer = (value) => inline(String(value || '').replace(/[\u200B-\u200D\uFEFF]/g, ''));
@@ -148,15 +150,25 @@
     if (assistantIndex < 0 || !responseText) return null;
     const parsed = api.parseTerminalStatus(responseText);
     const domStatusCode = assistantStatusCodeFromDom(nodes[assistantIndex]);
-    const statusCode = parsed.statusCode || domStatusCode || '';
-    const statusLine = parsed.statusLine || (statusCode ? `[GITHUB_STATUS: ${statusCode}]` : '');
     const userId = turnId(nodes[userIndex], 'user', userIndex);
     const userText = turnText(nodes[userIndex], 'user');
+    const promptKey = `${identity.id}|${userId}`;
+    let statusCode = String(parsed.statusCode || domStatusCode || '');
+    if (statusCode) {
+      stickyTerminalPromptKey = promptKey;
+      stickyTerminalStatusCode = statusCode;
+    } else if (stickyTerminalPromptKey === promptKey && stickyTerminalStatusCode) {
+      statusCode = stickyTerminalStatusCode;
+    } else if (stickyTerminalPromptKey && stickyTerminalPromptKey !== promptKey) {
+      stickyTerminalPromptKey = '';
+      stickyTerminalStatusCode = '';
+    }
+    const statusLine = statusCode ? `[GITHUB_STATUS: ${statusCode}]` : '';
     return {
       conversationId: identity.id,
       conversationUrl: identity.url,
       documentId,
-      promptKey: `${identity.id}|${userId}`,
+      promptKey,
       promptTurnId: userId,
       promptRevision: revisionOf(userText),
       assistantKey: turnId(nodes[assistantIndex], 'assistant', assistantIndex),
