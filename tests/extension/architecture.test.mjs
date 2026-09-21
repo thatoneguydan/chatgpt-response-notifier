@@ -658,7 +658,7 @@ test('canonical project continuation prompts are fresh enrollment evidence witho
   const monitorPage = text('extension/monitor-script.js');
   const monitorWorker = text('extension/monitor-background.js');
 
-  assert.match(monitorPage, /RUNTIME_VERSION = 10/);
+  assert.match(monitorPage, /RUNTIME_VERSION = 11/);
   assert.match(monitorPage, /function userHasCanonicalProjectStart/);
   assert.match(monitorPage, /from canonical GitHub state/);
   assert.match(monitorPage, /projectStartSignal: userHasCanonicalProjectStart\(userText\)/);
@@ -717,7 +717,7 @@ test('extension update hot-activates reload-safe watchdog page runtimes in alrea
   assert.match(attachment, /extensionVersion/);
 
   assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 12/);
-  assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 10/);
+  assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 11/);
   assert.match(monitor, /HOT_PAGE_STATUS_RUNTIME_VERSION = 12/);
   assert.match(monitor, /HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3/);
   assert.match(monitor, /async function queryHotPageRuntime/);
