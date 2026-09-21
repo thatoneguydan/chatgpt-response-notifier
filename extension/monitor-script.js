@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 8;
+  const RUNTIME_VERSION = 9;
   try { globalThis.__chatgptNotifierMonitorRuntime?.dispose?.(); } catch {}
 
   const abortController = new AbortController();
@@ -172,6 +172,33 @@
     } catch { return false; }
   }
 
+  function previousPromptTerminalState(nodes, identity, currentUserIndex) {
+    if (!identity || currentUserIndex <= 0) return { promptKey: '', statusCode: '' };
+    let previousUserIndex = -1;
+    for (let index = currentUserIndex - 1; index >= 0; index -= 1) {
+      if (roleOf(nodes[index]) === 'user') {
+        previousUserIndex = index;
+        break;
+      }
+    }
+    if (previousUserIndex < 0) return { promptKey: '', statusCode: '' };
+
+    const previousUserId = turnId(nodes[previousUserIndex], 'user', previousUserIndex);
+    let statusCode = '';
+    for (let index = previousUserIndex + 1; index < currentUserIndex; index += 1) {
+      if (roleOf(nodes[index]) !== 'assistant') continue;
+      const assistantText = turnText(nodes[index], 'assistant');
+      const parsed = assistantText ? globalThis.ChatGPTNotifierStatusCode?.parseTerminalStatus?.(assistantText) : null;
+      const domStatusCode = assistantStatusCodeFromDom(nodes[index]);
+      const candidate = String(parsed?.statusCode || domStatusCode || '');
+      if (candidate) statusCode = candidate;
+    }
+    return {
+      promptKey: `${identity.id}|${previousUserId}`,
+      statusCode
+    };
+  }
+
   function composerElement() {
     for (const selector of ['#prompt-textarea', 'textarea[data-testid="prompt-textarea"]', '[contenteditable="true"][data-testid="prompt-textarea"]']) {
       try {
@@ -230,12 +257,15 @@
       stickyTerminalPromptKey = '';
       stickyTerminalStatusCode = '';
     }
+    const previousPromptTerminal = previousPromptTerminalState(nodes, identity, userIndex);
     return {
       identity,
       nodes,
       userIndex,
       assistantIndex,
       promptKey,
+      previousPromptKey: previousPromptTerminal.promptKey,
+      previousStatusCode: previousPromptTerminal.statusCode,
       promptRevision: revisionOf(userText),
       assistantKey: assistantIndex >= 0 ? turnId(nodes[assistantIndex], 'assistant', assistantIndex) : '',
       assistantRevision: assistantText ? revisionOf(assistantText) : '',
@@ -371,6 +401,8 @@
       conversationUrl: turnState.identity?.url || '',
       documentId,
       promptKey: turnState.promptKey,
+      previousPromptKey: turnState.previousPromptKey || '',
+      previousStatusCode: turnState.previousStatusCode || '',
       promptRevision: turnState.promptRevision,
       assistantKey: turnState.assistantKey,
       assistantRevision: turnState.assistantRevision,
