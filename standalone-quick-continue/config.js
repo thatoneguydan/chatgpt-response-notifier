@@ -1,7 +1,10 @@
 'use strict';
 
 (() => {
-  if (globalThis.ChatGPTQuickContinueConfig) return;
+  const RUNTIME_VERSION = 2;
+  const previousRuntime = globalThis.ChatGPTQuickContinueConfig;
+  if (Number(previousRuntime?.runtimeVersion || 0) === RUNTIME_VERSION) return;
+  try { previousRuntime?.dispose?.(); } catch {}
 
   const STORAGE_KEY = 'quickContinueConfig';
   const MAX_PROJECTS = 40;
@@ -131,7 +134,7 @@
     return () => listeners.delete(listener);
   }
 
-  chrome.storage.onChanged.addListener((changes, areaName) => {
+  function handleStorageChanged(changes, areaName) {
     if (areaName !== 'local' || !Object.prototype.hasOwnProperty.call(changes, STORAGE_KEY)) return;
     const next = changes[STORAGE_KEY]?.newValue;
     if (next === undefined) {
@@ -148,14 +151,21 @@
       current = normalizeConfig(next);
       notify();
     } catch {}
-  });
+  }
+
+  chrome.storage.onChanged.addListener(handleStorageChanged);
 
   globalThis.ChatGPTQuickContinueConfig = Object.freeze({
+    runtimeVersion: RUNTIME_VERSION,
     load,
     save,
     reset,
     serialize,
     subscribe,
-    normalizeConfig
+    normalizeConfig,
+    dispose() {
+      try { chrome.storage.onChanged.removeListener(handleStorageChanged); } catch {}
+      listeners.clear();
+    }
   });
 })();
