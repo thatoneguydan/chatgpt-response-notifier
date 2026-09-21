@@ -6,6 +6,7 @@ import test from 'node:test';
 const root = new URL('../../', import.meta.url);
 const monitorSource = readFileSync(new URL('extension/monitor-background.js', root), 'utf8');
 const statusSource = readFileSync(new URL('extension/status-script.js', root), 'utf8');
+const attachmentSource = readFileSync(new URL('extension/attachment-script.js', root), 'utf8');
 
 function loadEligibility() {
   const start = monitorSource.indexOf('function codeWatchdogNoCodeEligibility');
@@ -16,6 +17,60 @@ function loadEligibility() {
   vm.runInContext(`${monitorSource.slice(start, end)}\nglobalThis.__eligibility = codeWatchdogNoCodeEligibility;`, context);
   return context.__eligibility;
 }
+
+test('toolbar keeps a known watchdog state when a same-revision overview temporarily omits it', () => {
+  const start = attachmentSource.indexOf('function automationOverviewIsFresh');
+  const end = attachmentSource.indexOf('function applyAutomationOverview', start);
+  assert.ok(start >= 0 && end > start, 'automation overview freshness helper must exist');
+  const context = vm.createContext({ String, Number, Math, globalThis: null });
+  context.globalThis = context;
+  vm.runInContext(`${attachmentSource.slice(start, end)}\nglobalThis.__fresh = automationOverviewIsFresh;`, context);
+  const fresh = context.__fresh;
+
+  const stopped = {
+    activeConversationId: 'conversation-1',
+    stateRevision: 4,
+    automationEnabled: true,
+    codeWatchdog: {
+      updatedAt: 200,
+      stopped: true,
+      stopReason: 'status:COMPLETE_APPLIED'
+    }
+  };
+  assert.equal(fresh({
+    activeConversationId: 'conversation-1',
+    stateRevision: 4,
+    automationEnabled: true,
+    codeWatchdog: null
+  }, stopped), false);
+
+  assert.equal(fresh({
+    activeConversationId: 'conversation-1',
+    stateRevision: 5,
+    automationEnabled: false,
+    codeWatchdog: null
+  }, stopped), true);
+
+  assert.equal(fresh({
+    activeConversationId: 'conversation-1',
+    stateRevision: 4,
+    automationEnabled: true,
+    codeWatchdog: {
+      updatedAt: 300,
+      stopped: false,
+      deadlineAt: 999999
+    }
+  }, stopped), true);
+});
+
+test('watchdog reconciliation and alarm mutations share one per-conversation queue', () => {
+  assert.match(monitorSource, /const codeWatchdogMutationQueues = new Map\(\)/);
+  assert.match(monitorSource, /function queueCodeWatchdogMutation\(conversationIdValue, operation\)/);
+  assert.match(monitorSource, /function reconcileCodeWatchdog\(clean, sender\)[\s\S]*queueCodeWatchdogMutation/);
+  assert.match(monitorSource, /function handleCodeWatchdogAlarm\(conversationId\)[\s\S]*queueCodeWatchdogMutation/);
+  assert.match(monitorSource, /async function reconcileCodeWatchdogState/);
+  assert.match(monitorSource, /async function handleCodeWatchdogAlarmState/);
+});
 
 test('watchdog no-code path preserves genuine submission and identity vetoes', () => {
   const eligibility = loadEligibility();

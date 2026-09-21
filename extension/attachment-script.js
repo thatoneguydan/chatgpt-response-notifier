@@ -3,7 +3,7 @@
 (() => {
   const QUICK_CONTINUE_TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const AUTOMATION_DUE_REFRESH_MS = 5000;
-  const ATTACHMENT_RUNTIME_VERSION = 10;
+  const ATTACHMENT_RUNTIME_VERSION = 11;
   const AUTOMATION_INDICATOR_ID = `chatgpt-notifier-automation-indicator-v${ATTACHMENT_RUNTIME_VERSION}`;
   const AUTOMATION_STATUS_ID = `chatgpt-notifier-automation-status-v${ATTACHMENT_RUNTIME_VERSION}`;
   const AUTOMATION_RUNTIME_STYLE_ID = 'chatgpt-notifier-automation-runtime-style';
@@ -180,6 +180,15 @@
 
     const nextWatchdogUpdatedAt = Math.max(0, Number(next.codeWatchdog?.updatedAt || 0));
     const currentWatchdogUpdatedAt = Math.max(0, Number(current.codeWatchdog?.updatedAt || 0));
+    if (
+      nextStateRevision === currentStateRevision
+      && currentWatchdogUpdatedAt > 0
+      && nextWatchdogUpdatedAt === 0
+      && current.automationEnabled === true
+      && next.automationEnabled === true
+    ) {
+      return false;
+    }
     if (
       nextWatchdogUpdatedAt > 0
       && currentWatchdogUpdatedAt > 0

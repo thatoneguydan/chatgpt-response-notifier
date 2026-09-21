@@ -18,7 +18,7 @@
   const CODE_WATCHDOG_RETRY_MS = 60_000;
   const CODE_WATCHDOG_MAX_SENDS = 3;
   const CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS = 15_000;
-  const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 10;
+  const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 11;
   const HOT_PAGE_MONITOR_RUNTIME_VERSION = 10;
   const HOT_PAGE_STATUS_RUNTIME_VERSION = 12;
   const HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3;
@@ -42,6 +42,7 @@
   const requestTabs = new Map();
   const tabConversations = new Map();
   const codeWatchdogOverviewSignatures = new Map();
+  const codeWatchdogMutationQueues = new Map();
 
   function conversationFromUrl(rawUrl) {
     try {
@@ -454,7 +455,7 @@
     });
   }
 
-  async function reconcileCodeWatchdog(clean, sender) {
+  async function reconcileCodeWatchdogState(clean, sender) {
     const conversationId = String(clean?.conversationId || '');
     if (!conversationId) return null;
 
@@ -580,6 +581,30 @@
     return await scheduleCodeWatchdog(record, requestStartedAt + CODE_WATCHDOG_DELAY_MS);
   }
 
+  function queueCodeWatchdogMutation(conversationIdValue, operation) {
+    const conversationId = String(conversationIdValue || '');
+    if (!conversationId) return Promise.resolve(null);
+    const previous = codeWatchdogMutationQueues.get(conversationId) || Promise.resolve();
+    const next = previous
+      .catch(() => {})
+      .then(() => operation());
+    codeWatchdogMutationQueues.set(conversationId, next);
+    next.finally(() => {
+      if (codeWatchdogMutationQueues.get(conversationId) === next) {
+        codeWatchdogMutationQueues.delete(conversationId);
+      }
+    }).catch(() => {});
+    return next;
+  }
+
+  function reconcileCodeWatchdog(clean, sender) {
+    const conversationId = String(clean?.conversationId || '');
+    return queueCodeWatchdogMutation(
+      conversationId,
+      () => reconcileCodeWatchdogState(clean, sender)
+    );
+  }
+
   async function tabForCodeWatchdog(record) {
     if (Number.isInteger(record?.ownerTabId)) {
       try {
@@ -685,7 +710,7 @@
     return { eligible: true, reason: 'deadline-no-code' };
   }
 
-  async function handleCodeWatchdogAlarm(conversationId) {
+  async function handleCodeWatchdogAlarmState(conversationId) {
     let record = await readCodeWatchdog(conversationId);
     if (!record || record.stopped === true) return;
     const enrollment = await getEnrollment(conversationId);
@@ -741,7 +766,7 @@
 
     const liveRequestStartedAt = Math.max(0, Number(live.requestStartedAt || 0));
     if (liveRequestStartedAt && liveRequestStartedAt !== Number(record.lastRequestStartedAt || 0)) {
-      await reconcileCodeWatchdog(live, { tab });
+      await reconcileCodeWatchdogState(live, { tab });
       const refreshed = await readCodeWatchdog(conversationId);
       if (!refreshed || refreshed.stopped === true || Number(refreshed.deadlineAt || 0) > Date.now() + 1000) return;
       record = refreshed;
@@ -809,6 +834,13 @@
       return;
     }
     await scheduleCodeWatchdog(record, nextDeadlineAt);
+  }
+
+  function handleCodeWatchdogAlarm(conversationId) {
+    return queueCodeWatchdogMutation(
+      conversationId,
+      () => handleCodeWatchdogAlarmState(conversationId)
+    );
   }
 
   function closeDerivedReason(reason) {

@@ -622,10 +622,16 @@ test('notifier-owned Quick Continue light mirrors popup automation states withou
   assert.match(attachment, /setInterval\(tickAutomationStatus, 1000\)/);
   assert.match(attachment, /function automationOverviewIsFresh/);
   assert.match(attachment, /nextWatchdogUpdatedAt < currentWatchdogUpdatedAt/);
+  assert.match(attachment, /currentWatchdogUpdatedAt > 0[\s\S]*nextWatchdogUpdatedAt === 0/);
+  assert.match(attachment, /current\.automationEnabled === true[\s\S]*next\.automationEnabled === true/);
   assert.match(attachment, /function applyAutomationOverview/);
   assert.match(attachment, /return applyAutomationOverview\(overview\)/);
   assert.match(monitor, /codeWatchdogMaxSends: CODE_WATCHDOG_MAX_SENDS/);
   assert.match(monitor, /function codeWatchdogOverviewSignature\(record\)/);
+  assert.match(monitor, /const codeWatchdogMutationQueues = new Map\(\)/);
+  assert.match(monitor, /function queueCodeWatchdogMutation\(conversationIdValue, operation\)/);
+  assert.match(monitor, /function reconcileCodeWatchdog\(clean, sender\)[\s\S]*queueCodeWatchdogMutation/);
+  assert.match(monitor, /function handleCodeWatchdogAlarm\(conversationId\)[\s\S]*queueCodeWatchdogMutation/);
   assert.match(monitor, /watchdogChanged[\s\S]*publishAutomationOverview\(senderTarget\)/);
   assert.doesNotMatch(attachment, /automationBusy \? '\\.62'/);
   assert.doesNotMatch(attachment, /AUTOMATION_REFRESH_MS/);
@@ -701,12 +707,12 @@ test('extension update hot-activates reload-safe watchdog page runtimes in alrea
   const attachment = text('extension/attachment-script.js');
   const monitor = text('extension/monitor-background.js');
 
-  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 10/);
+  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 11/);
   assert.match(attachment, /CHATGPT_NOTIFIER_ATTACHMENT_PING/);
   assert.match(attachment, /runtimeVersion: ATTACHMENT_RUNTIME_VERSION/);
   assert.match(attachment, /extensionVersion/);
 
-  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 10/);
+  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 11/);
   assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 10/);
   assert.match(monitor, /HOT_PAGE_STATUS_RUNTIME_VERSION = 12/);
   assert.match(monitor, /HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3/);
