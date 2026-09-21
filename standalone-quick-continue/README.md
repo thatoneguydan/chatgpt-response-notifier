@@ -60,7 +60,7 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
 
 It copies the extension and bundled config to the stable path `%LOCALAPPDATA%\ChatGPTQuickContinue\Extension` and prints the one-time **Load unpacked** steps for `chrome://extensions`. It does not open Chrome, change Chrome policy, write the registry, or install any background service.
 
-For an existing 1.2.3 install, the pinned 1.2.4 updater replaces the changed runtime files while preserving `config.json`:
+For an existing 1.2.3 install, run the pinned 1.2.4 updater **from Dan's normal interactive Windows account**. The repository's self-hosted runner executes as `NetworkService` and is intentionally not permitted to write this user-profile extension folder. The updater replaces the changed runtime files while preserving `config.json`:
 
 ```powershell
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Update-Installed-1.2.4.ps1
