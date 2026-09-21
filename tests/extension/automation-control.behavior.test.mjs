@@ -177,6 +177,53 @@ async function tick(count = 3) {
   for (let index = 0; index < count; index += 1) await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
+function loadRequestPhaseHandler() {
+  const source = readText('extension/monitor-script.js');
+  const start = source.indexOf('function setRequestPhase');
+  const end = source.indexOf('const messageListener', start);
+  assert.ok(start >= 0 && end > start, 'request phase handler must exist');
+
+  const context = vm.createContext({ Date, Math, Number, String, globalThis: null });
+  context.globalThis = context;
+  vm.runInContext(`
+    let requestPhase = 'unknown';
+    let requestStartedAt = 0;
+    let requestSettledAt = 0;
+    let requestId = '';
+    let manualStopped = false;
+    function resetStability() {}
+    function schedulePublish() {}
+    ${source.slice(start, end)}
+    globalThis.__setRequestPhase = setRequestPhase;
+    globalThis.__requestState = () => ({ requestPhase, requestStartedAt, requestSettledAt, requestId });
+  `, context);
+
+  return {
+    apply: context.__setRequestPhase,
+    state: context.__requestState
+  };
+}
+
+test('completed-only request phase reconstructs fresh start evidence after page runtime replacement', () => {
+  const handler = loadRequestPhaseHandler();
+  handler.apply({
+    phase: 'completed',
+    requestId: 'network-new-chat',
+    requestStartedAt: 1_000,
+    observedAt: 2_000
+  });
+  assert.deepEqual(
+    { ...handler.state() },
+    {
+      requestPhase: 'completed',
+      requestStartedAt: 1_000,
+      requestSettledAt: 2_000,
+      requestId: 'network-new-chat'
+    }
+  );
+});
+
+
 function loadMonitor({ initialTabs = [{ id: 1, url: 'https://chatgpt.com/c/conversation-1', title: 'Build chat', discarded: false, frozen: false, active: true }], sendMessage = null } = {}) {
   let tabs = initialTabs.map(clone);
   let activeTabId = tabs.find((tab) => tab.active)?.id ?? tabs[0]?.id ?? null;
@@ -765,6 +812,43 @@ test('timer allowance reset restores three sends without moving an active deadli
   assert.equal(reset.codeWatchdog.sendCount, 0);
   assert.equal(reset.codeWatchdog.deadlineAt, before.deadlineAt);
   assert.ok(Number(reset.codeWatchdog.budgetResetAt) > 0);
+});
+
+
+test('web request completion carries the original start time to a replacement page runtime', async () => {
+  const sent = [];
+  const monitor = loadMonitor({
+    sendMessage: async (tabId, message) => {
+      sent.push({ tabId, message: clone(message) });
+      return { ok: true };
+    }
+  });
+  await tick();
+  sent.length = 0;
+
+  const request = {
+    tabId: 1,
+    method: 'POST',
+    url: 'https://chatgpt.com/backend-api/f/conversation',
+    requestId: 'network-runtime-replacement'
+  };
+  await monitor.emit(monitor.events.webBefore, request);
+  const started = sent.find((entry) =>
+    entry.message?.type === 'CHATGPT_MONITOR_REQUEST_PHASE'
+    && entry.message?.phase === 'started'
+    && entry.message?.requestId === request.requestId
+  );
+  assert.ok(started, 'started phase should be sent');
+  assert.ok(Number(started.message.requestStartedAt) > 0);
+
+  await monitor.emit(monitor.events.webCompleted, { ...request, timeStamp: Number(started.message.requestStartedAt) + 250 });
+  const completed = sent.find((entry) =>
+    entry.message?.type === 'CHATGPT_MONITOR_REQUEST_PHASE'
+    && entry.message?.phase === 'completed'
+    && entry.message?.requestId === request.requestId
+  );
+  assert.ok(completed, 'completed phase should be sent');
+  assert.equal(completed.message.requestStartedAt, started.message.requestStartedAt);
 });
 
 test('manual Monitor on a new-chat page survives URL assignment before request arming and binds on that request', async () => {
