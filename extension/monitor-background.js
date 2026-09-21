@@ -194,7 +194,9 @@
       updatedAt: now
     };
     await putRecord(ENROLLMENT_STORE, record);
-    if (!isEnabled) await clearCodeWatchdog(identity.id);
+    if (!isEnabled) {
+      await queueCodeWatchdogMutation(identity.id, () => clearCodeWatchdog(identity.id));
+    }
     return record;
   }
 
@@ -352,6 +354,7 @@
       ...patch,
       key: codeWatchdogKey(conversationId),
       conversationId: String(conversationId || ''),
+      watchdogRevision: Math.max(0, Number(existing?.watchdogRevision || 0)) + 1,
       updatedAt: Date.now()
     };
     await putRecord(PROFILE_STORE, record);
@@ -1255,14 +1258,16 @@
       return { ok: false, error: 'Build automation is not active for this conversation.', reason: 'automation-not-active', requestId: String(message?.requestId || ''), ...overview };
     }
 
-    let record = await readCodeWatchdog(target.id);
-    if (record) {
-      const capExhausted = record.stopped === true && String(record.stopReason || '') === 'retry-cap-reached';
-      record = await putCodeWatchdog(target.id, codeWatchdogBudgetReset(record));
+    let record = await queueCodeWatchdogMutation(target.id, async () => {
+      const current = await readCodeWatchdog(target.id);
+      if (!current) return null;
+      const capExhausted = current.stopped === true && String(current.stopReason || '') === 'retry-cap-reached';
+      const updated = await putCodeWatchdog(target.id, codeWatchdogBudgetReset(current));
       if (capExhausted) {
-        try { chrome.alarms.create(codeWatchdogAlarmName(target.id), { when: record.deadlineAt }); } catch {}
+        try { chrome.alarms.create(codeWatchdogAlarmName(target.id), { when: updated.deadlineAt }); } catch {}
       }
-    }
+      return updated;
+    });
 
     const overview = await monitorOverview(target);
     publishAutomationOverview(target, overview).catch(() => {});
