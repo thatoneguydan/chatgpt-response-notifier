@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 12;
+  const RUNTIME_VERSION = 13;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me.';
   const DEFAULT_WAIT_MS = 30000;
@@ -89,33 +89,55 @@
       return joined || nodeText(roleNode);
     } catch { return ''; }
   }
+  function terminalStatusCodeFromRenderedText(value) {
+    const api = globalThis.ChatGPTNotifierStatusCode;
+    if (typeof api?.isStatusCode !== 'function') return '';
+    const lines = String(value || '')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/\r\n?/g, '\n')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    if (!lines.length) return '';
+    const finalMatch = lines[lines.length - 1].match(/^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/);
+    if (!finalMatch || !api.isStatusCode(finalMatch[1])) return '';
+    let validCount = 0;
+    for (const line of lines) {
+      const match = line.match(/^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/);
+      if (match && api.isStatusCode(match[1])) validCount += 1;
+    }
+    return validCount === 1 ? finalMatch[1] : '';
+  }
+
   function assistantStatusCodeFromDom(turn) {
     try {
-      const api = globalThis.ChatGPTNotifierStatusCode;
-      if (typeof api?.isStatusCode !== 'function') return '';
       const source = roleRoot(turn, 'assistant');
       if (!source) return '';
       const copy = source.cloneNode(true);
       for (const excluded of copy.querySelectorAll?.('pre, code, blockquote, ul, ol, li, [data-message-author-role="tool"], [data-tool]') || []) excluded.remove();
-      const rawLines = String(copy.innerText || copy.textContent || '')
-        .replace(/[\u200B-\u200D\uFEFF]/g, '')
-        .replace(/\r\n?/g, '\n')
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean);
-      for (let index = rawLines.length - 1; index >= 0; index -= 1) {
-        const match = rawLines[index].match(/^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/);
-        if (match && api.isStatusCode(match[1])) return match[1];
-      }
-      const candidates = [copy, ...(copy.querySelectorAll?.('p, div, span') || [])];
-      for (let index = candidates.length - 1; index >= 0; index -= 1) {
-        const value = String(candidates[index]?.textContent || '')
-          .replace(/[\u200B-\u200D\uFEFF]/g, '')
-          .replace(/\r\n?/g, '\n')
-          .trim();
-        const match = value.match(/^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/);
-        if (match && api.isStatusCode(match[1])) return match[1];
-      }
+
+      const direct = terminalStatusCodeFromRenderedText(copy.innerText || copy.textContent || '');
+      if (direct) return direct;
+
+      // Some ChatGPT render paths flatten block boundaries in textContent. Keep a
+      // DOM fallback, but only accept one exact status-only terminal block. A
+      // status token quoted in prose or followed by more assistant text is not a
+      // terminal footer and must never stop the watchdog.
+      const blocks = Array.from(copy.querySelectorAll?.('p, div') || [])
+        .filter((node) => {
+          const text = inline(node?.textContent || '');
+          if (!text) return false;
+          const childBlocks = Array.from(node?.querySelectorAll?.('p, div') || [])
+            .filter((child) => child !== node && inline(child?.textContent || ''));
+          return childBlocks.length === 0;
+        });
+      const terminalBlocks = blocks
+        .map((node) => ({ node, code: terminalStatusCodeFromRenderedText(node?.textContent || '') }))
+        .filter((entry) => entry.code);
+      if (terminalBlocks.length !== 1) return '';
+      const meaningfulBlocks = blocks.filter((node) => inline(node?.textContent || ''));
+      const lastBlock = meaningfulBlocks[meaningfulBlocks.length - 1] || null;
+      return terminalBlocks[0].node === lastBlock ? terminalBlocks[0].code : '';
     } catch {}
     return '';
   }
@@ -358,8 +380,14 @@
     if (beforeSendBlock && beforeSendBlock !== 'composer-not-empty') { writeComposer(composer, ''); return { ok: false, clicked: false, reason: `${beforeSendBlock}-before-send`, documentId }; }
     try { sendButton.click(); } catch { if (composerText(composer) === cleanComposer(text)) writeComposer(composer, ''); return { ok: false, clicked: false, reason: 'send-click-failed', documentId }; }
     const observed = await waitForContinuationUserTurn(previousUserKey, text);
-    if (observed.errorText) return { ok: false, clicked: true, reason: 'page-send-error', pageError: observed.errorText, documentId };
-    if (!observed.userTurn) return { ok: false, clicked: true, reason: 'continuation-user-turn-not-confirmed', documentId };
+    if (observed.errorText) {
+      if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
+      return { ok: false, clicked: true, reason: 'page-send-error', pageError: observed.errorText, documentId };
+    }
+    if (!observed.userTurn) {
+      if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
+      return { ok: false, clicked: true, reason: 'continuation-user-turn-not-confirmed', documentId };
+    }
     return { ok: true, clicked: true, reason: 'continuation-user-turn-confirmed', documentId, continuationUserKey: observed.userTurn.key };
   }
 
@@ -449,8 +477,14 @@
     }
 
     const sent = await waitForContinuationUserTurn(previousUserKey, text);
-    if (sent.errorText) return { ok: false, clicked: true, reason: 'page-send-error', pageError: sent.errorText, documentId };
-    if (!sent.userTurn) return { ok: false, clicked: true, reason: 'continuation-user-turn-not-confirmed', documentId };
+    if (sent.errorText) {
+      if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
+      return { ok: false, clicked: true, reason: 'page-send-error', pageError: sent.errorText, documentId };
+    }
+    if (!sent.userTurn) {
+      if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
+      return { ok: false, clicked: true, reason: 'continuation-user-turn-not-confirmed', documentId };
+    }
 
     const postSendStatusCode = expectedPrompt ? terminalStatusForPromptKey(expectedPrompt) : '';
     if (postSendStatusCode) watchdogStatusCode = postSendStatusCode;
