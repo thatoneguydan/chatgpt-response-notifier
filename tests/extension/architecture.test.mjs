@@ -621,7 +621,8 @@ test('notifier-owned Quick Continue light mirrors popup automation states withou
   assert.match(attachment, /Auto-continues exhausted/);
   assert.match(attachment, /setInterval\(tickAutomationStatus, 1000\)/);
   assert.match(attachment, /function automationOverviewIsFresh/);
-  assert.match(attachment, /nextWatchdogUpdatedAt < currentWatchdogUpdatedAt/);
+  assert.match(attachment, /nextWatchdogRevision < currentWatchdogRevision/);
+  assert.match(attachment, /nextWatchdogRevision === 0[\s\S]*currentWatchdogRevision === 0[\s\S]*nextWatchdogUpdatedAt < currentWatchdogUpdatedAt/);
   assert.match(attachment, /currentWatchdogUpdatedAt > 0[\s\S]*nextWatchdogUpdatedAt === 0/);
   assert.match(attachment, /current\.automationEnabled === true[\s\S]*next\.automationEnabled === true/);
   assert.match(attachment, /function applyAutomationOverview/);
@@ -632,6 +633,9 @@ test('notifier-owned Quick Continue light mirrors popup automation states withou
   assert.match(monitor, /function queueCodeWatchdogMutation\(conversationIdValue, operation\)/);
   assert.match(monitor, /function reconcileCodeWatchdog\(clean, sender\)[\s\S]*queueCodeWatchdogMutation/);
   assert.match(monitor, /function handleCodeWatchdogAlarm\(conversationId\)[\s\S]*queueCodeWatchdogMutation/);
+  assert.match(monitor, /watchdogRevision: Math\.max\(0, Number\(existing\?\.watchdogRevision \|\| 0\)\) \+ 1/);
+  assert.match(monitor, /queueCodeWatchdogMutation\(identity\.id, \(\) => clearCodeWatchdog\(identity\.id\)\)/);
+  assert.match(monitor, /queueCodeWatchdogMutation\(target\.id, async \(\) =>/);
   assert.match(monitor, /watchdogChanged[\s\S]*publishAutomationOverview\(senderTarget\)/);
   assert.doesNotMatch(attachment, /automationBusy \? '\\.62'/);
   assert.doesNotMatch(attachment, /AUTOMATION_REFRESH_MS/);
