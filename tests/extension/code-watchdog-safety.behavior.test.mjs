@@ -79,7 +79,7 @@ test('recoverable status codes use the same immediate watchdog follow-up path', 
   assert.doesNotMatch(watchdog, /performContinuation\(observed\)/);
   assert.match(watchdog, /watchdogStatusCode = observedStatusCode/);
   assert.match(watchdog, /watchdogStatusCode = beforeSendStatusCode/);
-  assert.match(watchdog, /watchdogDisposition: watchdogStatusCode \? 'incomplete-reset' : 'retry-sent'/);
+  assert.match(watchdog, /watchdogDisposition: terminalAfterSend \? 'stop' : \(watchdogStatusCode \? 'incomplete-reset' : 'retry-sent'\)/);
 });
 
 test('watchdog re-checks the original prompt after send so late terminal status wins the race', () => {
