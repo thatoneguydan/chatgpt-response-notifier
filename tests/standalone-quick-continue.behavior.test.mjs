@@ -14,6 +14,7 @@ const promptSource = fs.readFileSync(path.join(extensionRoot, 'prompt-format.js'
 const configSource = fs.readFileSync(path.join(extensionRoot, 'config.js'), 'utf8');
 const contentSource = fs.readFileSync(path.join(extensionRoot, 'content-script.js'), 'utf8');
 const installerSource = fs.readFileSync(path.join(extensionRoot, 'Install.ps1'), 'utf8');
+const updater124Source = fs.readFileSync(path.join(extensionRoot, 'Update-Installed-1.2.4.ps1'), 'utf8');
 
 test('standalone extension stays background-free with only local storage permission', () => {
   assert.equal(manifest.manifest_version, 3);
@@ -198,6 +199,18 @@ test('installer copies live config files and removes the legacy projects JSON', 
   assert.match(installerSource, /Remove-Item -LiteralPath \$legacyProjects -Force/);
   assert.doesNotMatch(installerSource, /Set-ItemProperty|New-ItemProperty|reg\.exe|HKCU:|HKLM:/i);
   assert.doesNotMatch(installerSource, /Start-Process|chrome\.exe/i);
+});
+
+
+test('1.2.4 updater pins the repaired runtime set without overwriting live config defaults', () => {
+  assert.match(updater124Source, /\$commit = '[0-9a-f]{40}'/);
+  assert.match(updater124Source, /expected 1\.2\.4/);
+  for (const file of ['manifest.json', 'prompt-format.js', 'config.js', 'content-script.js', 'README.md']) {
+    assert.match(updater124Source, new RegExp(file.replace('.', '\\.') ));
+  }
+  assert.doesNotMatch(updater124Source, /\$files\s*=\s*@\([^\r\n]*config\.json/);
+  assert.match(updater124Source, /requiresChromeExtensionReload\s*=\s*\$true/);
+  assert.match(updater124Source, /Get-FileHash -Algorithm SHA256/);
 });
 
 test('Project menu stays available for config editing when send controls are unavailable', () => {
