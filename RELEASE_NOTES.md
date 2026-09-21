@@ -1,8 +1,8 @@
-# ChatGPT Response Notifier 0.9.50
+# ChatGPT Response Notifier 0.9.51
 
-- Fixes the timer/reset control hover affordance that was not visibly distinguishable in the live ChatGPT theme.
-- Replaces the theme-dependent outer box-shadow with a real 1px border reserved at rest as transparent and changed to the control's current text color on hover.
-- The reserved border prevents geometry shift; there is no animation.
-- Preserves the v0.9.49 opaque clickable timer, three-send allowance reset behavior, terminal-stop preservation, and no-F5 hot activation.
-- Attachment runtime v10 hot-activates the corrected hover treatment in already-open ChatGPT tabs.
+- Fixes a remaining auto-continue race where a monitored chat could emit `BLOCKED_HUMAN` just after the watchdog's final pre-send check and still receive another automatic Continue.
+- Status runtime v11 re-checks the exact parent prompt after an automatic Continue is submitted, so a terminal status that lands during Send immediately stops the watchdog.
+- Monitor runtime v9 also reports the previous prompt's terminal status while an automatic follow-up is current; worker-owned parent/child lineage keeps a later-arriving `BLOCKED_HUMAN` authoritative instead of treating the automatic follow-up as a new human request.
+- A genuinely new human request still starts a fresh watchdog normally.
+- Preserves the 30-minute no-code deadline, three-send allowance, traffic governor, terminal-status semantics, and no-F5 hot runtime activation.
 
