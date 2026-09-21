@@ -1,7 +1,7 @@
-# ChatGPT Response Notifier 0.9.55
+# ChatGPT Response Notifier 0.9.56
 
-- Prevents false terminal stops when a GitHub status token appears inside assistant prose: the DOM fallback now accepts only one exact status-only terminal block at the end of the assistant response, preserving the strict footer contract.
-- Cleans up extension-generated Continue text when a Send click produces an error or no confirmed user turn, so the watchdog cannot mistake its own unsent prompt for a user draft and pause itself.
-- Status page runtime advances to v13 so hot reinjection replaces stale page logic on already-open ChatGPT tabs.
-- Preserves generic status policy: only `INCOMPLETE_LIMIT`, `INCOMPLETE_TOOL_FAILURE`, `INCOMPLETE_CONTINUE`, and `INCOMPLETE_HANDOFF` auto-continue; recognized terminal stop statuses still stop.
-- Preserves the 30-minute hard no-code deadline, three-send allowance, exact-parent pre-Send terminal recheck, traffic governor, and notifier hot activation without a manual page refresh.
+- Fixes prompt/request ordering races that could make the auto-continue status flicker or remain stopped after a new human message.
+- Terminal watchdog tombstones are now truly prompt-scoped: a stale terminal snapshot from an older prompt cannot overwrite a watchdog that already tracks a different prompt at the same or newer page-global request timestamp.
+- A stopped prompt no longer absorbs a newer request timestamp merely because ChatGPT has not yet rendered the new user turn; once the genuinely new prompt appears, it starts a fresh watchdog normally.
+- Preserves the automatic parent→child protection: a late terminal status on the parent still stops an automatic Continue child.
+- Preserves generic status policy, the 30-minute hard no-code deadline, three-send allowance, user-draft/upload vetoes, exact-parent terminal rechecks, and no-focus/no-API behavior.
