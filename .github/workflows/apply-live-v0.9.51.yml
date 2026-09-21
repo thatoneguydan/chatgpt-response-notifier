@@ -1,0 +1,126 @@
+name: Apply live notifier v0.9.51
+
+on:
+  push:
+    branches: [ops/apply-live-v0.9.51]
+    paths:
+      - .github/workflows/apply-live-v0.9.51.yml
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 10
+    steps:
+      - name: Apply managed update to interactive notifier
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expectedVersion = '0.9.51'
+          $expectedSource = 'fa40d6a049919966fb0e305e28dfaaf1464a6180'
+          $port = 38473
+
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class NotifierSessionNative951
+          {
+              [DllImport("kernel32.dll")]
+              public static extern uint WTSGetActiveConsoleSessionId();
+          }
+          '@
+
+          function ActiveSession {
+            $raw = [NotifierSessionNative951]::WTSGetActiveConsoleSessionId()
+            if ($raw -eq [uint32]::MaxValue) { throw 'No active console session.' }
+            return [int]$raw
+          }
+
+          function BridgeOwner {
+            $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $listener) { return $null }
+            $process = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
+            if (-not $process) { return $null }
+            return [pscustomobject]@{ Pid=[int]$process.Id; SessionId=[int]$process.SessionId }
+          }
+
+          function Bridge([hashtable]$message, [int]$timeoutSeconds = 20) {
+            $socket = [System.Net.WebSockets.ClientWebSocket]::new()
+            $socket.Options.SetRequestHeader('Origin', 'chrome-extension://lciedmoiiapbgemklkpoadimhffaaaah')
+            $cts = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds($timeoutSeconds))
+            try {
+              $socket.ConnectAsync([Uri]"ws://127.0.0.1:$port/bridge", $cts.Token).GetAwaiter().GetResult()
+              $bytes = [Text.Encoding]::UTF8.GetBytes(($message | ConvertTo-Json -Compress))
+              $socket.SendAsync([ArraySegment[byte]]::new($bytes), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $cts.Token).GetAwaiter().GetResult()
+              $buffer = New-Object byte[] 65536
+              for ($i=0; $i -lt 30; $i++) {
+                $result = $socket.ReceiveAsync([ArraySegment[byte]]::new($buffer), $cts.Token).GetAwaiter().GetResult()
+                if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { break }
+                $event = ([Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count) | ConvertFrom-Json)
+                if ([string]$event.requestId -eq [string]$message.requestId) { return $event }
+              }
+              return $null
+            } finally {
+              try { $socket.Dispose() } catch {}
+              $cts.Dispose()
+            }
+          }
+
+          function Ping {
+            $id=[Guid]::NewGuid().ToString('N')
+            return Bridge @{ type='ping'; requestId=$id } 20
+          }
+
+          $session=ActiveSession
+          $owner=BridgeOwner
+          if (-not $owner -or $owner.SessionId -ne $session) { throw 'Notifier bridge is not owned by the interactive session.' }
+
+          $before=Ping
+          if (-not $before) { throw 'Interactive helper did not answer pre-update ping.' }
+          Write-Host ("PRECHECK " + (@{
+            version=[string]$before.installedExtensionVersion
+            bridgeOwnerInteractive=$true
+            sourceMatchesExpected=([string]$before.installedSourceCommit -eq $expectedSource)
+          } | ConvertTo-Json -Compress))
+
+          $alreadyCurrent = [string]$before.installedExtensionVersion -eq $expectedVersion -and [string]$before.installedSourceCommit -eq $expectedSource
+          if (-not $alreadyCurrent) {
+            $id=[Guid]::NewGuid().ToString('N')
+            try {
+              $result=Bridge @{ type='update.check'; requestId=$id } 180
+              Write-Host ("UPDATE_RESULT " + (@{
+                received=($null -ne $result)
+                state=[string]$result.updateStatus.state
+                currentVersion=[string]$result.updateStatus.currentVersion
+                availableVersion=[string]$result.updateStatus.availableVersion
+                errorPresent=-not [string]::IsNullOrWhiteSpace([string]$result.updateStatus.error)
+              } | ConvertTo-Json -Compress))
+            } catch {
+              Write-Host 'UPDATE_RESULT connection-replaced-during-update'
+            }
+          }
+
+          $deadline=[DateTime]::UtcNow.AddMinutes(4)
+          $verified=$null
+          do {
+            Start-Sleep -Seconds 2
+            $currentOwner=BridgeOwner
+            if (-not $currentOwner -or $currentOwner.SessionId -ne $session) { continue }
+            try { $pong=Ping } catch { $pong=$null }
+            if ($pong -and [string]$pong.installedExtensionVersion -eq $expectedVersion -and [string]$pong.installedSourceCommit -eq $expectedSource) {
+              $verified=$pong
+              break
+            }
+          } while ([DateTime]::UtcNow -lt $deadline)
+
+          if (-not $verified) { throw 'Live notifier did not reach v0.9.51 with the expected source.' }
+
+          Write-Host ("VERIFIED " + (@{
+            version=[string]$verified.installedExtensionVersion
+            sourceMatchesExpected=$true
+            bridgeOwnerInteractive=$true
+            managedUpdateApplied=(-not $alreadyCurrent)
+            alreadyCurrent=$alreadyCurrent
+          } | ConvertTo-Json -Compress))
