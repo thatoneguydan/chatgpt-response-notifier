@@ -567,6 +567,18 @@
 
     if (current?.stopped === true) {
       if (stoppedWatchdogStillOwnsSnapshot(clean, current)) {
+        if (
+          requestStartedAt > Number(current.lastRequestStartedAt || 0)
+          || String(clean.promptKey || '') !== String(current.lastPromptKey || '')
+        ) {
+          current = await putCodeWatchdog(conversationId, {
+            ...current,
+            lastRequestStartedAt: Math.max(requestStartedAt, Number(current.lastRequestStartedAt || 0)),
+            lastPromptKey: String(clean.promptKey || current.lastPromptKey || ''),
+            conversationUrl: clean.conversationUrl || current.conversationUrl || '',
+            ownerTabId: Number.isInteger(sender?.tab?.id) ? sender.tab.id : (current.ownerTabId ?? null)
+          });
+        }
         return current;
       }
       current = null;
