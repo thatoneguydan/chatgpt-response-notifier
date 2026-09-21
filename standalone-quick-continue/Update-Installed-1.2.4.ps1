@@ -1,7 +1,7 @@
 $ErrorActionPreference = 'Stop'
 
 $target = Join-Path $env:LOCALAPPDATA 'ChatGPTQuickContinue\Extension'
-$commit = 'd22c4f2fad25c906e989ca3838728059575c19b6'
+$commit = '25add9fcb113c80eea3bfbefc0e28db490bac52c'
 $baseUrl = "https://raw.githubusercontent.com/thatoneguydan/chatgpt-response-notifier/$commit/standalone-quick-continue"
 $temp = Join-Path $env:TEMP ("ChatGPTQuickContinue-1.2.4-" + [Guid]::NewGuid().ToString('N'))
 $backupRoot = Join-Path $env:LOCALAPPDATA 'ChatGPTQuickContinue\Backups'
