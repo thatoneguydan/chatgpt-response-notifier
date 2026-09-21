@@ -140,35 +140,6 @@
     return statusCode;
   }
 
-  function statusCodeForPromptKey(expectedPromptKey = '') {
-    const expected = String(expectedPromptKey || '');
-    const api = globalThis.ChatGPTNotifierStatusCode;
-    const identity = conversationIdentity();
-    if (!expected || !api || !identity) return '';
-    const nodes = turns();
-    for (let userIndex = 0; userIndex < nodes.length; userIndex += 1) {
-      if (roleOf(nodes[userIndex]) !== 'user') continue;
-      const userId = turnId(nodes[userIndex], 'user', userIndex);
-      const promptKey = `${identity.id}|${userId}`;
-      if (promptKey !== expected) continue;
-      let assistantIndex = -1;
-      let responseText = '';
-      for (let index = userIndex + 1; index < nodes.length; index += 1) {
-        const role = roleOf(nodes[index]);
-        if (role === 'user') break;
-        if (role !== 'assistant') continue;
-        const text = turnText(nodes[index], 'assistant');
-        if (!text) continue;
-        assistantIndex = index;
-        responseText = text;
-      }
-      if (assistantIndex < 0 || !responseText) return '';
-      const parsed = api.parseTerminalStatus(responseText);
-      return String(parsed.statusCode || assistantStatusCodeFromDom(nodes[assistantIndex]) || '');
-    }
-    return '';
-  }
-
   function revisionOf(text) {
     const value = String(text || '');
     let hash = 2166136261;
@@ -468,18 +439,6 @@
     }
 
     const sent = await waitForContinuationUserTurn(previousUserKey, text);
-    const lateStatusCode = String(statusCodeForPromptKey(expectedPrompt || initialPromptKey) || '');
-    if (lateStatusCode && globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(lateStatusCode) !== true) {
-      return {
-        ok: false,
-        clicked: true,
-        reason: 'terminal-status-observed-after-send',
-        statusCode: lateStatusCode,
-        watchdogDisposition: 'stop',
-        documentId,
-        continuationUserKey: String(sent.userTurn?.key || '')
-      };
-    }
     if (sent.errorText) return { ok: false, clicked: true, reason: 'page-send-error', pageError: sent.errorText, documentId };
     if (!sent.userTurn) return { ok: false, clicked: true, reason: 'continuation-user-turn-not-confirmed', documentId };
 
