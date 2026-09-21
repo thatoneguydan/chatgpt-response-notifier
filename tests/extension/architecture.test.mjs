@@ -681,7 +681,7 @@ test('terminal watchdog state is sticky and stale attachment generations cannot 
   assert.match(monitorWorker, /async function parkCodeWatchdogForTerminalStatus/);
   assert.match(monitorWorker, /stopReason: `status:\$\{String\(clean\?\.statusCode/);
   assert.match(monitorWorker, /return await parkCodeWatchdogForTerminalStatus\(clean, sender, current\)/);
-  assert.match(monitorWorker, /await parkCodeWatchdogForTerminalStatus\(live, \{ tab \}, record\)/);
+  assert.match(monitorWorker, /await parkCodeWatchdogForTerminalStatus\(statusSnapshot, \{ tab \}, record\)/);
   assert.match(monitorWorker, /await parkCodeWatchdogForTerminalStatus\(\s*\{ \.\.\.live, statusCode: racedStatusCode \}/);
   assert.match(monitorWorker, /lastAutomaticParentPromptKey/);
   assert.match(monitorWorker, /previousStatusCode/);
