@@ -157,7 +157,45 @@ test('30-minute no-code deadline is authoritative even while generation is activ
 });
 
 test('status runtime generation advances for the hard-deadline page behavior', () => {
-  assert.match(statusSource, /const RUNTIME_VERSION = 12/);
+  assert.match(statusSource, /const RUNTIME_VERSION = 13/);
+});
+
+test('rendered status fallback accepts only one genuine terminal footer', () => {
+  const start = statusSource.indexOf('function terminalStatusCodeFromRenderedText');
+  const end = statusSource.indexOf('function assistantStatusCodeFromDom', start);
+  assert.ok(start >= 0 && end > start, 'strict rendered-status helper must exist');
+  const context = vm.createContext({
+    String,
+    globalThis: null,
+    ChatGPTNotifierStatusCode: {
+      isStatusCode(value) {
+        return ['COMPLETE_APPLIED', 'INCOMPLETE_CONTINUE', 'BLOCKED_HUMAN'].includes(String(value || ''));
+      }
+    }
+  });
+  context.globalThis = context;
+  vm.runInContext(`${statusSource.slice(start, end)}\nglobalThis.__parseRenderedStatus = terminalStatusCodeFromRenderedText;`, context);
+  const parse = context.__parseRenderedStatus;
+
+  assert.equal(parse('Work finished.\n[GITHUB_STATUS: COMPLETE_APPLIED]'), 'COMPLETE_APPLIED');
+  assert.equal(parse('[GITHUB_STATUS: COMPLETE_APPLIED]\nMore work remains.'), '');
+  assert.equal(parse('Previous footer: [GITHUB_STATUS: COMPLETE_APPLIED]'), '');
+  assert.equal(parse('[GITHUB_STATUS: COMPLETE_APPLIED]\n[GITHUB_STATUS: INCOMPLETE_CONTINUE]'), '');
+});
+
+test('unconfirmed extension-generated sends clean up only their own composer text', () => {
+  const normalStart = statusSource.indexOf('async function performContinuation');
+  const watchdogStart = statusSource.indexOf('async function performWatchdogContinuation');
+  const watchdogEnd = statusSource.indexOf('async function waitForTerminalStatus', watchdogStart);
+  assert.ok(normalStart >= 0 && watchdogStart > normalStart && watchdogEnd > watchdogStart);
+
+  const normal = statusSource.slice(normalStart, watchdogStart);
+  const watchdog = statusSource.slice(watchdogStart, watchdogEnd);
+  for (const source of [normal, watchdog]) {
+    assert.match(source, /continuation-user-turn-not-confirmed/);
+    assert.match(source, /composerText\(composer\) === cleanComposer\(text\)\) writeComposer\(composer, ''\)/);
+    assert.match(source, /page-send-error/);
+  }
 });
 
 test('alarm re-reads the exact prompt terminal status before watchdog Send', () => {
