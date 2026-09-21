@@ -246,6 +246,8 @@
       conversationUrl: String(snapshot.conversationUrl || ''),
       documentId: String(snapshot.documentId || ''),
       promptKey: String(snapshot.promptKey || ''),
+      previousPromptKey: String(snapshot.previousPromptKey || ''),
+      previousStatusCode: String(snapshot.previousStatusCode || ''),
       promptRevision: String(snapshot.promptRevision || ''),
       assistantKey: String(snapshot.assistantKey || ''),
       assistantRevision: String(snapshot.assistantRevision || ''),
