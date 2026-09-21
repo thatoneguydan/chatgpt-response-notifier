@@ -76,6 +76,16 @@ test('project picker is non-modal, exposes Edit, and never auto-focuses', () => 
   assert.doesNotMatch(contentSource, /\.title\s*=/);
 });
 
+test('prompt and config APIs are versioned so reinjection cannot retain stale globals indefinitely', () => {
+  assert.match(promptSource, /const RUNTIME_VERSION = 2/);
+  assert.match(promptSource, /runtimeVersion: RUNTIME_VERSION/);
+  assert.match(configSource, /const RUNTIME_VERSION = 2/);
+  assert.match(configSource, /previousRuntime\?\.dispose\?\.\(\)/);
+  assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
+  assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
+  assert.match(configSource, /chrome\.storage\.onChanged\.removeListener\(handleStorageChanged\)/);
+});
+
 test('inline JSON Save applies through config storage without reload or refresh calls', () => {
   assert.match(contentSource, /configApi\.save\(parsed\)/);
   assert.match(contentSource, /configApi\.serialize\(currentConfig\)/);
