@@ -87,19 +87,27 @@ jobs:
 
           $alreadyCurrent = [string]$before.installedExtensionVersion -eq $expectedVersion -and [string]$before.installedSourceCommit -eq $expectedSource
           if (-not $alreadyCurrent) {
-            $id=[Guid]::NewGuid().ToString('N')
-            try {
-              $result=Bridge @{ type='update.check'; requestId=$id } 180
-              Write-Host ("UPDATE_RESULT " + (@{
-                received=($null -ne $result)
-                state=[string]$result.updateStatus.state
-                currentVersion=[string]$result.updateStatus.currentVersion
-                availableVersion=[string]$result.updateStatus.availableVersion
-                errorPresent=-not [string]::IsNullOrWhiteSpace([string]$result.updateStatus.error)
-              } | ConvertTo-Json -Compress))
-            } catch {
-              Write-Host 'UPDATE_RESULT connection-replaced-during-update'
-            }
+            $updateDeadline=[DateTime]::UtcNow.AddMinutes(4)
+            do {
+              $id=[Guid]::NewGuid().ToString('N')
+              try {
+                $result=Bridge @{ type='update.check'; requestId=$id } 180
+                Write-Host ("UPDATE_RESULT " + (@{
+                  received=($null -ne $result)
+                  state=[string]$result.updateStatus.state
+                  currentVersion=[string]$result.updateStatus.currentVersion
+                  availableVersion=[string]$result.updateStatus.availableVersion
+                  errorPresent=-not [string]::IsNullOrWhiteSpace([string]$result.updateStatus.error)
+                } | ConvertTo-Json -Compress))
+                if ($result -and [string]$result.updateStatus.currentVersion -eq $expectedVersion) { break }
+              } catch {
+                Write-Host 'UPDATE_RESULT connection-replaced-during-update'
+              }
+
+              Start-Sleep -Seconds 10
+              try { $probe=Ping } catch { $probe=$null }
+              if ($probe -and [string]$probe.installedExtensionVersion -eq $expectedVersion -and [string]$probe.installedSourceCommit -eq $expectedSource) { break }
+            } while ([DateTime]::UtcNow -lt $updateDeadline)
           }
 
           $deadline=[DateTime]::UtcNow.AddMinutes(4)
