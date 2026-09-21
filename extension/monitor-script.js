@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 10;
+  const RUNTIME_VERSION = 11;
   try { globalThis.__chatgptNotifierMonitorRuntime?.dispose?.(); } catch {}
 
   const abortController = new AbortController();
@@ -534,17 +534,20 @@
     const phase = String(message?.phase || '');
     if (!['started', 'completed', 'error'].includes(phase)) return;
     const incomingId = String(message?.requestId || '');
+    const observedAt = Number(message?.observedAt || Date.now());
+    const incomingStartedAt = Math.max(0, Number(message?.requestStartedAt || 0));
     if (phase === 'started') {
       requestPhase = 'started';
       requestId = incomingId;
-      requestStartedAt = Number(message?.observedAt || Date.now());
+      requestStartedAt = incomingStartedAt || observedAt;
       requestSettledAt = 0;
       manualStopped = false;
       resetStability();
     } else if (!requestId || !incomingId || requestId === incomingId) {
       requestPhase = phase;
       requestId = incomingId || requestId;
-      requestSettledAt = Number(message?.observedAt || Date.now());
+      if (requestStartedAt <= 0) requestStartedAt = incomingStartedAt || observedAt;
+      requestSettledAt = observedAt;
     }
     schedulePublish();
   }

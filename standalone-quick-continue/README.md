@@ -15,6 +15,7 @@ When ChatGPT Response Notifier is also enabled, the notifier may add its own sma
 - **Edit** opens the current raw JSON config directly inside the Project menu. **Save** validates and applies it immediately without reloading the extension or refreshing ChatGPT.
 - The Project menu normally opens upward. If that would cross the viewport top, it flips below the toolbar; if neither side fully fits, it uses the side with more room.
 - Toolbar layout syncs keep the existing toolbar visible; brief ChatGPT composer rerenders are given a 200 ms grace period before the toolbar is hidden, preventing one-frame flicker.
+- Runtime 1.2.4 can replace an older injected generation cleanly, reattaches the toolbar if ChatGPT detaches it, and ignores notifier-only countdown mutations. Clock text is changed only when the displayed minute actually changes, preventing the toolbar's own MutationObserver from becoming a self-sustaining layout loop.
 
 The bundled `config.json` is the readable/default configuration:
 
@@ -58,5 +59,13 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
 ```
 
 It copies the extension and bundled config to the stable path `%LOCALAPPDATA%\ChatGPTQuickContinue\Extension` and prints the one-time **Load unpacked** steps for `chrome://extensions`. It does not open Chrome, change Chrome policy, write the registry, or install any background service.
+
+For an existing 1.2.3 install, the pinned 1.2.4 updater replaces the changed runtime files while preserving `config.json`:
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Update-Installed-1.2.4.ps1
+```
+
+The updater verifies each copied file by SHA-256 and reports that Chrome's unpacked extension must be reloaded once before the new runtime is active.
 
 Because this is a separate extension, it can stay enabled while ChatGPT Response Notifier is disabled or under repair. If the notifier is later enabled too, Quick Continue suppresses the notifier's older quick-prompt toolbar so only the standalone controls are shown.

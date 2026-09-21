@@ -18,8 +18,8 @@
   const CODE_WATCHDOG_RETRY_MS = 60_000;
   const CODE_WATCHDOG_MAX_SENDS = 3;
   const CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS = 15_000;
-  const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 11;
-  const HOT_PAGE_MONITOR_RUNTIME_VERSION = 10;
+  const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 12;
+  const HOT_PAGE_MONITOR_RUNTIME_VERSION = 11;
   const HOT_PAGE_STATUS_RUNTIME_VERSION = 12;
   const HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3;
   const HOT_PAGE_RUNTIME_FILES = Object.freeze([
@@ -194,7 +194,9 @@
       updatedAt: now
     };
     await putRecord(ENROLLMENT_STORE, record);
-    if (!isEnabled) await clearCodeWatchdog(identity.id);
+    if (!isEnabled) {
+      await queueCodeWatchdogMutation(identity.id, () => clearCodeWatchdog(identity.id));
+    }
     return record;
   }
 
@@ -352,6 +354,7 @@
       ...patch,
       key: codeWatchdogKey(conversationId),
       conversationId: String(conversationId || ''),
+      watchdogRevision: Math.max(0, Number(existing?.watchdogRevision || 0)) + 1,
       updatedAt: Date.now()
     };
     await putRecord(PROFILE_STORE, record);
@@ -1059,12 +1062,13 @@
     return run;
   }
 
-  async function sendRequestPhase(tabId, phase, details) {
+  async function sendRequestPhase(tabId, phase, details, requestStartedAt = 0) {
     if (!Number.isInteger(tabId) || tabId < 0) return;
     const message = {
       type: 'CHATGPT_MONITOR_REQUEST_PHASE',
       phase,
       requestId: String(details?.requestId || ''),
+      requestStartedAt: Math.max(0, Number(requestStartedAt || 0)),
       observedAt: Date.now()
     };
     try {
@@ -1255,14 +1259,16 @@
       return { ok: false, error: 'Build automation is not active for this conversation.', reason: 'automation-not-active', requestId: String(message?.requestId || ''), ...overview };
     }
 
-    let record = await readCodeWatchdog(target.id);
-    if (record) {
-      const capExhausted = record.stopped === true && String(record.stopReason || '') === 'retry-cap-reached';
-      record = await putCodeWatchdog(target.id, codeWatchdogBudgetReset(record));
+    let record = await queueCodeWatchdogMutation(target.id, async () => {
+      const current = await readCodeWatchdog(target.id);
+      if (!current) return null;
+      const capExhausted = current.stopped === true && String(current.stopReason || '') === 'retry-cap-reached';
+      const updated = await putCodeWatchdog(target.id, codeWatchdogBudgetReset(current));
       if (capExhausted) {
-        try { chrome.alarms.create(codeWatchdogAlarmName(target.id), { when: record.deadlineAt }); } catch {}
+        try { chrome.alarms.create(codeWatchdogAlarmName(target.id), { when: updated.deadlineAt }); } catch {}
       }
-    }
+      return updated;
+    });
 
     const overview = await monitorOverview(target);
     publishAutomationOverview(target, overview).catch(() => {});
@@ -1384,21 +1390,33 @@
 
   chrome.webRequest.onBeforeRequest.addListener((details) => {
     if (!isAnswerStreamRequest(details)) return;
-    requestTabs.set(String(details.requestId || ''), details.tabId);
+    const requestKey = String(details.requestId || '');
+    const requestStartedAt = Date.now();
+    requestTabs.set(requestKey, { tabId: details.tabId, requestStartedAt });
     armProvisionalForRequest(details.tabId, details.requestId).catch(() => {});
-    sendRequestPhase(details.tabId, 'started', details).catch(() => {});
+    sendRequestPhase(details.tabId, 'started', details, requestStartedAt).catch(() => {});
   }, REQUEST_FILTER);
 
   chrome.webRequest.onCompleted.addListener((details) => {
     if (!isAnswerStreamRequest(details)) return;
-    requestTabs.delete(String(details.requestId || ''));
-    sendRequestPhase(details.tabId, 'completed', details).catch(() => {});
+    const requestKey = String(details.requestId || '');
+    const tracked = requestTabs.get(requestKey) || null;
+    requestTabs.delete(requestKey);
+    const requestStartedAt = Math.max(0, Number(tracked?.requestStartedAt || 0))
+      || Math.max(0, Number(details?.timeStamp || 0))
+      || Date.now();
+    sendRequestPhase(details.tabId, 'completed', details, requestStartedAt).catch(() => {});
   }, REQUEST_FILTER);
 
   chrome.webRequest.onErrorOccurred.addListener((details) => {
     if (!isAnswerStreamRequest(details)) return;
-    requestTabs.delete(String(details.requestId || ''));
-    sendRequestPhase(details.tabId, 'error', details).catch(() => {});
+    const requestKey = String(details.requestId || '');
+    const tracked = requestTabs.get(requestKey) || null;
+    requestTabs.delete(requestKey);
+    const requestStartedAt = Math.max(0, Number(tracked?.requestStartedAt || 0))
+      || Math.max(0, Number(details?.timeStamp || 0))
+      || Date.now();
+    sendRequestPhase(details.tabId, 'error', details, requestStartedAt).catch(() => {});
   }, REQUEST_FILTER);
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {

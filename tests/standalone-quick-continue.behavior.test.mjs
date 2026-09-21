@@ -14,6 +14,7 @@ const promptSource = fs.readFileSync(path.join(extensionRoot, 'prompt-format.js'
 const configSource = fs.readFileSync(path.join(extensionRoot, 'config.js'), 'utf8');
 const contentSource = fs.readFileSync(path.join(extensionRoot, 'content-script.js'), 'utf8');
 const installerSource = fs.readFileSync(path.join(extensionRoot, 'Install.ps1'), 'utf8');
+const updater124Source = fs.readFileSync(path.join(extensionRoot, 'Update-Installed-1.2.4.ps1'), 'utf8');
 
 test('standalone extension stays background-free with only local storage permission', () => {
   assert.equal(manifest.manifest_version, 3);
@@ -22,7 +23,7 @@ test('standalone extension stays background-free with only local storage permiss
   assert.equal(manifest.host_permissions, undefined);
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['prompt-format.js', 'config.js', 'content-script.js']);
-  assert.equal(manifest.version, '1.2.3');
+  assert.equal(manifest.version, '1.2.4');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -74,6 +75,16 @@ test('project picker is non-modal, exposes Edit, and never auto-focuses', () => 
   assert.match(contentSource, /event\.key === 'Escape'/);
   assert.match(contentSource, /event\.key === 'Enter'/);
   assert.doesNotMatch(contentSource, /\.title\s*=/);
+});
+
+test('prompt and config APIs are versioned so reinjection cannot retain stale globals indefinitely', () => {
+  assert.match(promptSource, /const RUNTIME_VERSION = 2/);
+  assert.match(promptSource, /runtimeVersion: RUNTIME_VERSION/);
+  assert.match(configSource, /const RUNTIME_VERSION = 2/);
+  assert.match(configSource, /previousRuntime\?\.dispose\?\.\(\)/);
+  assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
+  assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
+  assert.match(configSource, /chrome\.storage\.onChanged\.removeListener\(handleStorageChanged\)/);
 });
 
 test('inline JSON Save applies through config storage without reload or refresh calls', () => {
@@ -190,11 +201,48 @@ test('installer copies live config files and removes the legacy projects JSON', 
   assert.doesNotMatch(installerSource, /Start-Process|chrome\.exe/i);
 });
 
+
+test('1.2.4 updater pins the repaired runtime set without overwriting live config defaults', () => {
+  assert.match(updater124Source, /\$commit = '[0-9a-f]{40}'/);
+  assert.match(updater124Source, /expected 1\.2\.4/);
+  for (const file of ['manifest.json', 'prompt-format.js', 'config.js', 'content-script.js', 'README.md']) {
+    assert.match(updater124Source, new RegExp(file.replace('.', '\\.') ));
+  }
+  assert.doesNotMatch(updater124Source, /\$files\s*=\s*@\([^\r\n]*config\.json/);
+  assert.match(updater124Source, /requiresChromeExtensionReload\s*=\s*\$true/);
+  assert.match(updater124Source, /Get-FileHash -Algorithm SHA256/);
+});
+
 test('Project menu stays available for config editing when send controls are unavailable', () => {
   assert.match(contentSource, /const sendButtons = \[\]/);
   assert.match(contentSource, /sendButtons\.push\(continueButton\)/);
   assert.doesNotMatch(contentSource, /sendButtons\.push\(projectButton\)/);
   assert.match(contentSource, /function canSendProject\(\)/);
+});
+
+test('toolbar sync does not continuously retrigger itself through unchanged clock text', () => {
+  assert.match(contentSource, /const clockText = formatClock\(now\)/);
+  assert.match(contentSource, /clock && clock\.textContent !== clockText/);
+  assert.match(contentSource, /clock\.textContent = clockText/);
+  assert.doesNotMatch(contentSource, /if \(clock\) clock\.textContent = formatClock\(now\)/);
+});
+
+test('standalone runtime hot-replaces stale generations, restores a detached toolbar, and ignores notifier-only churn', () => {
+  assert.match(contentSource, /const RUNTIME_VERSION = 5/);
+  assert.match(contentSource, /const previousRuntime = globalThis\.__chatgptQuickContinueRuntime/);
+  assert.match(contentSource, /previousRuntime\?\.dispose\?\.\(\)/);
+  assert.doesNotMatch(contentSource, /__chatgptQuickContinueInstalled/);
+  assert.match(contentSource, /if \(!root\.isConnected\)/);
+  assert.match(contentSource, /\(document\.body \|\| document\.documentElement\)\.append\(root\)/);
+  assert.match(contentSource, /const NOTIFIER_MUTATION_SELECTOR/);
+  assert.match(contentSource, /function notifierOnlyMutation\(records\)/);
+  assert.match(contentSource, /new MutationObserver\(handleDocumentMutations\)/);
+  assert.match(contentSource, /document\.addEventListener\('pointerdown', handleDocumentPointerDown, true\)/);
+  assert.match(contentSource, /document\.removeEventListener\('pointerdown', handleDocumentPointerDown, true\)/);
+  assert.match(contentSource, /document\.removeEventListener\('input', scheduleSync, true\)/);
+  assert.match(contentSource, /document\.removeEventListener\('scroll', scheduleSync, true\)/);
+  assert.match(contentSource, /document\.removeEventListener\('visibilitychange', scheduleSync, true\)/);
+  assert.match(contentSource, /window\.removeEventListener\('resize', scheduleSync\)/);
 });
 
 test('project popover opens above when it fits, flips below near the top, and chooses the roomier side if neither fits', () => {

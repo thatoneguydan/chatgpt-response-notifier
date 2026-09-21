@@ -621,7 +621,8 @@ test('notifier-owned Quick Continue light mirrors popup automation states withou
   assert.match(attachment, /Auto-continues exhausted/);
   assert.match(attachment, /setInterval\(tickAutomationStatus, 1000\)/);
   assert.match(attachment, /function automationOverviewIsFresh/);
-  assert.match(attachment, /nextWatchdogUpdatedAt < currentWatchdogUpdatedAt/);
+  assert.match(attachment, /nextWatchdogRevision < currentWatchdogRevision/);
+  assert.match(attachment, /nextWatchdogRevision === 0[\s\S]*currentWatchdogRevision === 0[\s\S]*nextWatchdogUpdatedAt < currentWatchdogUpdatedAt/);
   assert.match(attachment, /currentWatchdogUpdatedAt > 0[\s\S]*nextWatchdogUpdatedAt === 0/);
   assert.match(attachment, /current\.automationEnabled === true[\s\S]*next\.automationEnabled === true/);
   assert.match(attachment, /function applyAutomationOverview/);
@@ -632,6 +633,9 @@ test('notifier-owned Quick Continue light mirrors popup automation states withou
   assert.match(monitor, /function queueCodeWatchdogMutation\(conversationIdValue, operation\)/);
   assert.match(monitor, /function reconcileCodeWatchdog\(clean, sender\)[\s\S]*queueCodeWatchdogMutation/);
   assert.match(monitor, /function handleCodeWatchdogAlarm\(conversationId\)[\s\S]*queueCodeWatchdogMutation/);
+  assert.match(monitor, /watchdogRevision: Math\.max\(0, Number\(existing\?\.watchdogRevision \|\| 0\)\) \+ 1/);
+  assert.match(monitor, /queueCodeWatchdogMutation\(identity\.id, \(\) => clearCodeWatchdog\(identity\.id\)\)/);
+  assert.match(monitor, /queueCodeWatchdogMutation\(target\.id, async \(\) =>/);
   assert.match(monitor, /watchdogChanged[\s\S]*publishAutomationOverview\(senderTarget\)/);
   assert.doesNotMatch(attachment, /automationBusy \? '\\.62'/);
   assert.doesNotMatch(attachment, /AUTOMATION_REFRESH_MS/);
@@ -654,7 +658,7 @@ test('canonical project continuation prompts are fresh enrollment evidence witho
   const monitorPage = text('extension/monitor-script.js');
   const monitorWorker = text('extension/monitor-background.js');
 
-  assert.match(monitorPage, /RUNTIME_VERSION = 10/);
+  assert.match(monitorPage, /RUNTIME_VERSION = 11/);
   assert.match(monitorPage, /function userHasCanonicalProjectStart/);
   assert.match(monitorPage, /from canonical GitHub state/);
   assert.match(monitorPage, /projectStartSignal: userHasCanonicalProjectStart\(userText\)/);
@@ -707,13 +711,13 @@ test('extension update hot-activates reload-safe watchdog page runtimes in alrea
   const attachment = text('extension/attachment-script.js');
   const monitor = text('extension/monitor-background.js');
 
-  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 11/);
+  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 12/);
   assert.match(attachment, /CHATGPT_NOTIFIER_ATTACHMENT_PING/);
   assert.match(attachment, /runtimeVersion: ATTACHMENT_RUNTIME_VERSION/);
   assert.match(attachment, /extensionVersion/);
 
-  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 11/);
-  assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 10/);
+  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 12/);
+  assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 11/);
   assert.match(monitor, /HOT_PAGE_STATUS_RUNTIME_VERSION = 12/);
   assert.match(monitor, /HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3/);
   assert.match(monitor, /async function queryHotPageRuntime/);
