@@ -178,6 +178,8 @@
     const currentStateRevision = Math.max(0, Number(current.stateRevision || 0));
     if (nextStateRevision < currentStateRevision) return false;
 
+    const nextWatchdogRevision = Math.max(0, Number(next.codeWatchdog?.watchdogRevision || 0));
+    const currentWatchdogRevision = Math.max(0, Number(current.codeWatchdog?.watchdogRevision || 0));
     const nextWatchdogUpdatedAt = Math.max(0, Number(next.codeWatchdog?.updatedAt || 0));
     const currentWatchdogUpdatedAt = Math.max(0, Number(current.codeWatchdog?.updatedAt || 0));
     if (
@@ -190,7 +192,24 @@
       return false;
     }
     if (
-      nextWatchdogUpdatedAt > 0
+      nextStateRevision === currentStateRevision
+      && currentWatchdogRevision > 0
+      && nextWatchdogUpdatedAt > 0
+      && nextWatchdogRevision === 0
+    ) {
+      return false;
+    }
+    if (
+      nextWatchdogRevision > 0
+      && currentWatchdogRevision > 0
+      && nextWatchdogRevision < currentWatchdogRevision
+    ) {
+      return false;
+    }
+    if (
+      nextWatchdogRevision === 0
+      && currentWatchdogRevision === 0
+      && nextWatchdogUpdatedAt > 0
       && currentWatchdogUpdatedAt > 0
       && nextWatchdogUpdatedAt < currentWatchdogUpdatedAt
     ) {
