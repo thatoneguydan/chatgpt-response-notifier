@@ -19,8 +19,8 @@
   const CODE_WATCHDOG_MAX_SENDS = 3;
   const CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS = 15_000;
   const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 10;
-  const HOT_PAGE_MONITOR_RUNTIME_VERSION = 8;
-  const HOT_PAGE_STATUS_RUNTIME_VERSION = 10;
+  const HOT_PAGE_MONITOR_RUNTIME_VERSION = 9;
+  const HOT_PAGE_STATUS_RUNTIME_VERSION = 11;
   const HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3;
   const HOT_PAGE_RUNTIME_FILES = Object.freeze([
     'status-code.js',
@@ -246,6 +246,8 @@
       conversationUrl: String(snapshot.conversationUrl || ''),
       documentId: String(snapshot.documentId || ''),
       promptKey: String(snapshot.promptKey || ''),
+      previousPromptKey: String(snapshot.previousPromptKey || ''),
+      previousStatusCode: String(snapshot.previousStatusCode || ''),
       promptRevision: String(snapshot.promptRevision || ''),
       assistantKey: String(snapshot.assistantKey || ''),
       assistantRevision: String(snapshot.assistantRevision || ''),
@@ -396,7 +398,7 @@
     });
   }
 
-  async function parkCodeWatchdogForTerminalStatus(clean, sender, existingValue = null) {
+  async function parkCodeWatchdogForTerminalStatus(clean, sender, existingValue = null, automaticSentAt = 0, automaticPromptKey = '', automaticParentPromptKey = '') {
     const conversationId = String(clean?.conversationId || existingValue?.conversationId || '');
     if (!conversationId) return null;
     const requestStartedAt = Math.max(
@@ -415,6 +417,12 @@
       lastRequestStartedAt: requestStartedAt,
       lastPromptKey: String(clean?.promptKey || existingValue?.lastPromptKey || ''),
       lastStatusCode: String(clean?.statusCode || existingValue?.lastStatusCode || ''),
+      lastAutomaticSentAt: Math.max(
+        Math.max(0, Number(existingValue?.lastAutomaticSentAt || 0)),
+        Math.max(0, Number(automaticSentAt || 0))
+      ),
+      lastAutomaticPromptKey: String(automaticPromptKey || existingValue?.lastAutomaticPromptKey || ''),
+      lastAutomaticParentPromptKey: String(automaticParentPromptKey || existingValue?.lastAutomaticParentPromptKey || ''),
       deadlineAt: 0,
       retryAt: 0,
       retryReason: ''
@@ -437,6 +445,7 @@
       lastStatusCode: String(clean?.statusCode || ''),
       lastAutomaticSentAt: Math.max(0, Number(automaticSentAt || 0)),
       lastAutomaticPromptKey: String(automaticPromptKey || ''),
+      lastAutomaticParentPromptKey: String(automaticPromptKey ? (clean?.promptKey || '') : ''),
       deadlineAt: Math.max(0, Number(automaticSentAt || 0)) > 0
         ? Math.max(0, Number(automaticSentAt || 0)) + CODE_WATCHDOG_DELAY_MS
         : 0,
@@ -454,6 +463,30 @@
     const persistedRequestStartedAt = Math.max(0, Number(current?.lastRequestStartedAt || 0));
     if (requestStartedAt > 0 && persistedRequestStartedAt > 0 && requestStartedAt < persistedRequestStartedAt) {
       return current;
+    }
+
+    const previousStatusCode = String(clean?.previousStatusCode || '');
+    const previousPromptKey = String(clean?.previousPromptKey || '');
+    const currentPromptKey = String(clean?.promptKey || '');
+    const isAutomaticFollowup = Boolean(
+      current?.lastAutomaticPromptKey
+      && currentPromptKey === String(current.lastAutomaticPromptKey)
+      && current?.lastAutomaticParentPromptKey
+      && previousPromptKey === String(current.lastAutomaticParentPromptKey)
+    );
+    if (
+      isAutomaticFollowup
+      && globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(previousStatusCode)
+      && globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(previousStatusCode) !== true
+    ) {
+      return await parkCodeWatchdogForTerminalStatus(
+        { ...clean, promptKey: previousPromptKey, statusCode: previousStatusCode },
+        sender,
+        current,
+        Number(current.lastAutomaticSentAt || 0),
+        String(current.lastAutomaticPromptKey || ''),
+        previousPromptKey
+      );
     }
 
     const statusCode = String(clean?.statusCode || '');
@@ -688,7 +721,15 @@
           await scheduleCodeWatchdogRetry(record, result?.reason || 'continue-send-failed');
         }
       } else {
-        await parkCodeWatchdogForTerminalStatus({ ...live, statusCode: racedStatusCode }, { tab }, record);
+        const automaticSentAt = result?.ok === true ? Date.now() : 0;
+        await parkCodeWatchdogForTerminalStatus(
+          { ...live, statusCode: racedStatusCode },
+          { tab },
+          record,
+          automaticSentAt,
+          result?.continuationUserKey || '',
+          String(live.promptKey || '')
+        );
       }
       return;
     }
@@ -707,6 +748,7 @@
       sendCount: nextCount,
       lastAutomaticSentAt: sentAt,
       lastAutomaticPromptKey: String(result?.continuationUserKey || ''),
+      lastAutomaticParentPromptKey: String(live.promptKey || record.lastPromptKey || ''),
       waitingForRequestStart: false,
       deadlineAt: nextDeadlineAt,
       retryAt: 0,

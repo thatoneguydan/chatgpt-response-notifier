@@ -55,7 +55,7 @@ test('30-minute no-code deadline is authoritative even while generation is activ
 });
 
 test('status runtime generation advances for the hard-deadline page behavior', () => {
-  assert.match(statusSource, /const RUNTIME_VERSION = 10/);
+  assert.match(statusSource, /const RUNTIME_VERSION = 11/);
 });
 
 test('page-side watchdog can queue the deadline Continue while generation is active', () => {
@@ -79,7 +79,26 @@ test('recoverable status codes use the same immediate watchdog follow-up path', 
   assert.doesNotMatch(watchdog, /performContinuation\(observed\)/);
   assert.match(watchdog, /watchdogStatusCode = observedStatusCode/);
   assert.match(watchdog, /watchdogStatusCode = beforeSendStatusCode/);
-  assert.match(watchdog, /watchdogDisposition: watchdogStatusCode \? 'incomplete-reset' : 'retry-sent'/);
+  assert.match(watchdog, /watchdogDisposition: terminalAfterSend \? 'stop' : \(watchdogStatusCode \? 'incomplete-reset' : 'retry-sent'\)/);
+});
+
+test('watchdog re-checks the original prompt after send so late terminal status wins the race', () => {
+  const helperStart = statusSource.indexOf('function terminalStatusForPromptKey');
+  const helperEnd = statusSource.indexOf('function revisionOf', helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart, 'prompt-scoped terminal lookup must exist');
+  const helper = statusSource.slice(helperStart, helperEnd);
+  assert.match(helper, /candidatePromptKey === expectedPrompt/);
+  assert.match(helper, /if \(role === 'user'\) break/);
+  assert.match(helper, /parseTerminalStatus\(responseText\)/);
+  assert.match(helper, /assistantStatusCodeFromDom\(nodes\[index\]\)/);
+
+  const start = statusSource.indexOf('async function performWatchdogContinuation');
+  const end = statusSource.indexOf('async function waitForTerminalStatus', start);
+  const watchdog = statusSource.slice(start, end);
+  assert.match(watchdog, /terminalStatusForPromptKey\(expectedPrompt\)/);
+  assert.match(watchdog, /terminal-status-observed-after-send/);
+  assert.match(watchdog, /watchdogDisposition: terminalAfterSend \? 'stop'/);
+  assert.match(watchdog, /continuationUserKey: sent\.userTurn\.key/);
 });
 
 test('watchdog command is bound to the exact prompt at both send boundaries', () => {

@@ -177,7 +177,7 @@ async function tick(count = 3) {
   for (let index = 0; index < count; index += 1) await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function loadMonitor({ initialTabs = [{ id: 1, url: 'https://chatgpt.com/c/conversation-1', title: 'Build chat', discarded: false, frozen: false, active: true }] } = {}) {
+function loadMonitor({ initialTabs = [{ id: 1, url: 'https://chatgpt.com/c/conversation-1', title: 'Build chat', discarded: false, frozen: false, active: true }], sendMessage = null } = {}) {
   let tabs = initialTabs.map(clone);
   let activeTabId = tabs.find((tab) => tab.active)?.id ?? tabs[0]?.id ?? null;
   let uuid = 0;
@@ -218,7 +218,8 @@ function loadMonitor({ initialTabs = [{ id: 1, url: 'https://chatgpt.com/c/conve
         if (!tab) throw new Error('No tab');
         return clone(tab);
       },
-      async sendMessage() {
+      async sendMessage(...args) {
+        if (typeof sendMessage === 'function') return await sendMessage(...args);
         return { ok: true };
       }
     },
@@ -532,6 +533,124 @@ test('terminal status parks the watchdog for the request and later no-code snaps
   assert.equal(nextRequest.stopped, false);
   assert.equal(nextRequest.lastRequestStartedAt, 2_000);
   assert.ok(Number(nextRequest.deadlineAt) > 0);
+});
+
+test('late BLOCKED_HUMAN detected after an accidental watchdog send keeps the automatic follow-up stopped', async () => {
+  const monitor = loadMonitor();
+  await tick();
+
+  await monitor.message({
+    type: 'SET_BUILD_AUTOMATION_STATE',
+    enabled: true,
+    tabId: 1,
+    conversationId: 'conversation-1',
+    expectedRevision: 0,
+    requestId: 'enable-raced-terminal-test'
+  });
+
+  const sender = { tab: { id: 1, url: 'https://chatgpt.com/c/conversation-1', title: 'Build chat' }, documentId: 'document-1' };
+  await monitor.message({ type: 'CHATGPT_MONITOR_STATE', snapshot: baseSnapshot() }, sender);
+  const active = await monitor.api.readCodeWatchdog('conversation-1');
+
+  const terminal = await monitor.api.parkCodeWatchdogForTerminalStatus(
+    baseSnapshot({ statusCode: 'BLOCKED_HUMAN' }),
+    sender,
+    active,
+    20_000,
+    'conversation-1|auto-user-2'
+  );
+  assert.equal(terminal.stopped, true);
+  assert.equal(terminal.stopReason, 'status:BLOCKED_HUMAN');
+  assert.equal(terminal.lastAutomaticSentAt, 20_000);
+  assert.equal(terminal.lastAutomaticPromptKey, 'conversation-1|auto-user-2');
+
+  await monitor.message({
+    type: 'CHATGPT_MONITOR_STATE',
+    snapshot: baseSnapshot({
+      promptKey: 'conversation-1|auto-user-2',
+      promptRevision: '2:auto',
+      requestId: 'automatic-request-2',
+      requestStartedAt: 20_001,
+      statusCode: ''
+    })
+  }, sender);
+  const accidentalFollowup = await monitor.api.readCodeWatchdog('conversation-1');
+  assert.equal(accidentalFollowup.stopped, true);
+  assert.equal(accidentalFollowup.stopReason, 'status:BLOCKED_HUMAN');
+  assert.equal(accidentalFollowup.lastPromptKey, 'conversation-1|auto-user-2');
+  assert.equal(accidentalFollowup.deadlineAt, 0);
+
+  await monitor.message({
+    type: 'CHATGPT_MONITOR_STATE',
+    snapshot: baseSnapshot({
+      promptKey: 'conversation-1|user-3',
+      promptRevision: '3:human',
+      requestId: 'human-request-3',
+      requestStartedAt: 40_000,
+      statusCode: ''
+    })
+  }, sender);
+  const laterHumanRequest = await monitor.api.readCodeWatchdog('conversation-1');
+  assert.equal(laterHumanRequest.stopped, false);
+  assert.equal(laterHumanRequest.lastRequestStartedAt, 40_000);
+  assert.ok(Number(laterHumanRequest.deadlineAt) > 0);
+});
+
+test('BLOCKED_HUMAN that appears after the automatic follow-up is queued still stops that follow-up', async () => {
+  let liveSnapshot = baseSnapshot();
+  const monitor = loadMonitor({
+    sendMessage: async (_tabId, message) => {
+      if (message?.type === 'CHATGPT_MONITOR_QUERY') return { ok: true, snapshot: liveSnapshot };
+      if (message?.type === 'CHATGPT_WATCHDOG_CONTINUE_COMMAND') {
+        return {
+          ok: true,
+          clicked: true,
+          statusCode: '',
+          continuationUserKey: 'conversation-1|auto-user-2'
+        };
+      }
+      return { ok: true };
+    }
+  });
+  await tick();
+
+  await monitor.message({
+    type: 'SET_BUILD_AUTOMATION_STATE',
+    enabled: true,
+    tabId: 1,
+    conversationId: 'conversation-1',
+    expectedRevision: 0,
+    requestId: 'enable-delayed-terminal-test'
+  });
+
+  const sender = { tab: { id: 1, url: 'https://chatgpt.com/c/conversation-1', title: 'Build chat' }, documentId: 'document-1' };
+  await monitor.message({ type: 'CHATGPT_MONITOR_STATE', snapshot: liveSnapshot }, sender);
+  await monitor.api.handleCodeWatchdogAlarm('conversation-1');
+
+  const automatic = await monitor.api.readCodeWatchdog('conversation-1');
+  assert.equal(automatic.stopped, false);
+  assert.equal(automatic.lastAutomaticPromptKey, 'conversation-1|auto-user-2');
+  assert.equal(automatic.lastAutomaticParentPromptKey, 'conversation-1|user-1');
+
+  const automaticRequestStartedAt = Date.now() + 1;
+  liveSnapshot = baseSnapshot({
+    promptKey: 'conversation-1|auto-user-2',
+    promptRevision: '2:auto',
+    requestId: 'automatic-request-2',
+    requestStartedAt: automaticRequestStartedAt,
+    previousPromptKey: 'conversation-1|user-1',
+    previousStatusCode: 'BLOCKED_HUMAN',
+    statusCode: ''
+  });
+  await monitor.message({ type: 'CHATGPT_MONITOR_STATE', snapshot: liveSnapshot }, sender);
+
+  const terminal = await monitor.api.readCodeWatchdog('conversation-1');
+  assert.equal(terminal.stopped, true);
+  assert.equal(terminal.stopReason, 'status:BLOCKED_HUMAN');
+  assert.equal(terminal.lastStatusCode, 'BLOCKED_HUMAN');
+  assert.equal(terminal.lastAutomaticPromptKey, 'conversation-1|auto-user-2');
+  assert.equal(terminal.lastAutomaticParentPromptKey, 'conversation-1|user-1');
+  assert.equal(terminal.deadlineAt, 0);
 });
 
 test('timer allowance reset restores three sends without moving an active deadline and only reopens cap exhaustion', async () => {
