@@ -207,6 +207,13 @@ test('Project menu stays available for config editing when send controls are una
   assert.match(contentSource, /function canSendProject\(\)/);
 });
 
+test('toolbar sync does not continuously retrigger itself through unchanged clock text', () => {
+  assert.match(contentSource, /const clockText = formatClock\(now\)/);
+  assert.match(contentSource, /clock && clock\.textContent !== clockText/);
+  assert.match(contentSource, /clock\.textContent = clockText/);
+  assert.doesNotMatch(contentSource, /if \(clock\) clock\.textContent = formatClock\(now\)/);
+});
+
 test('standalone runtime hot-replaces stale generations, restores a detached toolbar, and ignores notifier-only churn', () => {
   assert.match(contentSource, /const RUNTIME_VERSION = 5/);
   assert.match(contentSource, /const previousRuntime = globalThis\.__chatgptQuickContinueRuntime/);

@@ -850,7 +850,8 @@
     cancelToolbarHide();
     const now = new Date();
     updateAvailability(composer);
-    if (clock) clock.textContent = formatClock(now);
+    const clockText = formatClock(now);
+    if (clock && clock.textContent !== clockText) clock.textContent = clockText;
 
     root.style.display = 'flex';
     const rect = anchor.getBoundingClientRect();

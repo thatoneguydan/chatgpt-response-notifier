@@ -15,6 +15,7 @@ When ChatGPT Response Notifier is also enabled, the notifier may add its own sma
 - **Edit** opens the current raw JSON config directly inside the Project menu. **Save** validates and applies it immediately without reloading the extension or refreshing ChatGPT.
 - The Project menu normally opens upward. If that would cross the viewport top, it flips below the toolbar; if neither side fully fits, it uses the side with more room.
 - Toolbar layout syncs keep the existing toolbar visible; brief ChatGPT composer rerenders are given a 200 ms grace period before the toolbar is hidden, preventing one-frame flicker.
+- Runtime 1.2.4 can replace an older injected generation cleanly, reattaches the toolbar if ChatGPT detaches it, and ignores notifier-only countdown mutations. Clock text is changed only when the displayed minute actually changes, preventing the toolbar's own MutationObserver from becoming a self-sustaining layout loop.
 
 The bundled `config.json` is the readable/default configuration:
 
