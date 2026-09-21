@@ -1,0 +1,97 @@
+name: Apply live Quick Continue v1.2.4
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/rollout-live-quick-continue-v1.2.4.yml
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    if: ${{ github.head_ref == 'ops/apply-live-quick-continue-v1.2.4' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 5
+    steps:
+      - name: Checkout canonical Quick Continue v1.2.4 source
+        uses: actions/checkout@v4
+        with:
+          ref: 4e1cd7b1e1a06726717b99de9b8367376ef1df0c
+          fetch-depth: 0
+
+      - name: Apply runtime files to Dan's unpacked extension
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $target = 'C:\Users\dan\AppData\Local\ChatGPTQuickContinue\Extension'
+          $source = Join-Path $env:GITHUB_WORKSPACE 'standalone-quick-continue'
+          $backupRoot = 'C:\Users\dan\AppData\Local\ChatGPTQuickContinue\Backups'
+          $backup = Join-Path $backupRoot ("pre-1.2.4-runner-" + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+          $files = @('manifest.json', 'prompt-format.js', 'config.js', 'content-script.js', 'README.md')
+
+          if (-not (Test-Path -LiteralPath $target -PathType Container)) {
+            throw "Quick Continue install path not found: $target"
+          }
+          $targetManifest = Join-Path $target 'manifest.json'
+          if (-not (Test-Path -LiteralPath $targetManifest -PathType Leaf)) {
+            throw "Quick Continue manifest not found: $targetManifest"
+          }
+
+          $before = Get-Content -LiteralPath $targetManifest -Raw | ConvertFrom-Json
+          $sourceManifest = Get-Content -LiteralPath (Join-Path $source 'manifest.json') -Raw | ConvertFrom-Json
+          if ([string]$sourceManifest.name -ne 'ChatGPT Quick Continue') {
+            throw "Source extension identity mismatch: $($sourceManifest.name)"
+          }
+          if ([string]$sourceManifest.version -ne '1.2.4') {
+            throw "Source Quick Continue version is $($sourceManifest.version), expected 1.2.4."
+          }
+
+          $configPath = Join-Path $target 'config.json'
+          $configHashBefore = if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+            (Get-FileHash -Algorithm SHA256 -LiteralPath $configPath).Hash
+          } else { '' }
+
+          New-Item -ItemType Directory -Path $backup -Force | Out-Null
+
+          foreach ($name in $files) {
+            $sourcePath = Join-Path $source $name
+            if (-not (Test-Path -LiteralPath $sourcePath -PathType Leaf)) {
+              throw "Required source file is missing: $sourcePath"
+            }
+
+            $existing = Join-Path $target $name
+            if (Test-Path -LiteralPath $existing -PathType Leaf) {
+              Copy-Item -LiteralPath $existing -Destination (Join-Path $backup $name) -Force
+            }
+            Copy-Item -LiteralPath $sourcePath -Destination $existing -Force
+
+            $sourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $sourcePath).Hash
+            $targetHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $existing).Hash
+            if ($sourceHash -ne $targetHash) {
+              throw "Verification failed after copying $name."
+            }
+          }
+
+          $after = Get-Content -LiteralPath $targetManifest -Raw | ConvertFrom-Json
+          if ([string]$after.version -ne '1.2.4') {
+            throw "Installed Quick Continue version is $($after.version), expected 1.2.4."
+          }
+
+          $configHashAfter = if (Test-Path -LiteralPath $configPath -PathType Leaf) {
+            (Get-FileHash -Algorithm SHA256 -LiteralPath $configPath).Hash
+          } else { '' }
+          if ($configHashBefore -ne $configHashAfter) {
+            throw 'Live config.json changed during the runtime-file update.'
+          }
+
+          Write-Host ("QUICK_CONTINUE_LIVE_FILES " + (@{
+            previousVersion=[string]$before.version
+            version=[string]$after.version
+            diskFilesVerified=$true
+            configPreserved=$true
+            backupPath=$backup
+            requiresChromeExtensionReload=$true
+            requiresChatGptPageReload=$true
+          } | ConvertTo-Json -Compress))
