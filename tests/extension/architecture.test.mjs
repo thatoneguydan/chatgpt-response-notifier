@@ -682,7 +682,12 @@ test('terminal watchdog state is sticky and stale attachment generations cannot 
   assert.match(monitorWorker, /stopReason: `status:\$\{String\(clean\?\.statusCode/);
   assert.match(monitorWorker, /return await parkCodeWatchdogForTerminalStatus\(clean, sender, current\)/);
   assert.match(monitorWorker, /await parkCodeWatchdogForTerminalStatus\(live, \{ tab \}, record\)/);
-  assert.match(monitorWorker, /await parkCodeWatchdogForTerminalStatus\(\{ \.\.\.live, statusCode: racedStatusCode \}, \{ tab \}, record\)/);
+  assert.match(monitorWorker, /await parkCodeWatchdogForTerminalStatus\(\s*\{ \.\.\.live, statusCode: racedStatusCode \}/);
+  assert.match(monitorWorker, /lastAutomaticParentPromptKey/);
+  assert.match(monitorWorker, /previousStatusCode/);
+  assert.match(monitorWorker, /isAutomaticFollowup/);
+  assert.match(monitorPage, /previousPromptTerminalState/);
+  assert.match(monitorPage, /previousStatusCode: previousPromptTerminal\.statusCode/);
 
   assert.match(attachment, /chatgpt-notifier-automation-indicator-v\$\{ATTACHMENT_RUNTIME_VERSION\}/);
   assert.match(attachment, /chatgpt-notifier-automation-status-v\$\{ATTACHMENT_RUNTIME_VERSION\}/);
