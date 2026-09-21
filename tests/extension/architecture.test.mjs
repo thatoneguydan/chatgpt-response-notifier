@@ -699,24 +699,33 @@ test('terminal watchdog state is sticky and stale attachment generations cannot 
   assert.match(monitorPage, /previousPromptTerminalState/);
   assert.match(monitorPage, /previousStatusCode: previousPromptTerminal\.statusCode/);
 
-  assert.match(attachment, /chatgpt-notifier-automation-indicator-v\$\{ATTACHMENT_RUNTIME_VERSION\}/);
-  assert.match(attachment, /chatgpt-notifier-automation-status-v\$\{ATTACHMENT_RUNTIME_VERSION\}/);
-  assert.match(attachment, /AUTOMATION_RUNTIME_STYLE_ID/);
+  assert.match(attachment, /AUTOMATION_OWNER_ATTR = 'data-chatgpt-notifier-automation-owner'/);
+  assert.match(attachment, /AUTOMATION_UI_OWNER_ATTR = 'data-chatgpt-notifier-automation-ui-owner'/);
+  assert.match(attachment, /automationOwnerToken/);
+  assert.match(attachment, /chatgpt-notifier-control-v\$\{ATTACHMENT_RUNTIME_VERSION\}-\$\{automationOwnerToken\}/);
+  assert.match(attachment, /chatgpt-notifier-countdown-v\$\{ATTACHMENT_RUNTIME_VERSION\}-\$\{automationOwnerToken\}/);
+  assert.match(attachment, /function ownsAutomationUi/);
+  assert.match(attachment, /function claimAutomationUi/);
   assert.match(attachment, /display: none !important/);
-  assert.match(attachment, /\[id\^="chatgpt-notifier-automation-indicator-v"\]:not/);
-  assert.match(attachment, /\[id\^="chatgpt-notifier-automation-status-v"\]:not/);
+  assert.match(attachment, /\[id\^="chatgpt-notifier-automation-indicator-v"\]/);
+  assert.match(attachment, /\[id\^="chatgpt-notifier-automation-status-v"\]/);
+  assert.match(attachment, /\[\$\{AUTOMATION_UI_OWNER_ATTR\}\]:not/);
+  assert.match(attachment, /function tickAutomationStatus\(\) \{\s*if \(!ownsAutomationUi\(\)\) return;/);
+  assert.match(attachment, /async function cycleAutomationState\(event\)[\s\S]{0,180}if \(!ownsAutomationUi\(\)\) return;/);
+  assert.match(attachment, /function maintainAutomationIndicator\(\) \{\s*if \(!ownsAutomationUi\(\)\) return;/);
+  assert.doesNotMatch(attachment, /const AUTOMATION_INDICATOR_ID = `chatgpt-notifier-automation-indicator-v/);
 });
 
 test('extension update hot-activates reload-safe watchdog page runtimes in already-open chats', () => {
   const attachment = text('extension/attachment-script.js');
   const monitor = text('extension/monitor-background.js');
 
-  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 12/);
+  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 13/);
   assert.match(attachment, /CHATGPT_NOTIFIER_ATTACHMENT_PING/);
   assert.match(attachment, /runtimeVersion: ATTACHMENT_RUNTIME_VERSION/);
   assert.match(attachment, /extensionVersion/);
 
-  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 12/);
+  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 13/);
   assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 11/);
   assert.match(monitor, /HOT_PAGE_STATUS_RUNTIME_VERSION = 13/);
   assert.match(monitor, /HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3/);
