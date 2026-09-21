@@ -684,7 +684,7 @@ test('terminal watchdog state is sticky and stale attachment generations cannot 
 
   assert.match(monitorPage, /stickyTerminalPromptKey/);
   assert.match(monitorPage, /stickyTerminalStatusCode/);
-  assert.match(statusPage, /RUNTIME_VERSION = 13/);
+  assert.match(statusPage, /RUNTIME_VERSION = 14/);
   assert.match(statusPage, /stickyTerminalPromptKey/);
   assert.match(statusPage, /stickyTerminalStatusCode/);
 
@@ -727,7 +727,7 @@ test('extension update hot-activates reload-safe watchdog page runtimes in alrea
 
   assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 13/);
   assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 11/);
-  assert.match(monitor, /HOT_PAGE_STATUS_RUNTIME_VERSION = 13/);
+  assert.match(monitor, /HOT_PAGE_STATUS_RUNTIME_VERSION = 14/);
   assert.match(monitor, /HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3/);
   assert.match(monitor, /async function queryHotPageRuntime/);
   assert.match(monitor, /async function ensureHotPageRuntime/);
