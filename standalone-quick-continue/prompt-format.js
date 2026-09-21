@@ -1,7 +1,8 @@
 'use strict';
 
 (() => {
-  if (globalThis.ChatGPTQuickContinuePrompts) return;
+  const RUNTIME_VERSION = 2;
+  if (Number(globalThis.ChatGPTQuickContinuePrompts?.runtimeVersion || 0) === RUNTIME_VERSION) return;
 
   const normalizeInline = (value) => String(value || '').replace(/\s+/g, ' ').trim();
 
@@ -39,6 +40,7 @@
   }
 
   globalThis.ChatGPTQuickContinuePrompts = Object.freeze({
+    runtimeVersion: RUNTIME_VERSION,
     normalizeInline,
     formatTimestamp,
     timestamped,
