@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 10;
+  const RUNTIME_VERSION = 11;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me.';
   const DEFAULT_WAIT_MS = 30000;
@@ -109,6 +109,37 @@
     } catch {}
     return '';
   }
+  function terminalStatusForPromptKey(promptKey) {
+    const api = globalThis.ChatGPTNotifierStatusCode;
+    const identity = conversationIdentity();
+    const expectedPrompt = String(promptKey || '');
+    if (!api || !identity || !expectedPrompt) return '';
+    const nodes = turns();
+    let userIndex = -1;
+    for (let index = 0; index < nodes.length; index += 1) {
+      if (roleOf(nodes[index]) !== 'user') continue;
+      const candidatePromptKey = `${identity.id}|${turnId(nodes[index], 'user', index)}`;
+      if (candidatePromptKey === expectedPrompt) {
+        userIndex = index;
+        break;
+      }
+    }
+    if (userIndex < 0) return '';
+
+    let statusCode = '';
+    for (let index = userIndex + 1; index < nodes.length; index += 1) {
+      const role = roleOf(nodes[index]);
+      if (role === 'user') break;
+      if (role !== 'assistant') continue;
+      const responseText = turnText(nodes[index], 'assistant');
+      const parsed = responseText ? api.parseTerminalStatus(responseText) : null;
+      const domStatusCode = assistantStatusCodeFromDom(nodes[index]);
+      const candidate = String(parsed?.statusCode || domStatusCode || '');
+      if (candidate) statusCode = candidate;
+    }
+    return statusCode;
+  }
+
   function revisionOf(text) {
     const value = String(text || '');
     let hash = 2166136261;
@@ -410,12 +441,17 @@
     const sent = await waitForContinuationUserTurn(previousUserKey, text);
     if (sent.errorText) return { ok: false, clicked: true, reason: 'page-send-error', pageError: sent.errorText, documentId };
     if (!sent.userTurn) return { ok: false, clicked: true, reason: 'continuation-user-turn-not-confirmed', documentId };
+
+    const postSendStatusCode = expectedPrompt ? terminalStatusForPromptKey(expectedPrompt) : '';
+    if (postSendStatusCode) watchdogStatusCode = postSendStatusCode;
+    const terminalAfterSend = watchdogStatusCode
+      && globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(watchdogStatusCode) !== true;
     return {
       ok: true,
       clicked: true,
-      reason: 'watchdog-continuation-user-turn-confirmed',
+      reason: terminalAfterSend ? 'terminal-status-observed-after-send' : 'watchdog-continuation-user-turn-confirmed',
       statusCode: watchdogStatusCode,
-      watchdogDisposition: watchdogStatusCode ? 'incomplete-reset' : 'retry-sent',
+      watchdogDisposition: terminalAfterSend ? 'stop' : (watchdogStatusCode ? 'incomplete-reset' : 'retry-sent'),
       documentId,
       continuationUserKey: sent.userTurn.key
     };
