@@ -19,8 +19,8 @@
   const CODE_WATCHDOG_MAX_SENDS = 3;
   const CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS = 15_000;
   const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 10;
-  const HOT_PAGE_MONITOR_RUNTIME_VERSION = 9;
-  const HOT_PAGE_STATUS_RUNTIME_VERSION = 11;
+  const HOT_PAGE_MONITOR_RUNTIME_VERSION = 10;
+  const HOT_PAGE_STATUS_RUNTIME_VERSION = 12;
   const HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3;
   const HOT_PAGE_RUNTIME_FILES = Object.freeze([
     'status-code.js',
@@ -612,6 +612,44 @@
     }
   }
 
+  async function queryTerminalStatusForPrompt(tabId, conversationId, promptKey = '') {
+    const expectedConversationId = String(conversationId || '');
+    const expectedPromptKey = String(promptKey || '');
+    if (!Number.isInteger(tabId) || !expectedConversationId || !expectedPromptKey) return null;
+
+    const query = async () => {
+      try {
+        return await chrome.tabs.sendMessage(tabId, {
+          type: 'CHATGPT_STATUS_FOR_PROMPT_QUERY',
+          conversationId: expectedConversationId,
+          promptKey: expectedPromptKey
+        });
+      } catch {
+        return null;
+      }
+    };
+
+    let result = await query();
+    if (!result?.ok) {
+      try {
+        await chrome.scripting.executeScript({
+          target: { tabId },
+          files: ['status-code.js', 'status-policy.js', 'status-script.js']
+        });
+      } catch {
+        return null;
+      }
+      result = await query();
+    }
+
+    if (
+      result?.ok !== true
+      || String(result.conversationId || '') !== expectedConversationId
+      || String(result.promptKey || '') !== expectedPromptKey
+    ) return null;
+    return result;
+  }
+
   async function sendCodeWatchdogContinuation(tabId, conversationId, promptKey = '') {
     try {
       return await chrome.tabs.sendMessage(tabId, {
@@ -672,15 +710,27 @@
       return;
     }
 
-    const statusCode = String(live.statusCode || '');
+    const exactPromptStatus = await queryTerminalStatusForPrompt(
+      tab.id,
+      conversationId,
+      String(live.promptKey || '')
+    );
+    const exactStatusCode = String(exactPromptStatus?.statusCode || '');
+    const liveStatusCode = String(live.statusCode || '');
+    const statusCode = globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(exactStatusCode)
+      ? exactStatusCode
+      : liveStatusCode;
+    const statusSnapshot = statusCode === liveStatusCode
+      ? live
+      : { ...live, statusCode };
     if (globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode)) {
       if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(statusCode) !== true) {
-        await parkCodeWatchdogForTerminalStatus(live, { tab }, record);
+        await parkCodeWatchdogForTerminalStatus(statusSnapshot, { tab }, record);
         return;
       }
-      const result = await sendCodeWatchdogContinuation(tab.id, conversationId, String(live.promptKey || ''));
+      const result = await sendCodeWatchdogContinuation(tab.id, conversationId, String(statusSnapshot.promptKey || ''));
       const automaticSentAt = result?.ok === true ? Date.now() : 0;
-      record = await resetCodeWatchdogForIncomplete(live, { tab }, record, automaticSentAt, result?.continuationUserKey || '');
+      record = await resetCodeWatchdogForIncomplete(statusSnapshot, { tab }, record, automaticSentAt, result?.continuationUserKey || '');
       if (result?.ok === true) {
         await scheduleCodeWatchdog(record, automaticSentAt + CODE_WATCHDOG_DELAY_MS);
       } else {

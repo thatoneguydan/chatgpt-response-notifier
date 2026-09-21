@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 11;
+  const RUNTIME_VERSION = 12;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me.';
   const DEFAULT_WAIT_MS = 30000;
@@ -97,6 +97,16 @@
       if (!source) return '';
       const copy = source.cloneNode(true);
       for (const excluded of copy.querySelectorAll?.('pre, code, blockquote, ul, ol, li, [data-message-author-role="tool"], [data-tool]') || []) excluded.remove();
+      const rawLines = String(copy.innerText || copy.textContent || '')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .replace(/\r\n?/g, '\n')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+      for (let index = rawLines.length - 1; index >= 0; index -= 1) {
+        const match = rawLines[index].match(/^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/);
+        if (match && api.isStatusCode(match[1])) return match[1];
+      }
       const candidates = [copy, ...(copy.querySelectorAll?.('p, div, span') || [])];
       for (let index = candidates.length - 1; index >= 0; index -= 1) {
         const value = String(candidates[index]?.textContent || '')
@@ -476,6 +486,24 @@
       })).catch((error) => sendResponse?.({ ok: false, statusCode: '', error: String(error?.message || error), documentId }));
       return true;
     }
+    if (message?.type === 'CHATGPT_STATUS_FOR_PROMPT_QUERY') {
+      const expectedId = String(message?.conversationId || '');
+      const promptKey = String(message?.promptKey || '');
+      const identity = conversationIdentity();
+      if (!identity?.id || (expectedId && identity.id !== expectedId)) {
+        sendResponse?.({ ok: false, statusCode: '', reason: 'status-query-conversation-changed', documentId });
+        return false;
+      }
+      const statusCode = terminalStatusForPromptKey(promptKey);
+      sendResponse?.({
+        ok: true,
+        conversationId: identity.id,
+        promptKey,
+        statusCode,
+        documentId
+      });
+      return false;
+    }
     if (message?.type === 'CHATGPT_WATCHDOG_CONTINUE_COMMAND') {
       performWatchdogContinuation(message?.conversationId || '', message?.promptKey || '').then((result) => sendResponse?.(result))
         .catch((error) => sendResponse?.({ ok: false, clicked: false, reason: 'watchdog-continuation-command-error', error: String(error?.message || error), documentId }));
@@ -506,6 +534,7 @@
     waitForTerminalStatus,
     performContinuation,
     performWatchdogContinuation,
+    terminalStatusForPromptKey,
     timestampedContinueText,
     dispose() {
       try { abortController.abort(); } catch {}

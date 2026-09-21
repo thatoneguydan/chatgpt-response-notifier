@@ -596,6 +596,50 @@ test('late BLOCKED_HUMAN detected after an accidental watchdog send keeps the au
   assert.ok(Number(laterHumanRequest.deadlineAt) > 0);
 });
 
+test('exact-prompt COMPLETE_APPLIED recheck stops an armed watchdog even when monitor snapshot missed it', async () => {
+  let continueCommands = 0;
+  const liveSnapshot = baseSnapshot({ statusCode: '' });
+  const monitor = loadMonitor({
+    sendMessage: async (_tabId, message) => {
+      if (message?.type === 'CHATGPT_MONITOR_QUERY') return { ok: true, snapshot: liveSnapshot };
+      if (message?.type === 'CHATGPT_STATUS_FOR_PROMPT_QUERY') {
+        return {
+          ok: true,
+          conversationId: 'conversation-1',
+          promptKey: 'conversation-1|user-1',
+          statusCode: 'COMPLETE_APPLIED'
+        };
+      }
+      if (message?.type === 'CHATGPT_WATCHDOG_CONTINUE_COMMAND') {
+        continueCommands += 1;
+        return { ok: true, clicked: true, continuationUserKey: 'conversation-1|auto-user-2' };
+      }
+      return { ok: true };
+    }
+  });
+  await tick();
+
+  await monitor.message({
+    type: 'SET_BUILD_AUTOMATION_STATE',
+    enabled: true,
+    tabId: 1,
+    conversationId: 'conversation-1',
+    expectedRevision: 0,
+    requestId: 'enable-exact-terminal-recheck'
+  });
+
+  const sender = { tab: { id: 1, url: 'https://chatgpt.com/c/conversation-1', title: 'Build chat' }, documentId: 'document-1' };
+  await monitor.message({ type: 'CHATGPT_MONITOR_STATE', snapshot: liveSnapshot }, sender);
+  await monitor.api.handleCodeWatchdogAlarm('conversation-1');
+
+  const terminal = await monitor.api.readCodeWatchdog('conversation-1');
+  assert.equal(continueCommands, 0);
+  assert.equal(terminal.stopped, true);
+  assert.equal(terminal.stopReason, 'status:COMPLETE_APPLIED');
+  assert.equal(terminal.lastStatusCode, 'COMPLETE_APPLIED');
+  assert.equal(terminal.deadlineAt, 0);
+});
+
 test('BLOCKED_HUMAN that appears after the automatic follow-up is queued still stops that follow-up', async () => {
   let liveSnapshot = baseSnapshot();
   const monitor = loadMonitor({

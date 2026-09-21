@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 9;
+  const RUNTIME_VERSION = 10;
   try { globalThis.__chatgptNotifierMonitorRuntime?.dispose?.(); } catch {}
 
   const abortController = new AbortController();
@@ -136,6 +136,16 @@
       if (!source) return '';
       const copy = source.cloneNode(true);
       for (const excluded of copy.querySelectorAll?.('pre, code, blockquote, ul, ol, li, [data-message-author-role="tool"], [data-tool]') || []) excluded.remove();
+      const rawLines = String(copy.innerText || copy.textContent || '')
+        .replace(/[\u200B-\u200D\uFEFF]/g, '')
+        .replace(/\r\n?/g, '\n')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+      for (let index = rawLines.length - 1; index >= 0; index -= 1) {
+        const match = rawLines[index].match(/^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/);
+        if (match && api.isStatusCode(match[1])) return match[1];
+      }
       const candidates = [copy, ...(copy.querySelectorAll?.('p, div, span') || [])];
       for (let index = candidates.length - 1; index >= 0; index -= 1) {
         const value = String(candidates[index]?.textContent || '')

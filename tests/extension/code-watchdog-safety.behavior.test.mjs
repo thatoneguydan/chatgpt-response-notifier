@@ -55,7 +55,25 @@ test('30-minute no-code deadline is authoritative even while generation is activ
 });
 
 test('status runtime generation advances for the hard-deadline page behavior', () => {
-  assert.match(statusSource, /const RUNTIME_VERSION = 11/);
+  assert.match(statusSource, /const RUNTIME_VERSION = 12/);
+});
+
+test('alarm re-reads the exact prompt terminal status before watchdog Send', () => {
+  const helperStart = monitorSource.indexOf('async function queryTerminalStatusForPrompt');
+  const helperEnd = monitorSource.indexOf('async function sendCodeWatchdogContinuation', helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart, 'exact-prompt status query helper must exist');
+  const helper = monitorSource.slice(helperStart, helperEnd);
+  assert.match(helper, /CHATGPT_STATUS_FOR_PROMPT_QUERY/);
+  assert.match(helper, /expectedPromptKey/);
+
+  const alarmStart = monitorSource.indexOf('async function handleCodeWatchdogAlarm');
+  const alarmEnd = monitorSource.indexOf('function closeDerivedReason', alarmStart);
+  const alarm = monitorSource.slice(alarmStart, alarmEnd);
+  const queryIndex = alarm.indexOf('queryTerminalStatusForPrompt');
+  const sendIndex = alarm.indexOf('sendCodeWatchdogContinuation');
+  assert.ok(queryIndex >= 0 && sendIndex > queryIndex, 'exact-prompt terminal re-read must happen before watchdog Send');
+  assert.match(alarm, /statusSnapshot/);
+  assert.match(alarm, /parkCodeWatchdogForTerminalStatus\(statusSnapshot/);
 });
 
 test('page-side watchdog can queue the deadline Continue while generation is active', () => {
