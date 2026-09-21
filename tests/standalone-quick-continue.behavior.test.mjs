@@ -210,6 +210,7 @@ test('1.2.4 updater pins the repaired runtime set without overwriting live confi
   }
   assert.doesNotMatch(updater124Source, /\$files\s*=\s*@\([^\r\n]*config\.json/);
   assert.match(updater124Source, /requiresChromeExtensionReload\s*=\s*\$true/);
+  assert.match(updater124Source, /requiresChatGptPageReload\s*=\s*\$true/);
   assert.match(updater124Source, /Get-FileHash -Algorithm SHA256/);
 });
 
