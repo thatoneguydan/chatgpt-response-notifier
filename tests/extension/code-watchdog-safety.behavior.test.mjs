@@ -239,7 +239,7 @@ test('30-minute no-code deadline is authoritative even while generation is activ
 });
 
 test('status runtime generation advances for the hard-deadline page behavior', () => {
-  assert.match(statusSource, /const RUNTIME_VERSION = 13/);
+  assert.match(statusSource, /const RUNTIME_VERSION = 14/);
 });
 
 test('rendered status fallback accepts only one genuine terminal footer', () => {
@@ -251,7 +251,7 @@ test('rendered status fallback accepts only one genuine terminal footer', () => 
     globalThis: null,
     ChatGPTNotifierStatusCode: {
       isStatusCode(value) {
-        return ['COMPLETE_APPLIED', 'INCOMPLETE_CONTINUE', 'BLOCKED_HUMAN'].includes(String(value || ''));
+        return ['COMPLETE_APPLIED', 'COMPLETE_NO_CHANGES', 'INCOMPLETE_CONTINUE', 'BLOCKED_HUMAN'].includes(String(value || ''));
       }
     }
   });
