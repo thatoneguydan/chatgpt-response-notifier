@@ -1,9 +1,8 @@
-# ChatGPT Response Notifier 0.9.57
+# ChatGPT Response Notifier 0.9.58
 
-- Fixes the green monitoring indicator becoming unclickable after an extension reload while its countdown kept running.
-- Gives each live attachment-script execution a shared-DOM ownership token so only the newest runtime may render or mutate the monitoring indicator and auto-continue countdown.
-- Moves the current controls to a new runtime-owned DOM namespace and permanently hides older indicator/status nodes, preventing a stale pre-reload content-script world from repainting current state.
-- Guards countdown ticks, indicator maintenance, state messages, budget resets, and Monitor/Pause/Resume clicks on current UI ownership.
-- Advances the hot-page attachment runtime to v13 so already-open chats receive the ownership repair without foregrounding or reloading the ChatGPT page.
-- Preserves the durable operator Pause gate in the background worker: paused conversations remain unable to send watchdog Continue actions.
-
+- Fixes monitored chats continuing after a valid terminal footer such as `COMPLETE_APPLIED` or `COMPLETE_NO_CHANGES` was visibly present.
+- The page-side terminal parser now treats duplicate rendered copies of the same footer as one semantic footer instead of rejecting the response as ambiguous.
+- Conflicting terminal codes in one response still fail closed; quoted/non-terminal status text still does not count as a footer.
+- DOM fallback ignores hidden/control-only branches before evaluating the terminal block, reducing false negatives from duplicate ChatGPT render trees.
+- Status runtime advances to v14 so already-open monitored chats receive the parser repair through the existing hot-activation path.
+- The status policy is unchanged: only the four `INCOMPLETE_*` continuation codes auto-continue; `COMPLETE_*`, `BLOCKED_HUMAN`, and `PLANNING_ACTIVE` stop.
