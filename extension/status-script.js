@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 13;
+  const RUNTIME_VERSION = 14;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me.';
   const DEFAULT_WAIT_MS = 30000;
@@ -101,12 +101,18 @@
     if (!lines.length) return '';
     const finalMatch = lines[lines.length - 1].match(/^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/);
     if (!finalMatch || !api.isStatusCode(finalMatch[1])) return '';
-    let validCount = 0;
+
+    // ChatGPT can retain more than one rendered copy of the same assistant
+    // footer in one turn (for example a stale/hidden render plus the live one).
+    // Treat identical duplicate footer lines as one semantic footer, but still
+    // reject conflicting terminal codes in the same rendered response.
+    const validCodes = [];
     for (const line of lines) {
       const match = line.match(/^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/);
-      if (match && api.isStatusCode(match[1])) validCount += 1;
+      if (match && api.isStatusCode(match[1])) validCodes.push(match[1]);
     }
-    return validCount === 1 ? finalMatch[1] : '';
+    const distinctCodes = new Set(validCodes);
+    return distinctCodes.size === 1 && distinctCodes.has(finalMatch[1]) ? finalMatch[1] : '';
   }
 
   function assistantStatusCodeFromDom(turn) {
@@ -114,7 +120,7 @@
       const source = roleRoot(turn, 'assistant');
       if (!source) return '';
       const copy = source.cloneNode(true);
-      for (const excluded of copy.querySelectorAll?.('pre, code, blockquote, ul, ol, li, [data-message-author-role="tool"], [data-tool]') || []) excluded.remove();
+      for (const excluded of copy.querySelectorAll?.('pre, code, blockquote, ul, ol, li, button, svg, [role="button"], [aria-hidden="true"], [hidden], [inert], [data-message-author-role="tool"], [data-tool]') || []) excluded.remove();
 
       const direct = terminalStatusCodeFromRenderedText(copy.innerText || copy.textContent || '');
       if (direct) return direct;
@@ -134,10 +140,13 @@
       const terminalBlocks = blocks
         .map((node) => ({ node, code: terminalStatusCodeFromRenderedText(node?.textContent || '') }))
         .filter((entry) => entry.code);
-      if (terminalBlocks.length !== 1) return '';
+      if (!terminalBlocks.length) return '';
+      const distinctCodes = new Set(terminalBlocks.map((entry) => entry.code));
+      if (distinctCodes.size !== 1) return '';
       const meaningfulBlocks = blocks.filter((node) => inline(node?.textContent || ''));
       const lastBlock = meaningfulBlocks[meaningfulBlocks.length - 1] || null;
-      return terminalBlocks[0].node === lastBlock ? terminalBlocks[0].code : '';
+      const terminalLastBlock = terminalBlocks.find((entry) => entry.node === lastBlock) || null;
+      return terminalLastBlock?.code || '';
     } catch {}
     return '';
   }
