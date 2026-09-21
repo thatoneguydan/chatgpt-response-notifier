@@ -60,6 +60,7 @@ try {
         backupPath = $backup
         targetPath = $target
         requiresChromeExtensionReload = $true
+        requiresChatGptPageReload = $true
     } | ConvertTo-Json -Compress | ForEach-Object { "QUICK_CONTINUE_UPDATE|$_" }
 }
 finally {

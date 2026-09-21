@@ -13,6 +13,7 @@ Scope: ChatGPT Response Notifier v0.9.53 and standalone Quick Continue v1.2.3, f
 7. **Watchdog revisions are lifecycle-local.** Clearing monitoring deletes the watchdog record, so its logical revision restarts on the next enrollment. Comparing watchdog revisions across different enrollment revisions could reject a valid post-resume watchdog as stale.
 8. **New-chat Project enrollment could lose freshness.** A Project Continue can begin while the tab is still `/`. If the monitor runtime is replaced when ChatGPT assigns `/c/<id>`, the replacement runtime can receive only the request's completed/error event. The old handler left `requestStartedAt = 0`, which made the otherwise valid project-start signal fail the worker's fresh-request gate.
 9. **CI did not execute standalone Quick Continue tests.** The self-hosted validate/release workflows discovered only `tests/extension/*.test.mjs`, so companion runtime changes could ship behind notifier-only green checks.
+10. **Standalone update activation needs a host-page reload.** Quick Continue is a static content-script extension with no background/scripting reinjection path. Chrome's documented development lifecycle requires reloading the extension **and the host page** for content-script changes; replacing files plus only reloading the extension is insufficient for already-open ChatGPT tabs.
 
 ## Repairs
 
@@ -24,7 +25,7 @@ Scope: ChatGPT Response Notifier v0.9.53 and standalone Quick Continue v1.2.3, f
 - Scope watchdog freshness ordering to one enrollment revision so Pause/Resume can restart the watchdog record safely.
 - Carry request-start evidence from the worker into every request phase; monitor runtime v11 restores it when a replacement page sees only completion/error.
 - Run standalone Quick Continue syntax/behavior gates in both validation and release.
-- Add a pinned 1.2.4 updater that replaces the changed runtime files without overwriting `config.json`.
+- Add a pinned 1.2.4 updater that replaces the changed runtime files without overwriting `config.json`, and explicitly reports both the extension-reload and ChatGPT-page-reload requirements.
 - Advance standalone Quick Continue to v1.2.4.
 
 ## Regression gates
