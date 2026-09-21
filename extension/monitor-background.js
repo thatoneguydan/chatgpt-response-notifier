@@ -20,7 +20,7 @@
   const CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS = 15_000;
   const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 10;
   const HOT_PAGE_MONITOR_RUNTIME_VERSION = 8;
-  const HOT_PAGE_STATUS_RUNTIME_VERSION = 10;
+  const HOT_PAGE_STATUS_RUNTIME_VERSION = 11;
   const HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3;
   const HOT_PAGE_RUNTIME_FILES = Object.freeze([
     'status-code.js',
@@ -396,7 +396,7 @@
     });
   }
 
-  async function parkCodeWatchdogForTerminalStatus(clean, sender, existingValue = null) {
+  async function parkCodeWatchdogForTerminalStatus(clean, sender, existingValue = null, automaticSentAt = 0, automaticPromptKey = '') {
     const conversationId = String(clean?.conversationId || existingValue?.conversationId || '');
     if (!conversationId) return null;
     const requestStartedAt = Math.max(
@@ -415,6 +415,11 @@
       lastRequestStartedAt: requestStartedAt,
       lastPromptKey: String(clean?.promptKey || existingValue?.lastPromptKey || ''),
       lastStatusCode: String(clean?.statusCode || existingValue?.lastStatusCode || ''),
+      lastAutomaticSentAt: Math.max(
+        Math.max(0, Number(existingValue?.lastAutomaticSentAt || 0)),
+        Math.max(0, Number(automaticSentAt || 0))
+      ),
+      lastAutomaticPromptKey: String(automaticPromptKey || existingValue?.lastAutomaticPromptKey || ''),
       deadlineAt: 0,
       retryAt: 0,
       retryReason: ''
@@ -688,7 +693,14 @@
           await scheduleCodeWatchdogRetry(record, result?.reason || 'continue-send-failed');
         }
       } else {
-        await parkCodeWatchdogForTerminalStatus({ ...live, statusCode: racedStatusCode }, { tab }, record);
+        const automaticSentAt = result?.ok === true ? Date.now() : 0;
+        await parkCodeWatchdogForTerminalStatus(
+          { ...live, statusCode: racedStatusCode },
+          { tab },
+          record,
+          automaticSentAt,
+          result?.continuationUserKey || ''
+        );
       }
       return;
     }
