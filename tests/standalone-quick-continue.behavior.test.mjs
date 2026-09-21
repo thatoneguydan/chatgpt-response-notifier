@@ -203,7 +203,7 @@ test('installer copies live config files and removes the legacy projects JSON', 
 
 
 test('1.2.4 updater pins the repaired runtime set without overwriting live config defaults', () => {
-  assert.match(updater124Source, /\$commit = '[0-9a-f]{40}'/);
+  assert.match(updater124Source, /\$commit = '25add9fcb113c80eea3bfbefc0e28db490bac52c'/);
   assert.match(updater124Source, /expected 1\.2\.4/);
   for (const file of ['manifest.json', 'prompt-format.js', 'config.js', 'content-script.js', 'README.md']) {
     assert.match(updater124Source, new RegExp(file.replace('.', '\\.') ));
