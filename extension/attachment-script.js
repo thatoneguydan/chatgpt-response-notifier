@@ -3,10 +3,15 @@
 (() => {
   const QUICK_CONTINUE_TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const AUTOMATION_DUE_REFRESH_MS = 5000;
-  const ATTACHMENT_RUNTIME_VERSION = 12;
-  const AUTOMATION_INDICATOR_ID = `chatgpt-notifier-automation-indicator-v${ATTACHMENT_RUNTIME_VERSION}`;
-  const AUTOMATION_STATUS_ID = `chatgpt-notifier-automation-status-v${ATTACHMENT_RUNTIME_VERSION}`;
-  const AUTOMATION_RUNTIME_STYLE_ID = 'chatgpt-notifier-automation-runtime-style';
+  const ATTACHMENT_RUNTIME_VERSION = 13;
+  const AUTOMATION_OWNER_ATTR = 'data-chatgpt-notifier-automation-owner';
+  const AUTOMATION_UI_OWNER_ATTR = 'data-chatgpt-notifier-automation-ui-owner';
+  const automationOwnerToken = (() => {
+    try { return crypto.randomUUID(); } catch { return `${Date.now()}-${Math.random()}`; }
+  })();
+  const AUTOMATION_INDICATOR_ID = `chatgpt-notifier-control-v${ATTACHMENT_RUNTIME_VERSION}-${automationOwnerToken}`;
+  const AUTOMATION_STATUS_ID = `chatgpt-notifier-countdown-v${ATTACHMENT_RUNTIME_VERSION}-${automationOwnerToken}`;
+  const AUTOMATION_RUNTIME_STYLE_ID = 'chatgpt-notifier-automation-runtime-style-v13';
   const LEGACY_AUTOMATION_INDICATOR_ID = 'chatgpt-notifier-automation-indicator';
   const LEGACY_AUTOMATION_STATUS_ID = 'chatgpt-notifier-automation-status';
 
@@ -74,6 +79,21 @@
   let automationCountdownTimerId = null;
   let automationDueRefreshAt = 0;
 
+  function ownsAutomationUi() {
+    try {
+      return document.documentElement?.getAttribute?.(AUTOMATION_OWNER_ATTR) === automationOwnerToken;
+    } catch {
+      return false;
+    }
+  }
+
+  function claimAutomationUi() {
+    try {
+      document.documentElement?.setAttribute?.(AUTOMATION_OWNER_ATTR, automationOwnerToken);
+    } catch {}
+    return ownsAutomationUi();
+  }
+
   function ensureAutomationRuntimeStyle() {
     let style = document.getElementById(AUTOMATION_RUNTIME_STYLE_ID);
     if (!style) {
@@ -84,8 +104,9 @@
     const css = `
       #${LEGACY_AUTOMATION_INDICATOR_ID},
       #${LEGACY_AUTOMATION_STATUS_ID},
-      [id^="chatgpt-notifier-automation-indicator-v"]:not(#${AUTOMATION_INDICATOR_ID}),
-      [id^="chatgpt-notifier-automation-status-v"]:not(#${AUTOMATION_STATUS_ID}) {
+      [id^="chatgpt-notifier-automation-indicator-v"],
+      [id^="chatgpt-notifier-automation-status-v"],
+      [${AUTOMATION_UI_OWNER_ATTR}]:not([${AUTOMATION_UI_OWNER_ATTR}="${automationOwnerToken}"]) {
         display: none !important;
       }
     `;
@@ -98,7 +119,8 @@
       `#${LEGACY_AUTOMATION_INDICATOR_ID}`,
       `#${LEGACY_AUTOMATION_STATUS_ID}`,
       '[id^="chatgpt-notifier-automation-indicator-v"]',
-      '[id^="chatgpt-notifier-automation-status-v"]'
+      '[id^="chatgpt-notifier-automation-status-v"]',
+      `[${AUTOMATION_UI_OWNER_ATTR}]`
     ]) {
       let nodes = [];
       try { nodes = Array.from(document.querySelectorAll(selector)); } catch {}
@@ -284,6 +306,7 @@
   }
 
   function ensureAutomationStatus() {
+    if (!ownsAutomationUi()) return null;
     const toolbar = document.getElementById(QUICK_CONTINUE_TOOLBAR_ID);
     if (!toolbar) {
       automationStatus = null;
@@ -302,6 +325,7 @@
     const status = document.createElement('button');
     status.id = AUTOMATION_STATUS_ID;
     status.type = 'button';
+    status.setAttribute(AUTOMATION_UI_OWNER_ATTR, automationOwnerToken);
     status.hidden = true;
     status.setAttribute('aria-label', 'Reset auto-continues remaining');
     Object.assign(status.style, {
@@ -338,6 +362,7 @@
   }
 
   function renderAutomationStatus(overview = automationOverview) {
+    if (!ownsAutomationUi()) return;
     const status = ensureAutomationStatus();
     if (!status) return;
     const text = automationStatusText(overview);
@@ -348,6 +373,7 @@
   }
 
   function tickAutomationStatus() {
+    if (!ownsAutomationUi()) return;
     renderAutomationStatus();
     const watchdog = automationOverview?.codeWatchdog;
     const deadlineAt = Math.max(0, Number(watchdog?.deadlineAt || 0));
@@ -366,6 +392,7 @@
   }
 
   function renderAutomationIndicator(overview = automationOverview) {
+    if (!ownsAutomationUi()) return;
     if (!automationIndicator || !automationDot) return;
     const mode = automationMode(overview);
     automationIndicator.disabled = automationBusy || mode.disabled;
@@ -392,6 +419,7 @@
     const button = document.createElement('button');
     button.id = AUTOMATION_INDICATOR_ID;
     button.type = 'button';
+    button.setAttribute(AUTOMATION_UI_OWNER_ATTR, automationOwnerToken);
     Object.assign(button.style, {
       width: '18px',
       minWidth: '18px',
@@ -436,6 +464,7 @@
   }
 
   function ensureAutomationIndicator() {
+    if (!ownsAutomationUi()) return null;
     const toolbar = document.getElementById(QUICK_CONTINUE_TOOLBAR_ID);
     if (!toolbar) {
       automationIndicator = null;
@@ -476,6 +505,7 @@
   }
 
   async function refreshAutomationIndicator() {
+    if (!ownsAutomationUi()) return automationOverview;
     if (automationBusy) return automationOverview;
     const indicator = ensureAutomationIndicator();
     if (!indicator || document.visibilityState === 'hidden') return automationOverview;
@@ -487,6 +517,7 @@
   async function resetAutomationBudget(event) {
     event?.preventDefault?.();
     event?.stopPropagation?.();
+    if (!ownsAutomationUi()) return;
     if (automationBudgetBusy || automationBusy) return;
 
     const status = ensureAutomationStatus();
@@ -521,6 +552,7 @@
   async function cycleAutomationState(event) {
     event?.preventDefault?.();
     event?.stopPropagation?.();
+    if (!ownsAutomationUi()) return;
     if (automationBusy) return;
 
     const indicator = ensureAutomationIndicator();
@@ -575,6 +607,7 @@
   }
 
   function maintainAutomationIndicator() {
+    if (!ownsAutomationUi()) return;
     const previousIndicator = automationIndicator;
     const indicator = ensureAutomationIndicator();
     ensureAutomationStatus();
@@ -594,6 +627,7 @@
       return false;
     }
     if (message?.type !== 'BUILD_AUTOMATION_STATE_CHANGED') return false;
+    if (!ownsAutomationUi()) return false;
     const indicator = ensureAutomationIndicator();
     if (!indicator) return false;
     if (!message.overview) return false;
@@ -609,6 +643,7 @@
     refreshAutomationIndicator().catch(() => {});
   }
 
+  claimAutomationUi();
   ensureAutomationRuntimeStyle();
   removeStaleAutomationNodes();
   try { document.getElementById(AUTOMATION_INDICATOR_ID)?.remove(); } catch {}
@@ -616,6 +651,7 @@
   document.addEventListener('visibilitychange', handleVisibilityChange, true);
   window.addEventListener('focus', handleWindowFocus, true);
   automationIndicatorObserver = new MutationObserver(() => {
+    if (!ownsAutomationUi()) return;
     if (!document.getElementById(AUTOMATION_RUNTIME_STYLE_ID)) ensureAutomationRuntimeStyle();
     maintainAutomationIndicator();
   });
@@ -636,6 +672,9 @@
       try { window.removeEventListener('focus', handleWindowFocus, true); } catch {}
       try { document.getElementById(AUTOMATION_INDICATOR_ID)?.remove(); } catch {}
       try { document.getElementById(AUTOMATION_STATUS_ID)?.remove(); } catch {}
+      try {
+        if (ownsAutomationUi()) document.documentElement?.removeAttribute?.(AUTOMATION_OWNER_ATTR);
+      } catch {}
     }
   });
 })();

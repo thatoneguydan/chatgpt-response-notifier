@@ -1,7 +1,9 @@
-# ChatGPT Response Notifier 0.9.56
+# ChatGPT Response Notifier 0.9.57
 
-- Fixes prompt/request ordering races that could make the auto-continue status flicker or remain stopped after a new human message.
-- Terminal watchdog tombstones are now truly prompt-scoped: a stale terminal snapshot from an older prompt cannot overwrite a watchdog that already tracks a different prompt at the same or newer page-global request timestamp.
-- A stopped prompt no longer absorbs a newer request timestamp merely because ChatGPT has not yet rendered the new user turn; once the genuinely new prompt appears, it starts a fresh watchdog normally.
-- Preserves the automatic parent→child protection: a late terminal status on the parent still stops an automatic Continue child.
-- Preserves generic status policy, the 30-minute hard no-code deadline, three-send allowance, user-draft/upload vetoes, exact-parent terminal rechecks, and no-focus/no-API behavior.
+- Fixes the green monitoring indicator becoming unclickable after an extension reload while its countdown kept running.
+- Gives each live attachment-script execution a shared-DOM ownership token so only the newest runtime may render or mutate the monitoring indicator and auto-continue countdown.
+- Moves the current controls to a new runtime-owned DOM namespace and permanently hides older indicator/status nodes, preventing a stale pre-reload content-script world from repainting current state.
+- Guards countdown ticks, indicator maintenance, state messages, budget resets, and Monitor/Pause/Resume clicks on current UI ownership.
+- Advances the hot-page attachment runtime to v13 so already-open chats receive the ownership repair without foregrounding or reloading the ChatGPT page.
+- Preserves the durable operator Pause gate in the background worker: paused conversations remain unable to send watchdog Continue actions.
+
