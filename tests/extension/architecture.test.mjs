@@ -648,7 +648,7 @@ test('canonical project continuation prompts are fresh enrollment evidence witho
   const monitorPage = text('extension/monitor-script.js');
   const monitorWorker = text('extension/monitor-background.js');
 
-  assert.match(monitorPage, /RUNTIME_VERSION = 9/);
+  assert.match(monitorPage, /RUNTIME_VERSION = 10/);
   assert.match(monitorPage, /function userHasCanonicalProjectStart/);
   assert.match(monitorPage, /from canonical GitHub state/);
   assert.match(monitorPage, /projectStartSignal: userHasCanonicalProjectStart\(userText\)/);
@@ -674,7 +674,7 @@ test('terminal watchdog state is sticky and stale attachment generations cannot 
 
   assert.match(monitorPage, /stickyTerminalPromptKey/);
   assert.match(monitorPage, /stickyTerminalStatusCode/);
-  assert.match(statusPage, /RUNTIME_VERSION = 11/);
+  assert.match(statusPage, /RUNTIME_VERSION = 12/);
   assert.match(statusPage, /stickyTerminalPromptKey/);
   assert.match(statusPage, /stickyTerminalStatusCode/);
 
@@ -707,8 +707,8 @@ test('extension update hot-activates reload-safe watchdog page runtimes in alrea
   assert.match(attachment, /extensionVersion/);
 
   assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 10/);
-  assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 9/);
-  assert.match(monitor, /HOT_PAGE_STATUS_RUNTIME_VERSION = 11/);
+  assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 10/);
+  assert.match(monitor, /HOT_PAGE_STATUS_RUNTIME_VERSION = 12/);
   assert.match(monitor, /HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3/);
   assert.match(monitor, /async function queryHotPageRuntime/);
   assert.match(monitor, /async function ensureHotPageRuntime/);
