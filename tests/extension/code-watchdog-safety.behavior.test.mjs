@@ -242,7 +242,7 @@ test('status runtime generation advances for the hard-deadline page behavior', (
   assert.match(statusSource, /const RUNTIME_VERSION = 14/);
 });
 
-test('rendered status fallback accepts only one genuine terminal footer', () => {
+test('rendered status fallback accepts duplicate copies of one terminal footer but rejects conflicts', () => {
   const start = statusSource.indexOf('function terminalStatusCodeFromRenderedText');
   const end = statusSource.indexOf('function assistantStatusCodeFromDom', start);
   assert.ok(start >= 0 && end > start, 'strict rendered-status helper must exist');
@@ -260,6 +260,8 @@ test('rendered status fallback accepts only one genuine terminal footer', () => 
   const parse = context.__parseRenderedStatus;
 
   assert.equal(parse('Work finished.\n[GITHUB_STATUS: COMPLETE_APPLIED]'), 'COMPLETE_APPLIED');
+  assert.equal(parse('Work finished.\n[GITHUB_STATUS: COMPLETE_APPLIED]\n[GITHUB_STATUS: COMPLETE_APPLIED]'), 'COMPLETE_APPLIED');
+  assert.equal(parse('Nothing remains.\n[GITHUB_STATUS: COMPLETE_NO_CHANGES]\n[GITHUB_STATUS: COMPLETE_NO_CHANGES]'), 'COMPLETE_NO_CHANGES');
   assert.equal(parse('[GITHUB_STATUS: COMPLETE_APPLIED]\nMore work remains.'), '');
   assert.equal(parse('Previous footer: [GITHUB_STATUS: COMPLETE_APPLIED]'), '');
   assert.equal(parse('[GITHUB_STATUS: COMPLETE_APPLIED]\n[GITHUB_STATUS: INCOMPLETE_CONTINUE]'), '');
