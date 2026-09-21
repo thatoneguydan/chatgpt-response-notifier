@@ -90,6 +90,21 @@ test('toolbar keeps a known watchdog state when a same-revision overview tempora
       deadlineAt: 999999
     }
   }, stopped), false);
+
+  // A Pause/Resume lifecycle advances enrollment revision and clears the old
+  // watchdog record. The replacement watchdog legitimately restarts its own
+  // logical revision sequence and must not be rejected as stale.
+  assert.equal(fresh({
+    activeConversationId: 'conversation-1',
+    stateRevision: 6,
+    automationEnabled: true,
+    codeWatchdog: {
+      watchdogRevision: 1,
+      updatedAt: 400,
+      stopped: false,
+      deadlineAt: 999999
+    }
+  }, stopped), true);
 });
 
 test('all watchdog state mutations share one per-conversation queue and records have logical revisions', () => {
