@@ -197,6 +197,24 @@ test('Project menu stays available for config editing when send controls are una
   assert.match(contentSource, /function canSendProject\(\)/);
 });
 
+test('standalone runtime hot-replaces stale generations, restores a detached toolbar, and ignores notifier-only churn', () => {
+  assert.match(contentSource, /const RUNTIME_VERSION = 5/);
+  assert.match(contentSource, /const previousRuntime = globalThis\.__chatgptQuickContinueRuntime/);
+  assert.match(contentSource, /previousRuntime\?\.dispose\?\.\(\)/);
+  assert.doesNotMatch(contentSource, /__chatgptQuickContinueInstalled/);
+  assert.match(contentSource, /if \(!root\.isConnected\)/);
+  assert.match(contentSource, /\(document\.body \|\| document\.documentElement\)\.append\(root\)/);
+  assert.match(contentSource, /const NOTIFIER_MUTATION_SELECTOR/);
+  assert.match(contentSource, /function notifierOnlyMutation\(records\)/);
+  assert.match(contentSource, /new MutationObserver\(handleDocumentMutations\)/);
+  assert.match(contentSource, /document\.addEventListener\('pointerdown', handleDocumentPointerDown, true\)/);
+  assert.match(contentSource, /document\.removeEventListener\('pointerdown', handleDocumentPointerDown, true\)/);
+  assert.match(contentSource, /document\.removeEventListener\('input', scheduleSync, true\)/);
+  assert.match(contentSource, /document\.removeEventListener\('scroll', scheduleSync, true\)/);
+  assert.match(contentSource, /document\.removeEventListener\('visibilitychange', scheduleSync, true\)/);
+  assert.match(contentSource, /window\.removeEventListener\('resize', scheduleSync\)/);
+});
+
 test('project popover opens above when it fits, flips below near the top, and chooses the roomier side if neither fits', () => {
   assert.match(contentSource, /function preferredPopoverDirection\(toolbarRect, popoverHeight, viewportHeight\)/);
   assert.match(contentSource, /if \(upwardTop >= margin\) return 'above'/);
