@@ -200,14 +200,16 @@
       return false;
     }
     if (
-      nextWatchdogRevision > 0
+      nextStateRevision === currentStateRevision
+      && nextWatchdogRevision > 0
       && currentWatchdogRevision > 0
       && nextWatchdogRevision < currentWatchdogRevision
     ) {
       return false;
     }
     if (
-      nextWatchdogRevision === 0
+      nextStateRevision === currentStateRevision
+      && nextWatchdogRevision === 0
       && currentWatchdogRevision === 0
       && nextWatchdogUpdatedAt > 0
       && currentWatchdogUpdatedAt > 0
