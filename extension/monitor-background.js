@@ -1402,11 +1402,9 @@
     const requestKey = String(details.requestId || '');
     const tracked = requestTabs.get(requestKey) || null;
     requestTabs.delete(requestKey);
-    const requestStartedAt = Math.max(
-      0,
-      Number(tracked?.requestStartedAt || 0),
-      Number(details?.timeStamp || 0)
-    ) || Date.now();
+    const requestStartedAt = Math.max(0, Number(tracked?.requestStartedAt || 0))
+      || Math.max(0, Number(details?.timeStamp || 0))
+      || Date.now();
     sendRequestPhase(details.tabId, 'completed', details, requestStartedAt).catch(() => {});
   }, REQUEST_FILTER);
 
@@ -1415,11 +1413,9 @@
     const requestKey = String(details.requestId || '');
     const tracked = requestTabs.get(requestKey) || null;
     requestTabs.delete(requestKey);
-    const requestStartedAt = Math.max(
-      0,
-      Number(tracked?.requestStartedAt || 0),
-      Number(details?.timeStamp || 0)
-    ) || Date.now();
+    const requestStartedAt = Math.max(0, Number(tracked?.requestStartedAt || 0))
+      || Math.max(0, Number(details?.timeStamp || 0))
+      || Date.now();
     sendRequestPhase(details.tabId, 'error', details, requestStartedAt).catch(() => {});
   }, REQUEST_FILTER);
 
