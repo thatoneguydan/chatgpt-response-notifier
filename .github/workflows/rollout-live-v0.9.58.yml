@@ -1,0 +1,207 @@
+name: Roll out live notifier v0.9.58
+
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - .github/workflows/rollout-live-v0.9.58.yml
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    if: ${{ github.head_ref == 'ops/apply-live-v0.9.58' && github.event.pull_request.head.repo.full_name == github.repository }}
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 10
+    steps:
+      - name: Apply managed update to interactive notifier
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expectedVersion = '0.9.58'
+          $expectedSource = '8bbf43edfc41d48acf249adea878970097655aa0'
+          $port = 38473
+
+          Add-Type -TypeDefinition @'
+          using System;
+          using System.Runtime.InteropServices;
+          public static class NotifierSessionNative958
+          {
+              [DllImport("kernel32.dll")]
+              public static extern uint WTSGetActiveConsoleSessionId();
+          }
+          '@
+
+          function ActiveSession {
+            $raw = [NotifierSessionNative958]::WTSGetActiveConsoleSessionId()
+            if ($raw -eq [uint32]::MaxValue) { throw 'No active console session.' }
+            return [int]$raw
+          }
+
+          function BridgeOwner {
+            $listener = Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue | Select-Object -First 1
+            if (-not $listener) { return $null }
+            $process = Get-Process -Id $listener.OwningProcess -ErrorAction SilentlyContinue
+            if (-not $process) { return $null }
+            return [pscustomobject]@{ Pid=[int]$process.Id; SessionId=[int]$process.SessionId }
+          }
+
+          function Bridge([hashtable]$message, [int]$timeoutSeconds = 20) {
+            $socket = [System.Net.WebSockets.ClientWebSocket]::new()
+            $socket.Options.SetRequestHeader('Origin', 'chrome-extension://lciedmoiiapbgemklkpoadimhffaaaah')
+            $cts = [System.Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds($timeoutSeconds))
+            try {
+              $socket.ConnectAsync([Uri]"ws://127.0.0.1:$port/bridge", $cts.Token).GetAwaiter().GetResult()
+              $bytes = [Text.Encoding]::UTF8.GetBytes(($message | ConvertTo-Json -Compress))
+              $socket.SendAsync([ArraySegment[byte]]::new($bytes), [System.Net.WebSockets.WebSocketMessageType]::Text, $true, $cts.Token).GetAwaiter().GetResult()
+              $buffer = New-Object byte[] 65536
+              for ($i=0; $i -lt 30; $i++) {
+                $result = $socket.ReceiveAsync([ArraySegment[byte]]::new($buffer), $cts.Token).GetAwaiter().GetResult()
+                if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { break }
+                $event = ([Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count) | ConvertFrom-Json)
+                if ([string]$event.requestId -eq [string]$message.requestId) { return $event }
+              }
+              return $null
+            } finally {
+              try { $socket.Dispose() } catch {}
+              $cts.Dispose()
+            }
+          }
+
+          function Ping {
+            $id=[Guid]::NewGuid().ToString('N')
+            return Bridge @{ type='ping'; requestId=$id } 20
+          }
+
+          $session=ActiveSession
+          $owner=BridgeOwner
+          if (-not $owner -or $owner.SessionId -ne $session) { throw 'Notifier bridge is not owned by the interactive session.' }
+
+          $before=Ping
+          if (-not $before) { throw 'Interactive helper did not answer pre-update ping.' }
+          Write-Host ("PRECHECK " + (@{
+            version=[string]$before.installedExtensionVersion
+            bridgeOwnerInteractive=$true
+            sourceMatchesExpected=([string]$before.installedSourceCommit -eq $expectedSource)
+          } | ConvertTo-Json -Compress))
+
+          $alreadyCurrent = [string]$before.installedExtensionVersion -eq $expectedVersion -and [string]$before.installedSourceCommit -eq $expectedSource
+          if (-not $alreadyCurrent) {
+            $updateDeadline=[DateTime]::UtcNow.AddMinutes(4)
+            do {
+              $id=[Guid]::NewGuid().ToString('N')
+              try {
+                $result=Bridge @{ type='update.check'; requestId=$id } 180
+                Write-Host ("UPDATE_RESULT " + (@{
+                  received=($null -ne $result)
+                  state=[string]$result.updateStatus.state
+                  currentVersion=[string]$result.updateStatus.currentVersion
+                  availableVersion=[string]$result.updateStatus.availableVersion
+                  errorPresent=-not [string]::IsNullOrWhiteSpace([string]$result.updateStatus.error)
+                } | ConvertTo-Json -Compress))
+                if ($result -and [string]$result.updateStatus.currentVersion -eq $expectedVersion) { break }
+              } catch {
+                Write-Host 'UPDATE_RESULT connection-replaced-during-update'
+              }
+
+              Start-Sleep -Seconds 10
+              try { $probe=Ping } catch { $probe=$null }
+              if ($probe -and [string]$probe.installedExtensionVersion -eq $expectedVersion -and [string]$probe.installedSourceCommit -eq $expectedSource) { break }
+            } while ([DateTime]::UtcNow -lt $updateDeadline)
+          }
+
+          $deadline=[DateTime]::UtcNow.AddMinutes(4)
+          $verified=$null
+          do {
+            Start-Sleep -Seconds 2
+            $currentOwner=BridgeOwner
+            if (-not $currentOwner -or $currentOwner.SessionId -ne $session) { continue }
+            try { $pong=Ping } catch { $pong=$null }
+            if ($pong -and [string]$pong.installedExtensionVersion -eq $expectedVersion -and [string]$pong.installedSourceCommit -eq $expectedSource) {
+              $verified=$pong
+              break
+            }
+          } while ([DateTime]::UtcNow -lt $deadline)
+
+          if (-not $verified) { throw 'Live notifier did not reach v0.9.58 with the expected source.' }
+
+          Write-Host ("VERIFIED " + (@{
+            version=[string]$verified.installedExtensionVersion
+            sourceMatchesExpected=$true
+            bridgeOwnerInteractive=$true
+            managedUpdateApplied=(-not $alreadyCurrent)
+            alreadyCurrent=$alreadyCurrent
+          } | ConvertTo-Json -Compress))
+
+  verify:
+    needs: apply
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 5
+    steps:
+      - name: Checkout canonical v0.9.58 source
+        uses: actions/checkout@v4
+        with:
+          ref: 8bbf43edfc41d48acf249adea878970097655aa0
+          fetch-depth: 0
+
+      - name: Verify live runtime and fixed registration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $expectedVersion = '0.9.58'
+          $expectedSource = '8bbf43edfc41d48acf249adea878970097655aa0'
+          $output = Join-Path $env:RUNNER_TEMP 'notifier-v0958-live-evidence.json'
+
+          [ordered]@{
+            schemaVersion = 2
+            readOnly = $true
+            sourceCommit = $expectedSource
+            chrome = [ordered]@{
+              loadedExtensionRuntimeIdentitySupported = $false
+            }
+          } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $output -Encoding UTF8
+
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Add-NotifierSafeEvidence.ps1 -EvidencePath $output
+          if ($LASTEXITCODE -ne 0) { throw "Safe runtime evidence adapter failed with exit code $LASTEXITCODE." }
+          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Add-NotifierChromeRegistrationEvidence.ps1 -EvidencePath $output
+          if ($LASTEXITCODE -ne 0) { throw "Chrome registration evidence adapter failed with exit code $LASTEXITCODE." }
+
+          $evidence = Get-Content -LiteralPath $output -Raw -Encoding UTF8 | ConvertFrom-Json
+          $safe = $evidence.safeRuntimeEvidence
+          $registration = $evidence.chrome.registration
+
+          if ([string]$safe.installedVersion -ne $expectedVersion) {
+            throw "Installed version mismatch: expected $expectedVersion, got $($safe.installedVersion)."
+          }
+          if ([string]$safe.sourceCommit -ne $expectedSource) {
+            throw "Installed source mismatch: expected $expectedSource, got $($safe.sourceCommit)."
+          }
+          if ([string]$safe.currentExtensionVersion -ne $expectedVersion) {
+            throw "Current live extension mismatch: expected $expectedVersion, got $($safe.currentExtensionVersion)."
+          }
+          if ([string]$safe.historicalExtensionVersion -ne $expectedVersion) {
+            throw "Historical live extension mismatch: expected $expectedVersion, got $($safe.historicalExtensionVersion)."
+          }
+          if ($safe.extensionConnectionLive -ne $true -or $evidence.chrome.loadedExtensionRuntimeIdentitySupported -ne $true) {
+            throw 'Live extension runtime identity is not fresh/connected.'
+          }
+          if ([string]$registration.state -ne 'present') {
+            throw "Chrome fixed registration is not present: $($registration.state)."
+          }
+          if ([string]$registration.extensionId -ne 'lciedmoiiapbgemklkpoadimhffaaaah') {
+            throw "Registered extension ID mismatch: $($registration.extensionId)."
+          }
+          if ([string]$registration.expectedExtensionRoot.calculatedExtensionId -ne 'lciedmoiiapbgemklkpoadimhffaaaah') {
+            throw "Calculated extension ID mismatch: $($registration.expectedExtensionRoot.calculatedExtensionId)."
+          }
+
+          Write-Host ("LIVE_VERIFIED " + (@{
+            installedVersion=[string]$safe.installedVersion
+            currentExtensionVersion=[string]$safe.currentExtensionVersion
+            historicalExtensionVersion=[string]$safe.historicalExtensionVersion
+            sourceMatchesExpected=([string]$safe.sourceCommit -eq $expectedSource)
+            liveRuntimeIdentity=$evidence.chrome.loadedExtensionRuntimeIdentitySupported
+            registrationState=[string]$registration.state
+            fixedIdMatches=([string]$registration.extensionId -eq 'lciedmoiiapbgemklkpoadimhffaaaah' -and [string]$registration.expectedExtensionRoot.calculatedExtensionId -eq 'lciedmoiiapbgemklkpoadimhffaaaah')
+          } | ConvertTo-Json -Compress))
