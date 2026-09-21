@@ -1,8 +1,7 @@
-# ChatGPT Response Notifier 0.9.51
+# ChatGPT Response Notifier 0.9.52
 
-- Fixes a remaining auto-continue race where a monitored chat could emit `BLOCKED_HUMAN` just after the watchdog's final pre-send check and still receive another automatic Continue.
-- Status runtime v11 re-checks the exact parent prompt after an automatic Continue is submitted, so a terminal status that lands during Send immediately stops the watchdog.
-- Monitor runtime v9 also reports the previous prompt's terminal status while an automatic follow-up is current; worker-owned parent/child lineage keeps a later-arriving `BLOCKED_HUMAN` authoritative instead of treating the automatic follow-up as a new human request.
-- A genuinely new human request still starts a fresh watchdog normally.
-- Preserves the 30-minute no-code deadline, three-send allowance, traffic governor, terminal-status semantics, and no-F5 hot runtime activation.
-
+- Fixes a distinct watchdog failure where a terminal footer such as `COMPLETE_APPLIED` could already be visible but the monitor snapshot could miss it, leaving the 30-minute auto-continue deadline armed.
+- Before any watchdog Send, the worker now performs an independent exact-parent-prompt terminal-status query through status runtime v12 instead of relying only on the monitor snapshot.
+- Status runtime v12 and monitor runtime v10 add a raw rendered-line fallback for terminal footer recognition while preserving exclusions for code, quotes, lists, and tool output.
+- A recognized non-auto terminal status found by the exact-prompt recheck parks the watchdog before composer mutation or Send; regression coverage proves a missed `COMPLETE_APPLIED` cannot reach the continuation command.
+- Preserves the intentional 30-minute hard no-code deadline, recoverable `INCOMPLETE_*` behavior, three-send allowance, automatic parent/child lineage, profile traffic governor, and genuine later human-request behavior.
