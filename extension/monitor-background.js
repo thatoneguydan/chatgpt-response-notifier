@@ -711,8 +711,7 @@
           { tab },
           record,
           automaticSentAt,
-          result?.continuationUserKey || '',
-          String(live.promptKey || '')
+          result?.continuationUserKey || ''
         );
         if (result?.ok === true) {
           await scheduleCodeWatchdog(record, automaticSentAt + CODE_WATCHDOG_DELAY_MS);
@@ -726,7 +725,8 @@
           { tab },
           record,
           automaticSentAt,
-          result?.continuationUserKey || ''
+          result?.continuationUserKey || '',
+          String(live.promptKey || '')
         );
       }
       return;
