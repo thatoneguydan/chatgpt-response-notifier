@@ -14,6 +14,7 @@ Scope: ChatGPT Response Notifier v0.9.53 and standalone Quick Continue v1.2.3, f
 8. **New-chat Project enrollment could lose freshness.** A Project Continue can begin while the tab is still `/`. If the monitor runtime is replaced when ChatGPT assigns `/c/<id>`, the replacement runtime can receive only the request's completed/error event. The old handler left `requestStartedAt = 0`, which made the otherwise valid project-start signal fail the worker's fresh-request gate.
 9. **CI did not execute standalone Quick Continue tests.** The self-hosted validate/release workflows discovered only `tests/extension/*.test.mjs`, so companion runtime changes could ship behind notifier-only green checks.
 10. **Standalone update activation needs a host-page reload.** Quick Continue is a static content-script extension with no background/scripting reinjection path. Chrome's documented development lifecycle requires reloading the extension **and the host page** for content-script changes; replacing files plus only reloading the extension is insufficient for already-open ChatGPT tabs.
+11. **The self-hosted Glass runner cannot update Quick Continue inside Dan's profile.** An operational rollout using the repository-scoped runner reached the intended path but Windows denied even `Test-Path` on `C:\\Users\\dan\\AppData\\Local\\ChatGPTQuickContinue\\Extension`. The runner executes as `NetworkService`; do not weaken the user-profile ACL to bypass this boundary. Quick Continue updates must be run in Dan's interactive user context.
 
 ## Repairs
 
@@ -27,6 +28,7 @@ Scope: ChatGPT Response Notifier v0.9.53 and standalone Quick Continue v1.2.3, f
 - Run standalone Quick Continue syntax/behavior gates in both validation and release.
 - Add a pinned 1.2.4 updater that replaces the changed runtime files without overwriting `config.json`, and explicitly reports both the extension-reload and ChatGPT-page-reload requirements.
 - Advance standalone Quick Continue to v1.2.4.
+- Keep live Quick Continue installation user-context-only on Glass; repository runner workflows may validate source but must not change Dan's profile ACLs or claim they can apply the unpacked-extension update.
 
 ## Regression gates
 
