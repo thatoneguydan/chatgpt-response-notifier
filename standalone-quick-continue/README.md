@@ -66,6 +66,6 @@ For an existing 1.2.3 install, the pinned 1.2.4 updater replaces the changed run
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Update-Installed-1.2.4.ps1
 ```
 
-The updater verifies each copied file by SHA-256 and reports that Chrome's unpacked extension must be reloaded once before the new runtime is active.
+The updater verifies each copied file by SHA-256. Because 1.2.4 changes manifest-declared content scripts, Chrome requires **both** reloading the unpacked extension and reloading each already-open ChatGPT host page before those pages run the new code. A newly opened ChatGPT page after the extension reload already gets 1.2.4.
 
 Because this is a separate extension, it can stay enabled while ChatGPT Response Notifier is disabled or under repair. If the notifier is later enabled too, Quick Continue suppresses the notifier's older quick-prompt toolbar so only the standalone controls are shown.
