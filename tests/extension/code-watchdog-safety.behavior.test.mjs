@@ -32,6 +32,7 @@ test('toolbar keeps a known watchdog state when a same-revision overview tempora
     stateRevision: 4,
     automationEnabled: true,
     codeWatchdog: {
+      watchdogRevision: 7,
       updatedAt: 200,
       stopped: true,
       stopReason: 'status:COMPLETE_APPLIED'
@@ -56,18 +57,49 @@ test('toolbar keeps a known watchdog state when a same-revision overview tempora
     stateRevision: 4,
     automationEnabled: true,
     codeWatchdog: {
-      updatedAt: 300,
+      watchdogRevision: 8,
+      updatedAt: 200,
       stopped: false,
       deadlineAt: 999999
     }
   }, stopped), true);
+
+  // Message delivery can reverse even when worker writes were serialized. A logical
+  // watchdog revision must win when Date.now() gives both writes the same millisecond.
+  assert.equal(fresh({
+    activeConversationId: 'conversation-1',
+    stateRevision: 4,
+    automationEnabled: true,
+    codeWatchdog: {
+      watchdogRevision: 6,
+      updatedAt: 200,
+      stopped: false,
+      deadlineAt: 999999
+    }
+  }, stopped), false);
+
+  // Once a revisioned record has been observed, do not let an older runtime's
+  // timestamp-only watchdog repaint it at the same enrollment revision.
+  assert.equal(fresh({
+    activeConversationId: 'conversation-1',
+    stateRevision: 4,
+    automationEnabled: true,
+    codeWatchdog: {
+      updatedAt: 300,
+      stopped: false,
+      deadlineAt: 999999
+    }
+  }, stopped), false);
 });
 
-test('watchdog reconciliation and alarm mutations share one per-conversation queue', () => {
+test('all watchdog state mutations share one per-conversation queue and records have logical revisions', () => {
   assert.match(monitorSource, /const codeWatchdogMutationQueues = new Map\(\)/);
   assert.match(monitorSource, /function queueCodeWatchdogMutation\(conversationIdValue, operation\)/);
   assert.match(monitorSource, /function reconcileCodeWatchdog\(clean, sender\)[\s\S]*queueCodeWatchdogMutation/);
   assert.match(monitorSource, /function handleCodeWatchdogAlarm\(conversationId\)[\s\S]*queueCodeWatchdogMutation/);
+  assert.match(monitorSource, /queueCodeWatchdogMutation\(identity\.id, \(\) => clearCodeWatchdog\(identity\.id\)\)/);
+  assert.match(monitorSource, /queueCodeWatchdogMutation\(target\.id, async \(\) =>/);
+  assert.match(monitorSource, /watchdogRevision: Math\.max\(0, Number\(existing\?\.watchdogRevision \|\| 0\)\) \+ 1/);
   assert.match(monitorSource, /async function reconcileCodeWatchdogState/);
   assert.match(monitorSource, /async function handleCodeWatchdogAlarmState/);
 });
