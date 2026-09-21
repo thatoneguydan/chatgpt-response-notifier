@@ -458,6 +458,42 @@
     });
   }
 
+  function statusSnapshotBelongsToCurrentWatchdog(clean = {}, current = null) {
+    if (!current) return true;
+    const snapshotPromptKey = String(clean?.promptKey || '');
+    const currentPromptKey = String(current?.lastPromptKey || '');
+    if (!snapshotPromptKey || !currentPromptKey || snapshotPromptKey === currentPromptKey) return true;
+
+    const snapshotRequestStartedAt = Math.max(0, Number(clean?.requestStartedAt || 0));
+    const currentRequestStartedAt = Math.max(0, Number(current?.lastRequestStartedAt || 0));
+    const targetsAutomaticParent = Boolean(
+      current?.lastAutomaticPromptKey
+      && current?.lastAutomaticParentPromptKey
+      && currentPromptKey === String(current.lastAutomaticPromptKey)
+      && snapshotPromptKey === String(current.lastAutomaticParentPromptKey)
+    );
+    if (targetsAutomaticParent) return true;
+
+    // Request phase is page-global and can advance before ChatGPT's DOM exposes
+    // the new user turn. A stale snapshot of the prior prompt can therefore carry
+    // the new request timestamp. Once a watchdog already tracks another prompt at
+    // the same/newer request time, that old prompt must not overwrite it.
+    return snapshotRequestStartedAt > currentRequestStartedAt;
+  }
+
+  function stoppedWatchdogStillOwnsSnapshot(clean = {}, current = null) {
+    if (!current?.stopped) return false;
+    const snapshotPromptKey = String(clean?.promptKey || '');
+    const currentPromptKey = String(current?.lastPromptKey || '');
+    const samePrompt = Boolean(currentPromptKey) && snapshotPromptKey === currentPromptKey;
+    const followsAutomaticSend = Boolean(
+      (current?.lastAutomaticPromptKey && snapshotPromptKey === String(current.lastAutomaticPromptKey))
+      || (Number(current?.lastAutomaticSentAt || 0) > 0
+        && Math.abs(Math.max(0, Number(clean?.requestStartedAt || 0)) - Number(current.lastAutomaticSentAt || 0)) <= CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS)
+    );
+    return samePrompt || followsAutomaticSend;
+  }
+
   async function reconcileCodeWatchdogState(clean, sender) {
     const conversationId = String(clean?.conversationId || '');
     if (!conversationId) return null;
@@ -494,6 +530,12 @@
     }
 
     const statusCode = String(clean?.statusCode || '');
+    if (
+      globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode)
+      && !statusSnapshotBelongsToCurrentWatchdog(clean, current)
+    ) {
+      return current;
+    }
     if (globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode)) {
       if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(statusCode) === true) {
         if (
@@ -524,17 +566,14 @@
     }
 
     if (current?.stopped === true) {
-      const sameRequest = requestStartedAt === Number(current.lastRequestStartedAt || 0);
-      const samePrompt = Boolean(current.lastPromptKey)
-        && String(clean.promptKey || '') === String(current.lastPromptKey);
-      const followsAutomaticSend = (current.lastAutomaticPromptKey && String(clean.promptKey || '') === String(current.lastAutomaticPromptKey))
-        || (Number(current.lastAutomaticSentAt || 0) > 0
-          && Math.abs(requestStartedAt - Number(current.lastAutomaticSentAt || 0)) <= CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS);
-      if (sameRequest || samePrompt || followsAutomaticSend) {
-        if (!sameRequest && requestStartedAt > Number(current.lastRequestStartedAt || 0)) {
+      if (stoppedWatchdogStillOwnsSnapshot(clean, current)) {
+        if (
+          requestStartedAt > Number(current.lastRequestStartedAt || 0)
+          || String(clean.promptKey || '') !== String(current.lastPromptKey || '')
+        ) {
           current = await putCodeWatchdog(conversationId, {
             ...current,
-            lastRequestStartedAt: requestStartedAt,
+            lastRequestStartedAt: Math.max(requestStartedAt, Number(current.lastRequestStartedAt || 0)),
             lastPromptKey: String(clean.promptKey || current.lastPromptKey || ''),
             conversationUrl: clean.conversationUrl || current.conversationUrl || '',
             ownerTabId: Number.isInteger(sender?.tab?.id) ? sender.tab.id : (current.ownerTabId ?? null)

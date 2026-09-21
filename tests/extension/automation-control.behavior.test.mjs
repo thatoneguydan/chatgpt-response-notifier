@@ -572,14 +572,29 @@ test('terminal status parks the watchdog for the request and later no-code snaps
       promptKey: 'conversation-1|user-2',
       promptRevision: '2:c',
       requestId: 'request-2',
-      requestStartedAt: 2_000,
+      requestStartedAt: 1_500,
       statusCode: ''
     })
   }, sender);
   const nextRequest = await monitor.api.readCodeWatchdog('conversation-1');
   assert.equal(nextRequest.stopped, false);
-  assert.equal(nextRequest.lastRequestStartedAt, 2_000);
+  assert.equal(nextRequest.lastRequestStartedAt, 1_500);
   assert.ok(Number(nextRequest.deadlineAt) > 0);
+
+  await monitor.message({
+    type: 'CHATGPT_MONITOR_STATE',
+    snapshot: baseSnapshot({
+      promptKey: 'conversation-1|user-1',
+      promptRevision: '1:stale-terminal',
+      requestId: 'request-2',
+      requestStartedAt: 1_500,
+      statusCode: 'BLOCKED_HUMAN'
+    })
+  }, sender);
+  const staleOldPromptTerminal = await monitor.api.readCodeWatchdog('conversation-1');
+  assert.equal(staleOldPromptTerminal.stopped, false);
+  assert.equal(staleOldPromptTerminal.lastPromptKey, 'conversation-1|user-2');
+  assert.equal(staleOldPromptTerminal.lastRequestStartedAt, 1_500);
 });
 
 test('late BLOCKED_HUMAN detected after an accidental watchdog send keeps the automatic follow-up stopped', async () => {
