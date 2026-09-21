@@ -534,6 +534,67 @@ test('terminal status parks the watchdog for the request and later no-code snaps
   assert.ok(Number(nextRequest.deadlineAt) > 0);
 });
 
+test('late BLOCKED_HUMAN detected after an accidental watchdog send keeps the automatic follow-up stopped', async () => {
+  const monitor = loadMonitor();
+  await tick();
+
+  await monitor.message({
+    type: 'SET_BUILD_AUTOMATION_STATE',
+    enabled: true,
+    tabId: 1,
+    conversationId: 'conversation-1',
+    expectedRevision: 0,
+    requestId: 'enable-raced-terminal-test'
+  });
+
+  const sender = { tab: { id: 1, url: 'https://chatgpt.com/c/conversation-1', title: 'Build chat' }, documentId: 'document-1' };
+  await monitor.message({ type: 'CHATGPT_MONITOR_STATE', snapshot: baseSnapshot() }, sender);
+  const active = await monitor.api.readCodeWatchdog('conversation-1');
+
+  const terminal = await monitor.api.parkCodeWatchdogForTerminalStatus(
+    baseSnapshot({ statusCode: 'BLOCKED_HUMAN' }),
+    sender,
+    active,
+    20_000,
+    'conversation-1|auto-user-2'
+  );
+  assert.equal(terminal.stopped, true);
+  assert.equal(terminal.stopReason, 'status:BLOCKED_HUMAN');
+  assert.equal(terminal.lastAutomaticSentAt, 20_000);
+  assert.equal(terminal.lastAutomaticPromptKey, 'conversation-1|auto-user-2');
+
+  await monitor.message({
+    type: 'CHATGPT_MONITOR_STATE',
+    snapshot: baseSnapshot({
+      promptKey: 'conversation-1|auto-user-2',
+      promptRevision: '2:auto',
+      requestId: 'automatic-request-2',
+      requestStartedAt: 20_001,
+      statusCode: ''
+    })
+  }, sender);
+  const accidentalFollowup = await monitor.api.readCodeWatchdog('conversation-1');
+  assert.equal(accidentalFollowup.stopped, true);
+  assert.equal(accidentalFollowup.stopReason, 'status:BLOCKED_HUMAN');
+  assert.equal(accidentalFollowup.lastPromptKey, 'conversation-1|auto-user-2');
+  assert.equal(accidentalFollowup.deadlineAt, 0);
+
+  await monitor.message({
+    type: 'CHATGPT_MONITOR_STATE',
+    snapshot: baseSnapshot({
+      promptKey: 'conversation-1|user-3',
+      promptRevision: '3:human',
+      requestId: 'human-request-3',
+      requestStartedAt: 40_000,
+      statusCode: ''
+    })
+  }, sender);
+  const laterHumanRequest = await monitor.api.readCodeWatchdog('conversation-1');
+  assert.equal(laterHumanRequest.stopped, false);
+  assert.equal(laterHumanRequest.lastRequestStartedAt, 40_000);
+  assert.ok(Number(laterHumanRequest.deadlineAt) > 0);
+});
+
 test('timer allowance reset restores three sends without moving an active deadline and only reopens cap exhaustion', async () => {
   const monitor = loadMonitor();
   await tick();
