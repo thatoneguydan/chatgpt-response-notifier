@@ -1,14 +1,22 @@
 'use strict';
 
 (() => {
-  if (globalThis.__chatgptQuickContinueInstalled) return;
-  globalThis.__chatgptQuickContinueInstalled = true;
-
+  const RUNTIME_VERSION = 5;
   const prompts = globalThis.ChatGPTQuickContinuePrompts;
   const configApi = globalThis.ChatGPTQuickContinueConfig;
   if (!prompts || !configApi) return;
 
+  const previousRuntime = globalThis.__chatgptQuickContinueRuntime;
+  if (Number(previousRuntime?.version || 0) === RUNTIME_VERSION) return;
+  try { previousRuntime?.dispose?.(); } catch {}
+
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
+  const NOTIFIER_MUTATION_SELECTOR = [
+    '#chatgpt-notifier-automation-indicator',
+    '#chatgpt-notifier-automation-status',
+    '[id^="chatgpt-notifier-automation-indicator-v"]',
+    '[id^="chatgpt-notifier-automation-status-v"]'
+  ].join(',');
   const SEND_READY_TIMEOUT_MS = 1800;
   const sendButtons = [];
   const projectButtons = [];
@@ -423,6 +431,12 @@
     positionProjectPopover();
   }
 
+  function handleDocumentPointerDown(event) {
+    if (!projectPopover || projectPopover.hidden) return;
+    if (toolbar?.contains(event.target)) return;
+    closeProjectPopover();
+  }
+
   async function saveConfigEditor() {
     if (!editorTextarea) return;
     let parsed = null;
@@ -744,13 +758,6 @@
 
     (document.body || document.documentElement).append(root);
     toolbar = root;
-
-    document.addEventListener('pointerdown', (event) => {
-      if (!projectPopover || projectPopover.hidden) return;
-      if (toolbar?.contains(event.target)) return;
-      closeProjectPopover();
-    }, true);
-
     return root;
   }
 
@@ -830,6 +837,9 @@
     const composer = composerElement();
     const anchor = composerAnchor(composer);
     const root = toolbar || buildToolbar();
+    if (!root.isConnected) {
+      try { (document.body || document.documentElement).append(root); } catch {}
+    }
     observeGeometry(composer, anchor);
 
     if (!composer || !anchor || !visible(anchor)) {
@@ -865,6 +875,21 @@
     }
   }
 
+  function notifierOnlyMutation(records) {
+    const entries = Array.from(records || []);
+    if (!entries.length) return false;
+    return entries.every((record) => {
+      const target = record?.target;
+      const element = target?.nodeType === 1 ? target : target?.parentElement;
+      try { return Boolean(element?.closest?.(NOTIFIER_MUTATION_SELECTOR)); } catch { return false; }
+    });
+  }
+
+  function handleDocumentMutations(records) {
+    if (notifierOnlyMutation(records)) return;
+    scheduleSync();
+  }
+
   unsubscribeConfig = configApi.subscribe((nextConfig) => {
     currentConfig = nextConfig;
     if (projectList && (!editorPanel || editorPanel.hidden)) renderProjectList(nextConfig.projects);
@@ -873,8 +898,9 @@
 
   ensureConfig();
 
-  observer = new MutationObserver(scheduleSync);
+  observer = new MutationObserver(handleDocumentMutations);
   observer.observe(document.documentElement, { childList: true, subtree: true });
+  document.addEventListener('pointerdown', handleDocumentPointerDown, true);
   document.addEventListener('input', scheduleSync, { capture: true, passive: true });
   document.addEventListener('scroll', scheduleSync, { capture: true, passive: true });
   document.addEventListener('visibilitychange', scheduleSync, true);
@@ -882,7 +908,7 @@
   clockTimer = setInterval(scheduleSync, 30_000);
 
   globalThis.__chatgptQuickContinueRuntime = Object.freeze({
-    version: 4,
+    version: RUNTIME_VERSION,
     dispose() {
       try { observer?.disconnect(); } catch {}
       try { resizeObserver?.disconnect(); } catch {}
@@ -896,6 +922,11 @@
       try { if (clockTimer !== null) clearInterval(clockTimer); } catch {}
       try { if (toolbarHideTimer !== null) clearTimeout(toolbarHideTimer); } catch {}
       try { if (statusTimer !== null) clearTimeout(statusTimer); } catch {}
+      try { document.removeEventListener('pointerdown', handleDocumentPointerDown, true); } catch {}
+      try { document.removeEventListener('input', scheduleSync, true); } catch {}
+      try { document.removeEventListener('scroll', scheduleSync, true); } catch {}
+      try { document.removeEventListener('visibilitychange', scheduleSync, true); } catch {}
+      try { window.removeEventListener('resize', scheduleSync); } catch {}
       try { toolbar?.remove(); } catch {}
     }
   });
