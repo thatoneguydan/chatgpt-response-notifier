@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 11;
+  const RUNTIME_VERSION = 12;
   try { globalThis.__chatgptNotifierMonitorRuntime?.dispose?.(); } catch {}
 
   const abortController = new AbortController();
@@ -128,32 +128,36 @@
     return false;
   }
 
+  function terminalStatusCodeAnywhereInRenderedText(value) {
+    const api = globalThis.ChatGPTNotifierStatusCode;
+    if (typeof api?.isStatusCode !== 'function') return '';
+    const lines = String(value || '')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/\r\n?/g, '\n')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const validCodes = [];
+    for (const line of lines) {
+      const match = line.match(/^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/);
+      if (match && api.isStatusCode(match[1])) validCodes.push(match[1]);
+    }
+    const distinctCodes = new Set(validCodes);
+    return distinctCodes.size === 1 ? validCodes[validCodes.length - 1] : '';
+  }
+
   function assistantStatusCodeFromDom(turn) {
     try {
-      const api = globalThis.ChatGPTNotifierStatusCode;
-      if (typeof api?.isStatusCode !== 'function') return '';
-      const source = roleRoot(turn, 'assistant');
-      if (!source) return '';
-      const copy = source.cloneNode(true);
-      for (const excluded of copy.querySelectorAll?.('pre, code, blockquote, ul, ol, li, [data-message-author-role="tool"], [data-tool]') || []) excluded.remove();
-      const rawLines = String(copy.innerText || copy.textContent || '')
-        .replace(/[\u200B-\u200D\uFEFF]/g, '')
-        .replace(/\r\n?/g, '\n')
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean);
-      for (let index = rawLines.length - 1; index >= 0; index -= 1) {
-        const match = rawLines[index].match(/^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/);
-        if (match && api.isStatusCode(match[1])) return match[1];
-      }
-      const candidates = [copy, ...(copy.querySelectorAll?.('p, div, span') || [])];
-      for (let index = candidates.length - 1; index >= 0; index -= 1) {
-        const value = String(candidates[index]?.textContent || '')
-          .replace(/[\u200B-\u200D\uFEFF]/g, '')
-          .replace(/\r\n?/g, '\n')
-          .trim();
-        const match = value.match(/^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/);
-        if (match && api.isStatusCode(match[1])) return match[1];
+      const sources = Array.from(new Set([
+        roleRoot(turn, 'assistant'),
+        ...renderedBlocks(turn),
+        turn
+      ].filter(Boolean)));
+      for (const source of sources) {
+        const copy = source.cloneNode(true);
+        for (const excluded of copy.querySelectorAll?.('pre, code, blockquote, ul, ol, li, button, svg, [role="button"], [aria-hidden="true"], [hidden], [inert], [data-message-author-role="tool"], [data-tool]') || []) excluded.remove();
+        const code = terminalStatusCodeAnywhereInRenderedText(copy.innerText || copy.textContent || '');
+        if (code) return code;
       }
     } catch {}
     return '';
