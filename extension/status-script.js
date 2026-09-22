@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 14;
+  const RUNTIME_VERSION = 15;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me.';
   const DEFAULT_WAIT_MS = 30000;
@@ -115,38 +115,66 @@
     return distinctCodes.size === 1 && distinctCodes.has(finalMatch[1]) ? finalMatch[1] : '';
   }
 
+  function terminalStatusCodeAnywhereInRenderedText(value) {
+    const api = globalThis.ChatGPTNotifierStatusCode;
+    if (typeof api?.isStatusCode !== 'function') return '';
+    const lines = String(value || '')
+      .replace(/[\u200B-\u200D\uFEFF]/g, '')
+      .replace(/\r\n?/g, '\n')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const validCodes = [];
+    for (const line of lines) {
+      const match = line.match(/^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/);
+      if (match && api.isStatusCode(match[1])) validCodes.push(match[1]);
+    }
+    const distinctCodes = new Set(validCodes);
+    return distinctCodes.size === 1 ? validCodes[validCodes.length - 1] : '';
+  }
+
   function assistantStatusCodeFromDom(turn) {
     try {
-      const source = roleRoot(turn, 'assistant');
-      if (!source) return '';
-      const copy = source.cloneNode(true);
-      for (const excluded of copy.querySelectorAll?.('pre, code, blockquote, ul, ol, li, button, svg, [role="button"], [aria-hidden="true"], [hidden], [inert], [data-message-author-role="tool"], [data-tool]') || []) excluded.remove();
+      const sources = Array.from(new Set([
+        roleRoot(turn, 'assistant'),
+        ...renderedBlocks(turn),
+        turn
+      ].filter(Boolean)));
+      for (const source of sources) {
+        const copy = source.cloneNode(true);
+        for (const excluded of copy.querySelectorAll?.('pre, code, blockquote, ul, ol, li, button, svg, [role="button"], [aria-hidden="true"], [hidden], [inert], [data-message-author-role="tool"], [data-tool]') || []) excluded.remove();
 
-      const direct = terminalStatusCodeFromRenderedText(copy.innerText || copy.textContent || '');
-      if (direct) return direct;
+        const renderedText = copy.innerText || copy.textContent || '';
+        const direct = terminalStatusCodeFromRenderedText(renderedText);
+        if (direct) return direct;
 
-      // Some ChatGPT render paths flatten block boundaries in textContent. Keep a
-      // DOM fallback, but only accept one exact status-only terminal block. A
-      // status token quoted in prose or followed by more assistant text is not a
-      // terminal footer and must never stop the watchdog.
-      const blocks = Array.from(copy.querySelectorAll?.('p, div') || [])
-        .filter((node) => {
-          const text = inline(node?.textContent || '');
-          if (!text) return false;
-          const childBlocks = Array.from(node?.querySelectorAll?.('p, div') || [])
-            .filter((child) => child !== node && inline(child?.textContent || ''));
-          return childBlocks.length === 0;
-        });
-      const terminalBlocks = blocks
-        .map((node) => ({ node, code: terminalStatusCodeFromRenderedText(node?.textContent || '') }))
-        .filter((entry) => entry.code);
-      if (!terminalBlocks.length) return '';
-      const distinctCodes = new Set(terminalBlocks.map((entry) => entry.code));
-      if (distinctCodes.size !== 1) return '';
-      const meaningfulBlocks = blocks.filter((node) => inline(node?.textContent || ''));
-      const lastBlock = meaningfulBlocks[meaningfulBlocks.length - 1] || null;
-      const terminalLastBlock = terminalBlocks.find((entry) => entry.node === lastBlock) || null;
-      return terminalLastBlock?.code || '';
+        // The ChatGPT turn wrapper can place response text outside the node that
+        // carries data-message-author-role="assistant", and can append UI metadata
+        // after the footer. Scan the full assistant turn only as a final fallback.
+        if (source === turn) {
+          const turnScoped = terminalStatusCodeAnywhereInRenderedText(renderedText);
+          if (turnScoped) return turnScoped;
+        }
+
+        const blocks = Array.from(copy.querySelectorAll?.('p, div') || [])
+          .filter((node) => {
+            const text = inline(node?.textContent || '');
+            if (!text) return false;
+            const childBlocks = Array.from(node?.querySelectorAll?.('p, div') || [])
+              .filter((child) => child !== node && inline(child?.textContent || ''));
+            return childBlocks.length === 0;
+          });
+        const terminalBlocks = blocks
+          .map((node) => ({ node, code: terminalStatusCodeFromRenderedText(node?.textContent || '') }))
+          .filter((entry) => entry.code);
+        if (!terminalBlocks.length) continue;
+        const distinctCodes = new Set(terminalBlocks.map((entry) => entry.code));
+        if (distinctCodes.size !== 1) continue;
+        const meaningfulBlocks = blocks.filter((node) => inline(node?.textContent || ''));
+        const lastBlock = meaningfulBlocks[meaningfulBlocks.length - 1] || null;
+        const terminalLastBlock = terminalBlocks.find((entry) => entry.node === lastBlock) || null;
+        if (terminalLastBlock?.code) return terminalLastBlock.code;
+      }
     } catch {}
     return '';
   }
