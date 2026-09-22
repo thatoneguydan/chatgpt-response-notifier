@@ -824,7 +824,7 @@ test('BLOCKED_HUMAN that appears after the automatic follow-up is queued still s
   assert.equal(terminal.deadlineAt, 0);
 });
 
-test('timer allowance reset restores three sends without moving an active deadline and only reopens cap exhaustion', async () => {
+test('timer allowance reset restores three sends, preserves active timers, and arms a missing timer', async () => {
   const monitor = loadMonitor();
   await tick();
 
@@ -866,9 +866,9 @@ test('timer allowance reset restores three sends without moving an active deadli
     retryReason: ''
   }, 30_000);
   assert.equal(terminal.sendCount, 0);
-  assert.equal(terminal.stopped, true);
-  assert.equal(terminal.stopReason, 'status:BLOCKED_HUMAN');
-  assert.equal(terminal.deadlineAt, 0);
+  assert.equal(terminal.stopped, false);
+  assert.equal(terminal.stopReason, '');
+  assert.equal(terminal.deadlineAt, 30_000 + 30 * 60_000);
 
   await monitor.message({
     type: 'SET_BUILD_AUTOMATION_STATE',
@@ -894,6 +894,70 @@ test('timer allowance reset restores three sends without moving an active deadli
   assert.ok(Number(reset.codeWatchdog.budgetResetAt) > 0);
 });
 
+
+test('reset control creates a watchdog timer when monitoring is active but no watchdog exists yet', async () => {
+  const monitor = loadMonitor();
+  await tick();
+  await monitor.api.setEnrollment(
+    { id: 'conversation-1', url: 'https://chatgpt.com/c/conversation-1' },
+    true,
+    'operator'
+  );
+  assert.equal(await monitor.api.readCodeWatchdog('conversation-1'), null);
+
+  const sender = { tab: { id: 1, url: 'https://chatgpt.com/c/conversation-1', title: 'Build chat' }, documentId: 'document-1' };
+  const before = Date.now();
+  const reset = await monitor.message({
+    type: 'RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER',
+    conversationId: 'conversation-1',
+    requestId: 'reset-without-watchdog'
+  }, sender);
+  const after = Date.now();
+
+  assert.equal(reset.ok, true);
+  assert.equal(reset.codeWatchdog.sendCount, 0);
+  assert.equal(reset.codeWatchdog.stopped, false);
+  assert.ok(Number(reset.codeWatchdog.deadlineAt) >= before + 30 * 60_000);
+  assert.ok(Number(reset.codeWatchdog.deadlineAt) <= after + 30 * 60_000);
+});
+
+test('explicit Quick Continue action re-arms a terminal watchdog from the user action time', async () => {
+  const monitor = loadMonitor();
+  await tick();
+  await monitor.api.setEnrollment(
+    { id: 'conversation-1', url: 'https://chatgpt.com/c/conversation-1' },
+    true,
+    'operator'
+  );
+
+  const sender = { tab: { id: 1, url: 'https://chatgpt.com/c/conversation-1', title: 'Build chat' }, documentId: 'document-1' };
+  const parked = await monitor.api.parkCodeWatchdogForTerminalStatus(
+    baseSnapshot({ statusCode: 'BLOCKED_HUMAN' }),
+    sender,
+    null
+  );
+  assert.equal(parked.stopped, true);
+  assert.equal(parked.deadlineAt, 0);
+
+  const before = Date.now();
+  const armed = await monitor.message({
+    type: 'ARM_CODE_WATCHDOG_FOR_SENDER',
+    source: 'quick-continue',
+    requestId: 'quick-continue-arm'
+  }, sender);
+  const after = Date.now();
+
+  assert.equal(armed.ok, true);
+  assert.equal(armed.requestId, 'quick-continue-arm');
+  assert.equal(armed.armed, true);
+  assert.equal(armed.codeWatchdog.sendCount, 0);
+  assert.equal(armed.codeWatchdog.stopped, false);
+  assert.equal(armed.codeWatchdog.stopReason, '');
+  assert.equal(armed.codeWatchdog.lastStatusCode, '');
+  assert.equal(armed.codeWatchdog.operatorPromptArmSource, 'quick-continue');
+  assert.ok(Number(armed.codeWatchdog.deadlineAt) >= before + 30 * 60_000);
+  assert.ok(Number(armed.codeWatchdog.deadlineAt) <= after + 30 * 60_000);
+});
 
 test('web request completion carries the original start time to a replacement page runtime', async () => {
   const sent = [];
