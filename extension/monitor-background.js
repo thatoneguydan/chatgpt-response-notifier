@@ -1284,6 +1284,37 @@
     };
   }
 
+  async function armCodeWatchdogFromManualEnable(target, snapshotValue = null, activatedAt = Date.now()) {
+    if (!target?.id || !Number.isInteger(target?.tab?.id)) return null;
+    const activationAt = Math.max(0, Number(activatedAt || Date.now()));
+    return await queueCodeWatchdogMutation(target.id, async () => {
+      const current = await readCodeWatchdog(target.id);
+      if (current?.stopped === true && String(current.stopReason || '').startsWith('status:')) {
+        return current;
+      }
+      await cancelCodeWatchdogAlarm(target.id);
+      const snapshot = sanitizedSnapshot(snapshotValue || {});
+      const record = await putCodeWatchdog(target.id, {
+        ...(current || {}),
+        conversationUrl: String(target.url || snapshot.conversationUrl || current?.conversationUrl || ''),
+        ownerTabId: target.tab.id,
+        sendCount: 0,
+        stopped: false,
+        stopReason: '',
+        waitingForRequestStart: false,
+        lastRequestStartedAt: Math.max(0, Number(snapshot.requestStartedAt || current?.lastRequestStartedAt || 0)),
+        lastPromptKey: String(snapshot.promptKey || current?.lastPromptKey || ''),
+        lastStatusCode: String(snapshot.statusCode || current?.lastStatusCode || ''),
+        manualActivatedAt: activationAt,
+        deadlineAt: activationAt + CODE_WATCHDOG_DELAY_MS,
+        retryAt: 0,
+        retryReason: ''
+      });
+      try { chrome.alarms.create(codeWatchdogAlarmName(target.id), { when: record.deadlineAt }); } catch {}
+      return record;
+    });
+  }
+
   async function resetCodeWatchdogBudgetForTarget(message, target) {
     if (!target?.id || !Number.isInteger(target?.tab?.id)) {
       return { ok: false, error: 'Open a monitored ChatGPT conversation to reset auto-continues.', reason: 'watchdog-target-unavailable' };
@@ -1348,11 +1379,15 @@
       if (target.id) {
         await setEnrollment(target, enabled, source, { expectedRevision: message?.expectedRevision });
         if (enabled) {
+          const activatedAt = Date.now();
+          let manualSnapshot = null;
           try {
             const result = await chrome.tabs.sendMessage(target.tab.id, { type: 'CHATGPT_MONITOR_QUERY' });
             const snapshot = result?.snapshot || result;
-            if (snapshot?.conversationId) await handleSnapshot(snapshot, { tab: target.tab, documentId: snapshot.documentId || '' });
+            manualSnapshot = snapshot?.conversationId ? snapshot : null;
+            if (manualSnapshot) await handleSnapshot(manualSnapshot, { tab: target.tab, documentId: manualSnapshot.documentId || '' });
           } catch {}
+          await armCodeWatchdogFromManualEnable(target, manualSnapshot, activatedAt);
           if (message?.resumeExistingRun === true) {
             try { await globalThis.__chatgptNotifierBoundedRecovery?.resumeConversation?.(target.id); } catch {}
           }
