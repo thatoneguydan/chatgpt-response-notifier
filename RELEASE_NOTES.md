@@ -1,6 +1,8 @@
-# ChatGPT Response Notifier 0.9.60
+# ChatGPT Response Notifier 0.9.61
 
-- Manual Monitor activation now immediately starts a fresh 30-minute auto-continue countdown, even when the current chat has no request-start timestamp to inherit.
-- The countdown begins from the moment monitoring is manually enabled rather than from an older request timestamp.
-- Manual activation preserves terminal-stop safety: a visible terminal status such as `BLOCKED_HUMAN` remains stopped and does not regain an auto-continue deadline.
-- Adds regression coverage for idle manual activation and terminal-status preservation.
+- Quick Continue's **Continue** action now re-arms a fresh 30-minute watchdog countdown from the user action.
+- Selecting a saved project or sending a custom project through the **Project** control does the same.
+- These explicit user actions reset the normal three auto-continue allowance and can re-arm a watchdog that had stopped on a prior terminal response.
+- Clicking the countdown / “continues left” text still resets the allowance; when no timer is active, it now also starts a fresh 30-minute countdown.
+- A deliberately paused conversation remains paused; these controls do not silently defeat the operator Pause override.
+- Attachment runtime advances to v14 so the behavior hot-activates on already-open ChatGPT tabs after the managed notifier update.
