@@ -18,7 +18,7 @@
   const CODE_WATCHDOG_RETRY_MS = 60_000;
   const CODE_WATCHDOG_MAX_SENDS = 3;
   const CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS = 15_000;
-  const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 13;
+  const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 14;
   const HOT_PAGE_MONITOR_RUNTIME_VERSION = 12;
   const HOT_PAGE_STATUS_RUNTIME_VERSION = 15;
   const HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3;
@@ -1268,12 +1268,14 @@
     const record = recordValue || null;
     if (!record) return null;
     const resetAt = Math.max(0, Number(now || Date.now()));
-    const capExhausted = record.stopped === true && String(record.stopReason || '') === 'retry-cap-reached';
+    const deadlineAt = Math.max(0, Number(record.deadlineAt || 0));
+    const retryAt = Math.max(0, Number(record.retryAt || 0));
+    const timerMissing = deadlineAt <= 0 && retryAt <= 0;
     return {
       ...record,
       sendCount: 0,
       budgetResetAt: resetAt,
-      ...(capExhausted ? {
+      ...(timerMissing ? {
         stopped: false,
         stopReason: '',
         waitingForRequestStart: false,
@@ -1329,12 +1331,31 @@
       return { ok: false, error: 'Build automation is not active for this conversation.', reason: 'automation-not-active', requestId: String(message?.requestId || ''), ...overview };
     }
 
-    let record = await queueCodeWatchdogMutation(target.id, async () => {
+    const resetAt = Date.now();
+    await queueCodeWatchdogMutation(target.id, async () => {
       const current = await readCodeWatchdog(target.id);
-      if (!current) return null;
-      const capExhausted = current.stopped === true && String(current.stopReason || '') === 'retry-cap-reached';
-      const updated = await putCodeWatchdog(target.id, codeWatchdogBudgetReset(current));
-      if (capExhausted) {
+      const base = current || {
+        conversationId: target.id,
+        conversationUrl: String(target.url || ''),
+        ownerTabId: target.tab.id,
+        sendCount: 0,
+        stopped: false,
+        stopReason: '',
+        waitingForRequestStart: false,
+        lastRequestStartedAt: 0,
+        lastPromptKey: '',
+        lastStatusCode: '',
+        deadlineAt: 0,
+        retryAt: 0,
+        retryReason: ''
+      };
+      const hadTimer = Math.max(0, Number(base.deadlineAt || 0)) > 0 || Math.max(0, Number(base.retryAt || 0)) > 0;
+      const updated = await putCodeWatchdog(target.id, codeWatchdogBudgetReset({
+        ...base,
+        conversationUrl: String(target.url || base.conversationUrl || ''),
+        ownerTabId: target.tab.id
+      }, resetAt));
+      if (!hadTimer && Number(updated.deadlineAt || 0) > 0) {
         try { chrome.alarms.create(codeWatchdogAlarmName(target.id), { when: updated.deadlineAt }); } catch {}
       }
       return updated;
@@ -1352,6 +1373,60 @@
 
   async function resetSenderCodeWatchdogBudget(message, sender) {
     return await resetCodeWatchdogBudgetForTarget(message, senderChatTarget(sender));
+  }
+
+  async function armCodeWatchdogForTarget(message, target) {
+    if (!target?.id || !Number.isInteger(target?.tab?.id)) {
+      return { ok: false, error: 'Open a monitored ChatGPT conversation to start the auto-continue timer.', reason: 'watchdog-target-unavailable' };
+    }
+    if (message?.conversationId && String(message.conversationId) !== String(target.id)) {
+      return { ok: false, error: 'The ChatGPT conversation changed before the timer was started.', reason: 'target-conversation-changed' };
+    }
+
+    const enrollment = await getEnrollment(target.id);
+    if (enrollment?.enabled !== true || enrollment?.userPaused === true) {
+      const overview = await monitorOverview(target);
+      return { ok: false, error: 'Build automation is not active for this conversation.', reason: 'automation-not-active', requestId: String(message?.requestId || ''), ...overview };
+    }
+
+    const armedAt = Date.now();
+    await queueCodeWatchdogMutation(target.id, async () => {
+      const current = await readCodeWatchdog(target.id);
+      await cancelCodeWatchdogAlarm(target.id);
+      const record = await putCodeWatchdog(target.id, {
+        ...(current || {}),
+        conversationUrl: String(target.url || current?.conversationUrl || ''),
+        ownerTabId: target.tab.id,
+        sendCount: 0,
+        stopped: false,
+        stopReason: '',
+        waitingForRequestStart: false,
+        lastStatusCode: '',
+        lastAutomaticSentAt: 0,
+        lastAutomaticPromptKey: '',
+        lastAutomaticParentPromptKey: '',
+        operatorPromptArmedAt: armedAt,
+        operatorPromptArmSource: String(message?.source || 'operator-prompt'),
+        deadlineAt: armedAt + CODE_WATCHDOG_DELAY_MS,
+        retryAt: 0,
+        retryReason: ''
+      });
+      try { chrome.alarms.create(codeWatchdogAlarmName(target.id), { when: record.deadlineAt }); } catch {}
+      return record;
+    });
+
+    const overview = await monitorOverview(target);
+    publishAutomationOverview(target, overview).catch(() => {});
+    return {
+      ok: true,
+      requestId: String(message?.requestId || ''),
+      armed: true,
+      ...overview
+    };
+  }
+
+  async function armSenderCodeWatchdog(message, sender) {
+    return await armCodeWatchdogForTarget(message, senderChatTarget(sender));
   }
 
   async function publishAutomationOverview(target, overview = null) {
@@ -1535,6 +1610,12 @@
       return true;
     }
 
+    if (message?.type === 'ARM_CODE_WATCHDOG_FOR_SENDER') {
+      armSenderCodeWatchdog(message, sender).then((result) => sendResponse?.(result))
+        .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error), requestId: String(message?.requestId || '') }));
+      return true;
+    }
+
     if (message?.type === 'SET_ACTIVE_CHAT_MONITORING') {
       setActiveAutomation({
         enabled: message.enabled === true,
@@ -1632,6 +1713,8 @@
     codeWatchdogBudgetReset,
     resetCodeWatchdogBudgetForTarget,
     resetSenderCodeWatchdogBudget,
+    armCodeWatchdogForTarget,
+    armSenderCodeWatchdog,
     chatTargetFromTab,
     publishAutomationOverview,
     ensureAttention,
