@@ -397,6 +397,7 @@ test('sender-scoped in-page automation control mirrors popup Monitor Pause Resum
   assert.equal(enabled.recoveryEnabled, true);
   assert.equal(enabled.pausedByUser, false);
   assert.equal(enabled.stateRevision, 1);
+
   const paused = await monitor.message({
     type: 'SET_BUILD_AUTOMATION_STATE_FOR_SENDER',
     enabled: false,
@@ -861,7 +862,8 @@ test('timer allowance reset restores three sends without moving an active deadli
     stopped: true,
     stopReason: 'status:BLOCKED_HUMAN',
     deadlineAt: 0,
-    retryAt: 0,    retryReason: ''
+    retryAt: 0,
+    retryReason: ''
   }, 30_000);
   assert.equal(terminal.sendCount, 0);
   assert.equal(terminal.stopped, true);
