@@ -5,6 +5,7 @@ import test from 'node:test';
 
 const root = new URL('../../', import.meta.url);
 const monitorSource = readFileSync(new URL('extension/monitor-background.js', root), 'utf8');
+const monitorPageSource = readFileSync(new URL('extension/monitor-script.js', root), 'utf8');
 const statusSource = readFileSync(new URL('extension/status-script.js', root), 'utf8');
 const attachmentSource = readFileSync(new URL('extension/attachment-script.js', root), 'utf8');
 
@@ -289,7 +290,7 @@ test('terminal footer fallback covers the whole assistant turn and trailing UI m
   assert.equal(parse('[GITHUB_STATUS: COMPLETE_APPLIED]\nCopy\n[GITHUB_STATUS: COMPLETE_APPLIED]'), 'COMPLETE_APPLIED');
   assert.equal(parse('[GITHUB_STATUS: COMPLETE_APPLIED]\n[GITHUB_STATUS: INCOMPLETE_CONTINUE]'), '');
 
-  for (const source of [statusSource, monitorSource]) {
+  for (const source of [statusSource, monitorPageSource]) {
     assert.match(source, /roleRoot\(turn, 'assistant'\),\s*\.\.\.renderedBlocks\(turn\),\s*turn/);
     assert.match(source, /terminalStatusCodeAnywhereInRenderedText/);
   }
