@@ -658,7 +658,7 @@ test('canonical project continuation prompts are fresh enrollment evidence witho
   const monitorPage = text('extension/monitor-script.js');
   const monitorWorker = text('extension/monitor-background.js');
 
-  assert.match(monitorPage, /RUNTIME_VERSION = 11/);
+  assert.match(monitorPage, /RUNTIME_VERSION = 12/);
   assert.match(monitorPage, /function userHasCanonicalProjectStart/);
   assert.match(monitorPage, /from canonical GitHub state/);
   assert.match(monitorPage, /projectStartSignal: userHasCanonicalProjectStart\(userText\)/);
