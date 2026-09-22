@@ -397,7 +397,6 @@ test('sender-scoped in-page automation control mirrors popup Monitor Pause Resum
   assert.equal(enabled.recoveryEnabled, true);
   assert.equal(enabled.pausedByUser, false);
   assert.equal(enabled.stateRevision, 1);
-
   const paused = await monitor.message({
     type: 'SET_BUILD_AUTOMATION_STATE_FOR_SENDER',
     enabled: false,
@@ -427,6 +426,71 @@ test('sender-scoped in-page automation control mirrors popup Monitor Pause Resum
   assert.equal(resumed.recoveryEnabled, true);
   assert.equal(resumed.pausedByUser, false);
   assert.equal(resumed.stateRevision, 3);
+});
+
+test('manual Monitor activation starts a fresh watchdog countdown even without request-start evidence', async () => {
+  const idleSnapshot = baseSnapshot({
+    requestPhase: 'unknown',
+    requestId: '',
+    requestStartedAt: 0,
+    requestSettledAt: 0
+  });
+  const monitor = loadMonitor({
+    sendMessage: async (_tabId, message) => {
+      if (message?.type === 'CHATGPT_MONITOR_QUERY') return { ok: true, snapshot: idleSnapshot };
+      return { ok: true };
+    }
+  });
+  await tick();
+
+  const before = Date.now();
+  const enabled = await monitor.message({
+    type: 'SET_BUILD_AUTOMATION_STATE',
+    enabled: true,
+    tabId: 1,
+    conversationId: 'conversation-1',
+    expectedRevision: 0,
+    requestId: 'manual-idle-monitor'
+  });
+  const after = Date.now();
+
+  assert.equal(enabled.ok, true);
+  assert.equal(enabled.automationEnabled, true);
+  assert.equal(enabled.codeWatchdog.stopped, false);
+  assert.equal(enabled.codeWatchdog.sendCount, 0);
+  assert.equal(enabled.codeWatchdog.lastPromptKey, 'conversation-1|user-1');
+  assert.ok(Number(enabled.codeWatchdog.manualActivatedAt) >= before);
+  assert.ok(Number(enabled.codeWatchdog.manualActivatedAt) <= after);
+  assert.ok(Number(enabled.codeWatchdog.deadlineAt) >= before + 30 * 60_000);
+  assert.ok(Number(enabled.codeWatchdog.deadlineAt) <= after + 30 * 60_000);
+
+  const terminalSnapshot = baseSnapshot({
+    statusCode: 'BLOCKED_HUMAN',
+    requestPhase: 'unknown',
+    requestId: '',
+    requestStartedAt: 0,
+    requestSettledAt: 0
+  });
+  const terminalMonitor = loadMonitor({
+    sendMessage: async (_tabId, message) => {
+      if (message?.type === 'CHATGPT_MONITOR_QUERY') return { ok: true, snapshot: terminalSnapshot };
+      return { ok: true };
+    }
+  });
+  await tick();
+
+  const terminalEnabled = await terminalMonitor.message({
+    type: 'SET_BUILD_AUTOMATION_STATE',
+    enabled: true,
+    tabId: 1,
+    conversationId: 'conversation-1',
+    expectedRevision: 0,
+    requestId: 'manual-terminal-monitor'
+  });
+  assert.equal(terminalEnabled.ok, true);
+  assert.equal(terminalEnabled.codeWatchdog.stopped, true);
+  assert.equal(terminalEnabled.codeWatchdog.stopReason, 'status:BLOCKED_HUMAN');
+  assert.equal(terminalEnabled.codeWatchdog.deadlineAt, 0);
 });
 
 test('operator Pause is persistent and fresh START or terminal status cannot silently undo it', async () => {
@@ -797,8 +861,7 @@ test('timer allowance reset restores three sends without moving an active deadli
     stopped: true,
     stopReason: 'status:BLOCKED_HUMAN',
     deadlineAt: 0,
-    retryAt: 0,
-    retryReason: ''
+    retryAt: 0,    retryReason: ''
   }, 30_000);
   assert.equal(terminal.sendCount, 0);
   assert.equal(terminal.stopped, true);
