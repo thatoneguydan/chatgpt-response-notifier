@@ -397,7 +397,8 @@
       stopped: true,
       stopReason: String(reason || 'stopped'),
       deadlineAt: 0,
-      retryAt: 0,      retryReason: ''
+      retryAt: 0,
+      retryReason: ''
     });
   }
 
@@ -796,7 +797,8 @@
       }
       const result = await sendCodeWatchdogContinuation(tab.id, conversationId, String(statusSnapshot.promptKey || ''));
       const automaticSentAt = result?.ok === true ? Date.now() : 0;
-      record = await resetCodeWatchdogForIncomplete(statusSnapshot, { tab }, record, automaticSentAt, result?.continuationUserKey || '');      if (result?.ok === true) {
+      record = await resetCodeWatchdogForIncomplete(statusSnapshot, { tab }, record, automaticSentAt, result?.continuationUserKey || '');
+      if (result?.ok === true) {
         await scheduleCodeWatchdog(record, automaticSentAt + CODE_WATCHDOG_DELAY_MS);
       } else {
         await scheduleCodeWatchdogRetry(record, result?.reason || 'continue-send-failed');
@@ -1195,7 +1197,8 @@
           const run = await latestRunForConversation(identity.id);
           if (run && run.state !== 'coded-terminal') await ensureAttention(run, 'page-unobservable');
         }
-        continue;      }
+        continue;
+      }
       await ensureHotPageRuntime(tab.id);
     }
   }
@@ -1629,7 +1632,8 @@
     codeWatchdogBudgetReset,
     resetCodeWatchdogBudgetForTarget,
     resetSenderCodeWatchdogBudget,
-    chatTargetFromTab,    publishAutomationOverview,
+    chatTargetFromTab,
+    publishAutomationOverview,
     ensureAttention,
     raiseAttention: ensureAttention,
     resolveAttentionForRun,
