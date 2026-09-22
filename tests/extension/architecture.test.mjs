@@ -203,13 +203,20 @@ test('monitored chats use a 30-minute local code watchdog with a three-send cap 
   assert.doesNotMatch(monitor, /\bfetch\s*\(/);
 });
 
-test('in-page auto-continue status is an opaque allowance-reset control scoped to its sender conversation', () => {
+test('in-page auto-continue controls reset allowance and explicitly arm user-triggered timers', () => {
   const attachment = text('extension/attachment-script.js');
   const monitor = text('extension/monitor-background.js');
 
   assert.match(attachment, /document\.createElement\('button'\)/);
   assert.match(attachment, /RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER/);
   assert.match(attachment, /resetAutomationBudget/);
+  assert.match(attachment, /ARM_CODE_WATCHDOG_FOR_SENDER/);
+  assert.match(attachment, /quickContinueActionFromEvent/);
+  assert.match(attachment, /Send timestamped Continue/);
+  assert.match(attachment, /Send custom Project Continue/);
+  assert.match(attachment, /\^Continue\\s\+\.\+/);
+  assert.match(attachment, /document\.addEventListener\('click', armAutomationForQuickContinueAction, true\)/);
+  assert.match(attachment, /document\.removeEventListener\('click', armAutomationForQuickContinueAction, true\)/);
   assert.match(attachment, /pointerEvents: 'auto'/);
   assert.match(attachment, /cursor: 'pointer'/);
   assert.match(attachment, /opacity: '1'/);
@@ -221,10 +228,14 @@ test('in-page auto-continue status is an opaque allowance-reset control scoped t
   assert.doesNotMatch(attachment, /0 0 0 1px var\(--border-light/);
 
   assert.match(monitor, /function codeWatchdogBudgetReset/);
+  assert.match(monitor, /timerMissing/);
   assert.match(monitor, /sendCount: 0/);
-  assert.match(monitor, /stopReason \|\| ''\) === 'retry-cap-reached'/);
   assert.match(monitor, /deadlineAt: resetAt \+ CODE_WATCHDOG_DELAY_MS/);
   assert.match(monitor, /RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER/);
+  assert.match(monitor, /ARM_CODE_WATCHDOG_FOR_SENDER/);
+  assert.match(monitor, /armCodeWatchdogForTarget/);
+  assert.match(monitor, /operatorPromptArmedAt/);
+  assert.match(monitor, /lastAutomaticPromptKey: ''/);
   assert.match(monitor, /resetSenderCodeWatchdogBudget/);
   assert.match(monitor, /target-conversation-changed/);
   assert.match(monitor, /automation-not-active/);
@@ -720,12 +731,12 @@ test('extension update hot-activates reload-safe watchdog page runtimes in alrea
   const attachment = text('extension/attachment-script.js');
   const monitor = text('extension/monitor-background.js');
 
-  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 13/);
+  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 14/);
   assert.match(attachment, /CHATGPT_NOTIFIER_ATTACHMENT_PING/);
   assert.match(attachment, /runtimeVersion: ATTACHMENT_RUNTIME_VERSION/);
   assert.match(attachment, /extensionVersion/);
 
-  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 13/);
+  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 14/);
   assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 12/);
   assert.match(monitor, /HOT_PAGE_STATUS_RUNTIME_VERSION = 15/);
   assert.match(monitor, /HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3/);

@@ -3,7 +3,7 @@
 (() => {
   const QUICK_CONTINUE_TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const AUTOMATION_DUE_REFRESH_MS = 5000;
-  const ATTACHMENT_RUNTIME_VERSION = 13;
+  const ATTACHMENT_RUNTIME_VERSION = 14;
   const AUTOMATION_OWNER_ATTR = 'data-chatgpt-notifier-automation-owner';
   const AUTOMATION_UI_OWNER_ATTR = 'data-chatgpt-notifier-automation-ui-owner';
   const automationOwnerToken = (() => {
@@ -514,6 +514,35 @@
     return applyAutomationOverview(overview);
   }
 
+  function quickContinueActionFromEvent(event) {
+    if (event?.isTrusted !== true) return '';
+    const target = event?.target;
+    let control = null;
+    try { control = target?.closest?.(`#${QUICK_CONTINUE_TOOLBAR_ID} button`); } catch {}
+    if (!control || control.disabled === true || control.getAttribute?.('aria-disabled') === 'true') return '';
+    const label = String(control.getAttribute?.('aria-label') || '').trim();
+    if (label === 'Send timestamped Continue') return 'continue';
+    if (label === 'Send custom Project Continue') return 'project';
+    if (/^Continue\s+.+/.test(label)) return 'project';
+    return '';
+  }
+
+  async function armAutomationForQuickContinueAction(event) {
+    const action = quickContinueActionFromEvent(event);
+    if (!action) return;
+    try {
+      const requestId = crypto.randomUUID();
+      const result = await chrome.runtime.sendMessage({
+        type: 'ARM_CODE_WATCHDOG_FOR_SENDER',
+        source: `quick-${action}`,
+        requestId
+      });
+      if (!result?.ok) return;
+      if (String(result.requestId || '') !== requestId) return;
+      applyAutomationOverview(result);
+    } catch {}
+  }
+
   async function resetAutomationBudget(event) {
     event?.preventDefault?.();
     event?.stopPropagation?.();
@@ -649,6 +678,7 @@
   try { document.getElementById(AUTOMATION_INDICATOR_ID)?.remove(); } catch {}
   try { chrome.runtime.onMessage.addListener(handleAutomationStateMessage); } catch {}
   document.addEventListener('visibilitychange', handleVisibilityChange, true);
+  document.addEventListener('click', armAutomationForQuickContinueAction, true);
   window.addEventListener('focus', handleWindowFocus, true);
   automationIndicatorObserver = new MutationObserver(() => {
     if (!ownsAutomationUi()) return;
@@ -669,6 +699,7 @@
       try { if (automationCountdownTimerId !== null) clearInterval(automationCountdownTimerId); } catch {}
       try { chrome.runtime.onMessage.removeListener(handleAutomationStateMessage); } catch {}
       try { document.removeEventListener('visibilitychange', handleVisibilityChange, true); } catch {}
+      try { document.removeEventListener('click', armAutomationForQuickContinueAction, true); } catch {}
       try { window.removeEventListener('focus', handleWindowFocus, true); } catch {}
       try { document.getElementById(AUTOMATION_INDICATOR_ID)?.remove(); } catch {}
       try { document.getElementById(AUTOMATION_STATUS_ID)?.remove(); } catch {}
