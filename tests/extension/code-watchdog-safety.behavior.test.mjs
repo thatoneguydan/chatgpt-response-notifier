@@ -239,7 +239,7 @@ test('30-minute no-code deadline is authoritative even while generation is activ
 });
 
 test('status runtime generation advances for the hard-deadline page behavior', () => {
-  assert.match(statusSource, /const RUNTIME_VERSION = 14/);
+  assert.match(statusSource, /const RUNTIME_VERSION = 15/);
 });
 
 test('rendered status fallback accepts duplicate copies of one terminal footer but rejects conflicts', () => {
@@ -265,6 +265,34 @@ test('rendered status fallback accepts duplicate copies of one terminal footer b
   assert.equal(parse('[GITHUB_STATUS: COMPLETE_APPLIED]\nMore work remains.'), '');
   assert.equal(parse('Previous footer: [GITHUB_STATUS: COMPLETE_APPLIED]'), '');
   assert.equal(parse('[GITHUB_STATUS: COMPLETE_APPLIED]\n[GITHUB_STATUS: INCOMPLETE_CONTINUE]'), '');
+});
+
+test('terminal footer fallback covers the whole assistant turn and trailing UI metadata', () => {
+  const helperStart = statusSource.indexOf('function terminalStatusCodeAnywhereInRenderedText');
+  const helperEnd = statusSource.indexOf('function assistantStatusCodeFromDom', helperStart);
+  assert.ok(helperStart >= 0 && helperEnd > helperStart, 'turn-scoped terminal helper must exist');
+  const context = vm.createContext({
+    String,
+    Set,
+    globalThis: null,
+    ChatGPTNotifierStatusCode: {
+      isStatusCode(value) {
+        return ['COMPLETE_APPLIED', 'COMPLETE_NO_CHANGES', 'INCOMPLETE_CONTINUE'].includes(String(value || ''));
+      }
+    }
+  });
+  context.globalThis = context;
+  vm.runInContext(`${statusSource.slice(helperStart, helperEnd)}\nglobalThis.__parseTurnStatus = terminalStatusCodeAnywhereInRenderedText;`, context);
+  const parse = context.__parseTurnStatus;
+
+  assert.equal(parse('Finished.\n[GITHUB_STATUS: COMPLETE_NO_CHANGES]\nWorked for 21s'), 'COMPLETE_NO_CHANGES');
+  assert.equal(parse('[GITHUB_STATUS: COMPLETE_APPLIED]\nCopy\n[GITHUB_STATUS: COMPLETE_APPLIED]'), 'COMPLETE_APPLIED');
+  assert.equal(parse('[GITHUB_STATUS: COMPLETE_APPLIED]\n[GITHUB_STATUS: INCOMPLETE_CONTINUE]'), '');
+
+  for (const source of [statusSource, monitorSource]) {
+    assert.match(source, /roleRoot\(turn, 'assistant'\),\s*\.\.\.renderedBlocks\(turn\),\s*turn/);
+    assert.match(source, /terminalStatusCodeAnywhereInRenderedText/);
+  }
 });
 
 test('unconfirmed extension-generated sends clean up only their own composer text', () => {
