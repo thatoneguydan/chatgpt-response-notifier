@@ -26,7 +26,7 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['prompt-format.js', 'config.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.9');
+  assert.equal(manifest.version, '1.2.10');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -95,15 +95,20 @@ test('project picker is non-modal, exposes Edit, and never auto-focuses', () => 
   assert.doesNotMatch(contentSource, /\.title\s*=/);
 });
 
-test('delayed hover Edit reuses the existing in-page JSON editor', () => {
-  assert.match(hoverEditSource, /const HOVER_DELAY_MS = 700/);
+test('persistent pencil Edit controls reuse the existing in-page JSON editor without hover-delay behavior', () => {
   assert.match(hoverEditSource, /button\[aria-label="Send timestamped Continue"\]/);
   assert.match(hoverEditSource, /button\[aria-label="Project Continue"\]/);
-  assert.match(hoverEditSource, /button\.textContent = 'Edit'/);
-  assert.match(hoverEditSource, /Edit Continue and Project text/);
+  assert.match(hoverEditSource, /const EDIT_WRAPPER_ATTRIBUTE = 'data-quick-continue-pencil-edit'/);
+  assert.match(hoverEditSource, /const EDIT_PENCIL_ATTRIBUTE = 'data-quick-continue-pencil-button'/);
+  assert.match(hoverEditSource, /pencil\.textContent = '✎'/);
+  assert.match(hoverEditSource, /pencil\.addEventListener\('pointerenter'/);
+  assert.match(hoverEditSource, /pencil\.addEventListener\('pointerleave'/);
+  assert.match(hoverEditSource, /pencil\.style\.background = active/);
+  assert.match(hoverEditSource, /event\.stopPropagation\(\)/);
   assert.match(hoverEditSource, /button\[aria-label="Edit Quick Continue JSON"\]/);
   assert.match(hoverEditSource, /if \(projectPopover\.hidden\) projectButton\.click\(\)/);
   assert.match(hoverEditSource, /root\.querySelector\('button\[aria-label="Edit Quick Continue JSON"\]'\)\?\.click\(\)/);
+  assert.doesNotMatch(hoverEditSource, /HOVER_DELAY_MS|HIDE_DELAY_MS/);
   assert.doesNotMatch(hoverEditSource, /XMLHttpRequest|WebSocket|fetch\(/);
 });
 
@@ -144,7 +149,7 @@ test('prompt and config APIs are versioned so reinjection cannot retain stale gl
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
   assert.match(configSource, /chrome\.storage\.onChanged\.removeListener\(handleStorageChanged\)/);
-  assert.match(hoverEditSource, /const RUNTIME_VERSION = 2/);
+  assert.match(hoverEditSource, /const RUNTIME_VERSION = 3/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
   assert.match(conversationStateSource, /const RUNTIME_VERSION = 1/);
@@ -274,7 +279,6 @@ test('installer copies managed worker/config files and removes the legacy projec
   assert.doesNotMatch(installerSource, /Set-ItemProperty|New-ItemProperty|reg\.exe|HKCU:|HKLM:/i);
   assert.doesNotMatch(installerSource, /Start-Process|chrome\.exe/i);
 });
-
 
 test('1.2.4 updater pins the repaired runtime set without overwriting live config defaults', () => {
   assert.match(updater124Source, /\$commit = '25add9fcb113c80eea3bfbefc0e28db490bac52c'/);
