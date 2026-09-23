@@ -11,7 +11,8 @@ $requiredFiles = @(
     'prompt-format.js',
     'config.js',
     'config.json',
-    'content-script.js'
+    'content-script.js',
+    'hover-edit-script.js'
 )
 
 foreach ($file in $requiredFiles) {
@@ -29,6 +30,7 @@ $managedFiles = @(
     'config.js',
     'config.json',
     'content-script.js',
+    'hover-edit-script.js',
     'README.md'
 )
 
@@ -59,4 +61,4 @@ Write-Host '  2. Enable Developer mode'
 Write-Host '  3. Choose Load unpacked'
 Write-Host "  4. Select: $InstallRoot"
 Write-Host ''
-Write-Host 'After installation, use Project > Edit to change the live JSON config without reloading Chrome or ChatGPT.'
+Write-Host 'After installation, hover Continue or Project briefly to reveal Edit, or use Project > Edit, to change the live JSON config without reloading Chrome or ChatGPT.'
