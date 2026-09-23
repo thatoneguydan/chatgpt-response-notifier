@@ -1,9 +1,22 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Quick Continue",
-  "version": "1.2.8",
-  "description": "Adds timestamped one-click Continue, per-chat optional timestamps for manual messages, live-editable JSON templates, and delayed hover editing to ChatGPT.",
+  "version": "1.2.9",
+  "description": "Adds timestamped one-click Continue, per-chat optional timestamps for manual messages, live-editable JSON templates, and automatic managed updates to ChatGPT.",
   "minimum_chrome_version": "116",
+  "permissions": [
+    "alarms",
+    "scripting",
+    "storage",
+    "tabs"
+  ],
+  "host_permissions": [
+    "https://chatgpt.com/*",
+    "http://127.0.0.1/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
   "content_scripts": [
     {
       "matches": [
@@ -28,8 +41,5 @@
         "https://chatgpt.com/*"
       ]
     }
-  ],
-  "permissions": [
-    "storage"
   ]
 }

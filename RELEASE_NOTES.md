@@ -1,6 +1,7 @@
-# ChatGPT Response Notifier 0.9.63
+# ChatGPT Response Notifier 0.9.64
 
-- Build automation / Auto Continue remains stored independently for each ChatGPT conversation instead of becoming a tab-wide preference.
-- ChatGPT SPA navigation now invalidates only the notifier-owned automation controls when the conversation changes, forcing the green/gray indicator and countdown to reread the newly selected chat's saved state.
-- A paused chat stays paused when you leave and return; another chat can remain enabled at the same time.
-- Route refresh is local-only and does not add ChatGPT network traffic, foreground tabs, or change the existing automation safety model.
+- The existing Windows helper now also manages releases for the separate ChatGPT Quick Continue extension when that extension is installed at its stable user-profile path.
+- Quick Continue updates are accepted only from the pinned repository release route with the published SHA-256 digest, preserve the installed config defaults, and publish the extension manifest last.
+- A narrow loopback update endpoint lets Quick Continue detect the helper-installed version without opening the notifier's privileged WebSocket bridge to another extension.
+- Quick Continue 1.2.9 adds a small service worker that checks only the loopback helper, reloads its own extension when the installed version changes, and reinjects the current runtime into already-open ChatGPT tabs.
+- If the notifier helper is unavailable, Quick Continue's Continue/Project/timestamp features keep working; only managed update delivery pauses.

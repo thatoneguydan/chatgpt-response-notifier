@@ -10,6 +10,7 @@ const repoRoot = path.resolve(import.meta.dirname, '..');
 const extensionRoot = path.join(repoRoot, 'standalone-quick-continue');
 const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.json'), 'utf8'));
 const bundledConfig = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'config.json'), 'utf8'));
+const backgroundSource = fs.readFileSync(path.join(extensionRoot, 'background.js'), 'utf8');
 const promptSource = fs.readFileSync(path.join(extensionRoot, 'prompt-format.js'), 'utf8');
 const configSource = fs.readFileSync(path.join(extensionRoot, 'config.js'), 'utf8');
 const contentSource = fs.readFileSync(path.join(extensionRoot, 'content-script.js'), 'utf8');
@@ -18,16 +19,27 @@ const conversationStateSource = fs.readFileSync(path.join(extensionRoot, 'conver
 const installerSource = fs.readFileSync(path.join(extensionRoot, 'Install.ps1'), 'utf8');
 const updater124Source = fs.readFileSync(path.join(extensionRoot, 'Update-Installed-1.2.4.ps1'), 'utf8');
 
-test('standalone extension stays background-free with only local storage permission', () => {
+test('standalone extension adds only the local managed-update worker permissions', () => {
   assert.equal(manifest.manifest_version, 3);
-  assert.equal(manifest.background, undefined);
-  assert.deepEqual(manifest.permissions, ['storage']);
-  assert.equal(manifest.host_permissions, undefined);
+  assert.deepEqual(manifest.background, { service_worker: 'background.js' });
+  assert.deepEqual([...manifest.permissions].sort(), ['alarms', 'scripting', 'storage', 'tabs'].sort());
+  assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['prompt-format.js', 'config.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.8');
+  assert.equal(manifest.version, '1.2.9');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
+});
+
+test('managed updater talks only to loopback, reloads itself, and reinjects current scripts into open ChatGPT tabs', () => {
+  assert.doesNotThrow(() => new vm.Script(backgroundSource));
+  assert.match(backgroundSource, /UPDATE_URL = 'http:\/\/127\.0\.0\.1:38473\/quick-continue\/update'/);
+  assert.match(backgroundSource, /periodInMinutes: 15/);
+  assert.match(backgroundSource, /chrome\.runtime\.reload\(\)/);
+  assert.match(backgroundSource, /chrome\.tabs\.query\(\{ url: \['https:\/\/chatgpt\.com\/\*'\] \}\)/);
+  assert.match(backgroundSource, /chrome\.scripting\.executeScript/);
+  assert.match(backgroundSource, /'conversation-state\.js'/);
+  assert.doesNotMatch(backgroundSource, /github\.com|raw\.githubusercontent\.com|backend-api|XMLHttpRequest|WebSocket/);
 });
 
 test('bundled JSON contains editable prompt templates and saved projects', () => {
@@ -250,11 +262,13 @@ test('config storage contains no external network endpoint or background transpo
   assert.doesNotMatch(configSource, /setInterval/);
 });
 
-test('installer copies live config files and removes the legacy projects JSON', () => {
+test('installer copies managed worker/config files and removes the legacy projects JSON', () => {
   assert.match(installerSource, /LOCALAPPDATA/);
   assert.match(installerSource, /ChatGPTQuickContinue\\Extension/);
+  assert.match(installerSource, /'background\.js'/);
   assert.match(installerSource, /'config\.js'/);
   assert.match(installerSource, /'config\.json'/);
+  assert.match(installerSource, /'conversation-state\.js'/);
   assert.match(installerSource, /'projects\.json'/);
   assert.match(installerSource, /Remove-Item -LiteralPath \$legacyProjects -Force/);
   assert.doesNotMatch(installerSource, /Set-ItemProperty|New-ItemProperty|reg\.exe|HKCU:|HKLM:/i);

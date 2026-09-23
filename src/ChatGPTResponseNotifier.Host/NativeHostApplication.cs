@@ -12,6 +12,7 @@ internal sealed class NativeHostApplication : Application
     private LocalBridgeServer? _bridgeServer;
     private ToastManager? _toastManager;
     private PublicUpdateService? _updateService;
+    private QuickContinueUpdateService? _quickContinueUpdateService;
     private DiagnosticsStore? _diagnosticsStore;
     private RuntimeEvidencePublisher? _runtimeEvidencePublisher;
     private Task? _updateLoop;
@@ -58,10 +59,12 @@ internal sealed class NativeHostApplication : Application
                 type = "update.status",
                 updateStatus = status
             }));
+            _quickContinueUpdateService = new QuickContinueUpdateService();
 
             _bridgeServer = await LocalBridgeServer.StartAsync(
                 HandleBridgeMessageAsync,
                 CreateReadyMessage,
+                CheckForQuickContinueUpdateEndpointAsync,
                 count => _runtimeEvidencePublisher?.ObserveBridgeClientCount(count),
                 _shutdown.Token);
 
@@ -90,6 +93,8 @@ internal sealed class NativeHostApplication : Application
             _bridgeServer = null;
         }
 
+        _quickContinueUpdateService?.Dispose();
+        _quickContinueUpdateService = null;
         _updateService?.Dispose();
         _updateService = null;
         _diagnosticsStore = null;
@@ -317,6 +322,7 @@ internal sealed class NativeHostApplication : Application
             await Task.Delay(TimeSpan.FromSeconds(30), _shutdown.Token).ConfigureAwait(false);
             while (!_shutdown.IsCancellationRequested)
             {
+                await CheckForQuickContinueUpdateEndpointAsync(_shutdown.Token).ConfigureAwait(false);
                 await CheckForPublicUpdateAsync(null).ConfigureAwait(false);
                 await Task.Delay(TimeSpan.FromHours(1), _shutdown.Token).ConfigureAwait(false);
             }
@@ -326,8 +332,37 @@ internal sealed class NativeHostApplication : Application
         }
         catch (Exception error)
         {
-            FileLog.Write("Public update loop stopped unexpectedly", error);
+            FileLog.Write("Managed update loop stopped unexpectedly", error);
         }
+    }
+
+    private async Task<object> CheckForQuickContinueUpdateEndpointAsync(CancellationToken cancellationToken)
+    {
+        var updater = _quickContinueUpdateService;
+        if (updater is null)
+        {
+            return new
+            {
+                installedVersion = QuickContinueBundleInstaller.ReadInstalledVersion(),
+                updateStatus = new UpdateStatusSnapshot("error", QuickContinueBundleInstaller.ReadInstalledVersion() ?? "0.0.0", Error: "Quick Continue update service is unavailable.")
+            };
+        }
+
+        UpdateCheckResult result;
+        try
+        {
+            result = await updater.CheckAndInstallAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+
+        return new
+        {
+            installedVersion = QuickContinueBundleInstaller.ReadInstalledVersion(),
+            updateStatus = result.Status
+        };
     }
 
     private async Task CheckForPublicUpdateAsync(string? requestId)
