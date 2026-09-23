@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Quick Continue",
-  "version": "1.2.6",
-  "description": "Adds timestamped one-click Continue, live-editable JSON templates, and delayed hover editing to ChatGPT.",
+  "version": "1.2.7",
+  "description": "Adds timestamped one-click Continue, optional timestamps for manual messages, live-editable JSON templates, and delayed hover editing to ChatGPT.",
   "minimum_chrome_version": "116",
   "content_scripts": [
     {
