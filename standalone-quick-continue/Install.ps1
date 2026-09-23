@@ -8,6 +8,7 @@ $ErrorActionPreference = 'Stop'
 $sourceRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
 $requiredFiles = @(
     'manifest.json',
+    'background.js',
     'prompt-format.js',
     'config.js',
     'config.json',
@@ -27,6 +28,7 @@ New-Item -ItemType Directory -Path $InstallRoot -Force | Out-Null
 
 $managedFiles = @(
     'manifest.json',
+    'background.js',
     'prompt-format.js',
     'config.js',
     'config.json',
@@ -63,4 +65,5 @@ Write-Host '  2. Enable Developer mode'
 Write-Host '  3. Choose Load unpacked'
 Write-Host "  4. Select: $InstallRoot"
 Write-Host ''
-Write-Host 'After installation, hover Continue or Project briefly to reveal Edit, or use Project > Edit, to change the live JSON config without reloading Chrome or ChatGPT.'
+Write-Host 'After the one-time load, managed updates are downloaded by the existing notifier helper. Quick Continue reloads itself and reinjects the current runtime into already-open ChatGPT tabs.'
+Write-Host 'Hover Continue or Project briefly to reveal Edit, or use Project > Edit, to change the live JSON config without reloading Chrome or ChatGPT.'
