@@ -11,6 +11,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: chatgpt-extension-release-publish
+  cancel-in-progress: false
+
 jobs:
   release:
     # Release source is trusted same-repository main/workflow_dispatch code and
@@ -206,16 +210,23 @@ jobs:
           if (-not (Test-Path -LiteralPath $managedZip -PathType Leaf)) { throw 'Managed-update release ZIP is missing.' }
           $sha256 = (Get-FileHash -LiteralPath $managedZip -Algorithm SHA256).Hash.ToLowerInvariant()
           $downloadUrl = "https://github.com/thatoneguydan/chatgpt-response-notifier/releases/download/$tag/ChatGPT-Response-Notifier-$version.zip"
-
-          New-Item -ItemType Directory -Path .\update -Force | Out-Null
-          $updateManifest = [ordered]@{
+          $feedTemp = Join-Path $artifactRoot 'update-manifest.json'
+          [ordered]@{
             schemaVersion = 1
             version = $version
             sourceCommit = $sourceCommit
             downloadUrl = $downloadUrl
             sha256 = $sha256
-          }
-          $updateManifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath .\update\manifest.json -Encoding UTF8
+          } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $feedTemp -Encoding UTF8
+
+          # Release jobs may start from an older main commit if another release feed
+          # was published while they were queued. Always publish onto the latest main.
+          git fetch origin main
+          if ($LASTEXITCODE -ne 0) { throw 'Could not refresh main before publishing the notifier update feed.' }
+          git checkout -B publish-notifier-feed origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Could not base the notifier update feed on current main.' }
+          New-Item -ItemType Directory -Path .\update -Force | Out-Null
+          Copy-Item -LiteralPath $feedTemp -Destination .\update\manifest.json -Force
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -223,5 +234,7 @@ jobs:
           git diff --cached --quiet
           if ($LASTEXITCODE -ne 0) {
             git commit -m "Publish update manifest for $tag"
+            if ($LASTEXITCODE -ne 0) { throw 'Could not commit the notifier update feed.' }
             git push origin HEAD:main
+            if ($LASTEXITCODE -ne 0) { throw 'Could not publish the notifier update feed.' }
           }

@@ -8,7 +8,8 @@ const installer = read('src/ChatGPTResponseNotifier.Core/QuickContinueBundleInst
 const service = read('src/ChatGPTResponseNotifier.Host/QuickContinueUpdateService.cs');
 const bridge = read('src/ChatGPTResponseNotifier.Host/LocalBridgeServer.cs');
 const app = read('src/ChatGPTResponseNotifier.Host/NativeHostApplication.cs');
-const workflow = read('.github/workflows/quick-continue-release.yml');
+const quickWorkflow = read('.github/workflows/quick-continue-release.yml');
+const notifierWorkflow = read('.github/workflows/release.yml');
 
 test('Quick Continue feed is pinned to the canonical release route and digest', () => {
   assert.match(feed, /standalone-quick-continue\/update\/manifest\.json/);
@@ -48,9 +49,21 @@ test('notifier helper checks Quick Continue independently before its own replace
 });
 
 test('release workflow publishes a hashed standalone runtime package and update manifest', () => {
-  assert.match(workflow, /ChatGPT-Quick-Continue-\$version\.zip/);
-  assert.match(workflow, /Get-FileHash -LiteralPath \$zip -Algorithm SHA256/);
-  assert.match(workflow, /quick-continue-v\$version/);
-  assert.match(workflow, /standalone-quick-continue\\update/);
-  assert.match(workflow, /sourceCommit = \$sourceCommit/);
+  assert.match(quickWorkflow, /ChatGPT-Quick-Continue-\$version\.zip/);
+  assert.match(quickWorkflow, /Get-FileHash -LiteralPath \$zip -Algorithm SHA256/);
+  assert.match(quickWorkflow, /quick-continue-v\$version/);
+  assert.match(quickWorkflow, /standalone-quick-continue\\update/);
+  assert.match(quickWorkflow, /sourceCommit = \$sourceCommit/);
+});
+
+test('both release feeds serialize publication and rebase feed-only commits onto current main', () => {
+  for (const workflow of [quickWorkflow, notifierWorkflow]) {
+    assert.match(workflow, /group: chatgpt-extension-release-publish/);
+    assert.match(workflow, /cancel-in-progress: false/);
+    assert.match(workflow, /git fetch origin main/);
+    assert.match(workflow, /origin\/main/);
+    assert.match(workflow, /git push origin HEAD:main/);
+  }
+  assert.match(quickWorkflow, /gh release download \$tag --pattern \$assetName/);
+  assert.doesNotMatch(quickWorkflow, /already exists for a different source commit/);
 });

@@ -12,6 +12,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: chatgpt-extension-release-publish
+  cancel-in-progress: false
+
 jobs:
   release:
     runs-on: [self-hosted, Windows, X64, glass-builder]
@@ -51,62 +55,68 @@ jobs:
           $version = [string]$manifest.version
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'Quick Continue manifest version is empty.' }
           $tag = "quick-continue-v$version"
-          $sourceCommit = $env:GITHUB_SHA
           $assetName = "ChatGPT-Quick-Continue-$version.zip"
           $artifactRoot = Join-Path $env:RUNNER_TEMP ("chatgpt-quick-continue-release-$version")
-          $stage = Join-Path $artifactRoot 'stage'
           Remove-Item -LiteralPath $artifactRoot -Recurse -Force -ErrorAction SilentlyContinue
-          New-Item -ItemType Directory -Path $stage -Force | Out-Null
-
-          $runtimeFiles = @(
-            'manifest.json',
-            'background.js',
-            'prompt-format.js',
-            'config.js',
-            'config.json',
-            'content-script.js',
-            'hover-edit-script.js',
-            'conversation-state.js',
-            'README.md'
-          )
-          foreach ($name in $runtimeFiles) {
-            $source = Join-Path '.\standalone-quick-continue' $name
-            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Quick Continue release file missing: $name" }
-            Copy-Item -LiteralPath $source -Destination (Join-Path $stage $name) -Force
-          }
-
+          New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
           $zip = Join-Path $artifactRoot $assetName
-          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal -Force
-          $sha256 = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
 
           gh release view $tag --json tagName *> $null
           $releaseExists = $LASTEXITCODE -eq 0
           if ($releaseExists) {
             git fetch origin "refs/tags/${tag}:refs/tags/${tag}" --force
             if ($LASTEXITCODE -ne 0) { throw 'Could not fetch existing Quick Continue release tag.' }
-            $existingSource = (git rev-list -n 1 $tag).Trim()
-            if ($existingSource -ne $sourceCommit) {
-              throw "Quick Continue tag $tag already exists for a different source commit. Bump the Quick Continue version before publishing new runtime changes."
-            }
-            gh release upload $tag $zip --clobber
-            if ($LASTEXITCODE -ne 0) { throw 'Could not refresh Quick Continue release asset.' }
+            $sourceCommit = (git rev-list -n 1 $tag).Trim()
+            if ([string]::IsNullOrWhiteSpace($sourceCommit)) { throw 'Could not resolve existing Quick Continue release source commit.' }
+            gh release download $tag --pattern $assetName --dir $artifactRoot --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Could not download existing Quick Continue release asset.' }
           }
           else {
+            $sourceCommit = $env:GITHUB_SHA
+            $stage = Join-Path $artifactRoot 'stage'
+            New-Item -ItemType Directory -Path $stage -Force | Out-Null
+            $runtimeFiles = @(
+              'manifest.json',
+              'background.js',
+              'prompt-format.js',
+              'config.js',
+              'config.json',
+              'content-script.js',
+              'hover-edit-script.js',
+              'conversation-state.js',
+              'README.md'
+            )
+            foreach ($name in $runtimeFiles) {
+              $source = Join-Path '.\standalone-quick-continue' $name
+              if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Quick Continue release file missing: $name" }
+              Copy-Item -LiteralPath $source -Destination (Join-Path $stage $name) -Force
+            }
+            Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal -Force
             gh release create $tag $zip --target $sourceCommit --title "ChatGPT Quick Continue $version" --notes "Managed ChatGPT Quick Continue release $version."
             if ($LASTEXITCODE -ne 0) { throw 'Could not create Quick Continue release.' }
           }
 
+          if (-not (Test-Path -LiteralPath $zip -PathType Leaf)) { throw 'Quick Continue release ZIP is missing.' }
+          $sha256 = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
           $downloadUrl = "https://github.com/thatoneguydan/chatgpt-response-notifier/releases/download/$tag/$assetName"
-          $updateDirectory = '.\standalone-quick-continue\update'
-          New-Item -ItemType Directory -Path $updateDirectory -Force | Out-Null
-          $updateManifest = [ordered]@{
+          $feedTemp = Join-Path $artifactRoot 'update-manifest.json'
+          [ordered]@{
             schemaVersion = 1
             version = $version
             sourceCommit = $sourceCommit
             downloadUrl = $downloadUrl
             sha256 = $sha256
-          }
-          $updateManifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $updateDirectory 'manifest.json') -Encoding UTF8
+          } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $feedTemp -Encoding UTF8
+
+          # Release jobs may start from an older main commit if another release feed
+          # was published while they were queued. Always publish onto the latest main.
+          git fetch origin main
+          if ($LASTEXITCODE -ne 0) { throw 'Could not refresh main before publishing the Quick Continue update feed.' }
+          git checkout -B publish-quick-continue-feed origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Could not base the Quick Continue update feed on current main.' }
+          $updateDirectory = '.\standalone-quick-continue\update'
+          New-Item -ItemType Directory -Path $updateDirectory -Force | Out-Null
+          Copy-Item -LiteralPath $feedTemp -Destination (Join-Path $updateDirectory 'manifest.json') -Force
 
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
@@ -114,5 +124,7 @@ jobs:
           git diff --cached --quiet
           if ($LASTEXITCODE -ne 0) {
             git commit -m "Publish Quick Continue update manifest for $tag"
+            if ($LASTEXITCODE -ne 0) { throw 'Could not commit the Quick Continue update feed.' }
             git push origin HEAD:main
+            if ($LASTEXITCODE -ne 0) { throw 'Could not publish the Quick Continue update feed.' }
           }
