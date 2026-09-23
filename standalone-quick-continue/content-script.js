@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 5;
+  const RUNTIME_VERSION = 6;
   const prompts = globalThis.ChatGPTQuickContinuePrompts;
   const configApi = globalThis.ChatGPTQuickContinueConfig;
   if (!prompts || !configApi) return;
@@ -18,6 +18,7 @@
     '[id^="chatgpt-notifier-automation-status-v"]'
   ].join(',');
   const SEND_READY_TIMEOUT_MS = 1800;
+  const TOOLBAR_HIDE_GRACE_MS = 600;
   const sendButtons = [];
   const projectButtons = [];
 
@@ -458,6 +459,40 @@
     }
   }
 
+  function toolbarStructureIntact(root) {
+    if (!root) return false;
+    try {
+      return Boolean(
+        root.querySelector('button[aria-label="Send timestamped Continue"]')
+        && root.querySelector('button[aria-label="Project Continue"]')
+        && root.querySelector('[aria-label="Current local time"]')
+      );
+    } catch {
+      return false;
+    }
+  }
+
+  function discardToolbar() {
+    if (statusTimer !== null) {
+      clearTimeout(statusTimer);
+      statusTimer = null;
+    }
+    try { toolbar?.remove(); } catch {}
+    toolbar = null;
+    clock = null;
+    projectPopover = null;
+    projectList = null;
+    projectInput = null;
+    projectSend = null;
+    browsePanel = null;
+    editorPanel = null;
+    editorTextarea = null;
+    editorError = null;
+    status = null;
+    sendButtons.length = 0;
+    projectButtons.length = 0;
+  }
+
   function buildToolbar() {
     const root = document.createElement('div');
     root.id = TOOLBAR_ID;
@@ -821,8 +856,12 @@
       toolbarHideTimer = null;
       const composer = composerElement();
       const anchor = composerAnchor(composer);
-      if (!composer || !anchor || !visible(anchor)) root.style.display = 'none';
-    }, 200);
+      if (composer && anchor && visible(anchor)) {
+        scheduleSync();
+        return;
+      }
+      root.style.display = 'none';
+    }, TOOLBAR_HIDE_GRACE_MS);
   }
 
   function cancelToolbarHide() {
@@ -836,7 +875,12 @@
     suppressLegacyNotifierToolbar();
     const composer = composerElement();
     const anchor = composerAnchor(composer);
-    const root = toolbar || buildToolbar();
+    let root = toolbar;
+    if (root && !toolbarStructureIntact(root)) {
+      discardToolbar();
+      root = null;
+    }
+    root = root || buildToolbar();
     if (!root.isConnected) {
       try { (document.body || document.documentElement).append(root); } catch {}
     }
