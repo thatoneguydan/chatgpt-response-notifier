@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 3;
+  const RUNTIME_VERSION = 4;
   const previousRuntime = globalThis.__chatgptQuickContinueHoverEditRuntime;
   if (Number(previousRuntime?.version || 0) === RUNTIME_VERSION) return;
   const restoredTimestampState = Boolean(previousRuntime?.manualTimestampEnabled);
@@ -26,6 +26,8 @@
   let toolbar = null;
   let clockToggle = null;
   let manualTimestampEnabled = restoredTimestampState;
+  let scheduledSync = null;
+  let scheduledWithAnimationFrame = false;
 
   function openConfigEditor() {
     const root = toolbar;
@@ -44,12 +46,6 @@
     }, 0);
   }
 
-  function editLabelFor(target) {
-    return target?.getAttribute?.('aria-label') === 'Project Continue'
-      ? 'Edit Project text'
-      : 'Edit Continue text';
-  }
-
   function setPencilHover(pencil, active) {
     if (!pencil) return;
     pencil.style.background = active
@@ -58,22 +54,18 @@
     pencil.style.opacity = active ? '1' : '.62';
   }
 
-  function createPencilButton(target) {
-    const pencil = document.createElement('button');
-    pencil.type = 'button';
+  function createPencilButton() {
+    const pencil = document.createElement('span');
     pencil.textContent = '✎';
     pencil.setAttribute(EDIT_PENCIL_ATTRIBUTE, 'true');
-    pencil.setAttribute('aria-label', editLabelFor(target));
+    pencil.setAttribute('aria-hidden', 'true');
     Object.assign(pencil.style, {
-      position: 'absolute',
-      left: '5px',
-      top: '50%',
-      transform: 'translateY(-50%)',
       display: 'inline-flex',
       alignItems: 'center',
       justifyContent: 'center',
       width: '14px',
       height: '14px',
+      flex: '0 0 14px',
       margin: '0',
       padding: '0',
       border: '0',
@@ -86,22 +78,16 @@
       lineHeight: '1',
       opacity: '.62',
       cursor: 'pointer',
-      userSelect: 'none',
-      zIndex: '2'
+      userSelect: 'none'
     });
 
     pencil.addEventListener('pointerenter', () => setPencilHover(pencil, true));
     pencil.addEventListener('pointerleave', () => setPencilHover(pencil, false));
     pencil.addEventListener('pointerdown', (event) => {
+      event.preventDefault();
       event.stopPropagation();
     });
     pencil.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      openConfigEditor();
-    });
-    pencil.addEventListener('keydown', (event) => {
-      if (event.key !== 'Enter' && event.key !== ' ') return;
       event.preventDefault();
       event.stopPropagation();
       openConfigEditor();
@@ -112,22 +98,16 @@
 
   function enhanceTarget(target) {
     if (!target?.isConnected || !toolbar?.contains(target)) return;
-    if (target.parentElement?.hasAttribute?.(EDIT_WRAPPER_ATTRIBUTE)) return;
+    if (target.hasAttribute?.(EDIT_WRAPPER_ATTRIBUTE)) return;
 
-    const wrapper = document.createElement('span');
-    wrapper.setAttribute(EDIT_WRAPPER_ATTRIBUTE, 'true');
-    Object.assign(wrapper.style, {
-      position: 'relative',
-      display: 'inline-flex',
-      alignItems: 'stretch'
-    });
-
-    const originalPaddingLeft = target.style.paddingLeft || '';
-    target.dataset.quickContinueOriginalPaddingLeft = originalPaddingLeft;
-    target.style.paddingLeft = '23px';
-
-    target.before(wrapper);
-    wrapper.append(createPencilButton(target), target);
+    target.dataset.quickContinueOriginalDisplay = target.style.display || '';
+    target.dataset.quickContinueOriginalAlignItems = target.style.alignItems || '';
+    target.dataset.quickContinueOriginalGap = target.style.gap || '';
+    target.setAttribute(EDIT_WRAPPER_ATTRIBUTE, 'true');
+    target.style.display = 'inline-flex';
+    target.style.alignItems = 'center';
+    target.style.gap = '3px';
+    target.insertBefore(createPencilButton(), target.firstChild);
   }
 
   function enhanceToolbarButtons(root = toolbar) {
@@ -139,19 +119,21 @@
 
   function restoreToolbarButtons(root = toolbar) {
     if (!root) return;
-    let wrappers = [];
-    try { wrappers = [...root.querySelectorAll(`[${EDIT_WRAPPER_ATTRIBUTE}]`)]; } catch {}
-    for (const wrapper of wrappers) {
-      const target = wrapper.querySelector(TARGET_SELECTOR);
-      if (!target) {
-        try { wrapper.remove(); } catch {}
-        continue;
-      }
-
-      const originalPaddingLeft = target.dataset.quickContinueOriginalPaddingLeft || '';
-      target.style.paddingLeft = originalPaddingLeft;
-      delete target.dataset.quickContinueOriginalPaddingLeft;
-      try { wrapper.replaceWith(target); } catch {}
+    let targets = [];
+    try {
+      targets = [...root.querySelectorAll(
+        TARGET_SELECTOR.split(',').map((selector) => `${selector}[${EDIT_WRAPPER_ATTRIBUTE}]`).join(',')
+      )];
+    } catch {}
+    for (const target of targets) {
+      try { target.querySelector(`[${EDIT_PENCIL_ATTRIBUTE}]`)?.remove(); } catch {}
+      target.style.display = target.dataset.quickContinueOriginalDisplay || '';
+      target.style.alignItems = target.dataset.quickContinueOriginalAlignItems || '';
+      target.style.gap = target.dataset.quickContinueOriginalGap || '';
+      delete target.dataset.quickContinueOriginalDisplay;
+      delete target.dataset.quickContinueOriginalAlignItems;
+      delete target.dataset.quickContinueOriginalGap;
+      target.removeAttribute(EDIT_WRAPPER_ATTRIBUTE);
     }
   }
 
@@ -410,7 +392,24 @@
     else detachToolbar();
   }
 
-  observer = new MutationObserver(syncToolbar);
+  function scheduleToolbarSync() {
+    if (scheduledSync !== null) return;
+    if (typeof requestAnimationFrame === 'function' && document.visibilityState !== 'hidden') {
+      scheduledWithAnimationFrame = true;
+      scheduledSync = requestAnimationFrame(() => {
+        scheduledSync = null;
+        syncToolbar();
+      });
+    } else {
+      scheduledWithAnimationFrame = false;
+      scheduledSync = setTimeout(() => {
+        scheduledSync = null;
+        syncToolbar();
+      }, 32);
+    }
+  }
+
+  observer = new MutationObserver(scheduleToolbarSync);
   observer.observe(document.documentElement, { childList: true, subtree: true });
   document.addEventListener('click', handleManualSendClick, true);
   document.addEventListener('keydown', handleManualSendKeydown, true);
@@ -423,6 +422,13 @@
     },
     dispose() {
       try { observer?.disconnect(); } catch {}
+      try {
+        if (scheduledSync !== null) {
+          if (scheduledWithAnimationFrame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(scheduledSync);
+          else clearTimeout(scheduledSync);
+        }
+      } catch {}
+      scheduledSync = null;
       try { document.removeEventListener('click', handleManualSendClick, true); } catch {}
       try { document.removeEventListener('keydown', handleManualSendKeydown, true); } catch {}
       detachToolbar();
