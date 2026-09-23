@@ -1,14 +1,13 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
   const previousRuntime = globalThis.__chatgptQuickContinueHoverEditRuntime;
   if (Number(previousRuntime?.version || 0) === RUNTIME_VERSION) return;
   const restoredTimestampState = Boolean(previousRuntime?.manualTimestampEnabled);
   try { previousRuntime?.dispose?.(); } catch {}
 
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
-  const EDIT_BUTTON_ID = 'chatgpt-quick-continue-hover-edit';
   const CLOCK_SELECTOR = '[aria-label="Current local time"]';
   const TARGET_SELECTOR = [
     'button[aria-label="Send timestamped Continue"]',
@@ -20,62 +19,13 @@
     'button[aria-label="Send message"]',
     'button[aria-label="Send"]'
   ].join(',');
-  const HOVER_DELAY_MS = 700;
-  const HIDE_DELAY_MS = 260;
+  const EDIT_WRAPPER_ATTRIBUTE = 'data-quick-continue-pencil-edit';
+  const EDIT_PENCIL_ATTRIBUTE = 'data-quick-continue-pencil-button';
 
   let observer = null;
   let toolbar = null;
-  let editButton = null;
   let clockToggle = null;
-  let activeTarget = null;
-  let hoverTimer = null;
-  let hideTimer = null;
   let manualTimestampEnabled = restoredTimestampState;
-
-  function clearHoverTimer() {
-    if (hoverTimer === null) return;
-    clearTimeout(hoverTimer);
-    hoverTimer = null;
-  }
-
-  function clearHideTimer() {
-    if (hideTimer === null) return;
-    clearTimeout(hideTimer);
-    hideTimer = null;
-  }
-
-  function hideEditButton() {
-    clearHoverTimer();
-    clearHideTimer();
-    activeTarget = null;
-    if (editButton) editButton.hidden = true;
-  }
-
-  function scheduleHide() {
-    clearHideTimer();
-    hideTimer = setTimeout(() => {
-      hideTimer = null;
-      try {
-        if (activeTarget?.matches?.(':hover') || editButton?.matches?.(':hover')) return;
-      } catch {}
-      hideEditButton();
-    }, HIDE_DELAY_MS);
-  }
-
-  function styleEditButton(button) {
-    Object.assign(button.style, {
-      border: '1px solid var(--border-light, rgba(127,127,127,.25))',
-      borderRadius: '6px',
-      padding: '4px 6px',
-      background: 'var(--main-surface-secondary, rgba(127,127,127,.10))',
-      color: 'inherit',
-      font: 'inherit',
-      fontWeight: '600',
-      fontSize: '10px',
-      lineHeight: '1',
-      cursor: 'pointer'
-    });
-  }
 
   function openConfigEditor() {
     const root = toolbar;
@@ -94,79 +44,115 @@
     }, 0);
   }
 
-  function ensureEditButton() {
-    if (editButton?.isConnected || editButton) return editButton;
+  function editLabelFor(target) {
+    return target?.getAttribute?.('aria-label') === 'Project Continue'
+      ? 'Edit Project text'
+      : 'Edit Continue text';
+  }
 
-    const button = document.createElement('button');
-    button.id = EDIT_BUTTON_ID;
-    button.type = 'button';
-    button.textContent = 'Edit';
-    button.hidden = true;
-    button.setAttribute('aria-label', 'Edit Continue and Project text');
-    styleEditButton(button);
+  function setPencilHover(pencil, active) {
+    if (!pencil) return;
+    pencil.style.background = active
+      ? 'var(--main-surface-tertiary, rgba(127,127,127,.18))'
+      : 'transparent';
+    pencil.style.opacity = active ? '1' : '.62';
+  }
 
-    button.addEventListener('pointerenter', () => {
-      clearHoverTimer();
-      clearHideTimer();
-      button.style.background = 'var(--main-surface-tertiary, rgba(127,127,127,.18))';
+  function createPencilButton(target) {
+    const pencil = document.createElement('button');
+    pencil.type = 'button';
+    pencil.textContent = '✎';
+    pencil.setAttribute(EDIT_PENCIL_ATTRIBUTE, 'true');
+    pencil.setAttribute('aria-label', editLabelFor(target));
+    Object.assign(pencil.style, {
+      position: 'absolute',
+      left: '5px',
+      top: '50%',
+      transform: 'translateY(-50%)',
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      width: '14px',
+      height: '14px',
+      margin: '0',
+      padding: '0',
+      border: '0',
+      borderRadius: '3px',
+      background: 'transparent',
+      color: 'inherit',
+      font: 'inherit',
+      fontSize: '11px',
+      fontWeight: '600',
+      lineHeight: '1',
+      opacity: '.62',
+      cursor: 'pointer',
+      userSelect: 'none',
+      zIndex: '2'
     });
-    button.addEventListener('pointerleave', () => {
-      button.style.background = 'var(--main-surface-secondary, rgba(127,127,127,.10))';
-      scheduleHide();
+
+    pencil.addEventListener('pointerenter', () => setPencilHover(pencil, true));
+    pencil.addEventListener('pointerleave', () => setPencilHover(pencil, false));
+    pencil.addEventListener('pointerdown', (event) => {
+      event.stopPropagation();
     });
-    button.addEventListener('click', (event) => {
+    pencil.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
       openConfigEditor();
-      hideEditButton();
+    });
+    pencil.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      event.stopPropagation();
+      openConfigEditor();
     });
 
-    editButton = button;
-    return editButton;
+    return pencil;
   }
 
-  function revealFor(target) {
-    if (!toolbar?.isConnected || !target?.isConnected || !toolbar.contains(target)) return;
-    const button = ensureEditButton();
-    activeTarget = target;
-    target.insertAdjacentElement('afterend', button);
-    button.hidden = false;
+  function enhanceTarget(target) {
+    if (!target?.isConnected || !toolbar?.contains(target)) return;
+    if (target.parentElement?.hasAttribute?.(EDIT_WRAPPER_ATTRIBUTE)) return;
+
+    const wrapper = document.createElement('span');
+    wrapper.setAttribute(EDIT_WRAPPER_ATTRIBUTE, 'true');
+    Object.assign(wrapper.style, {
+      position: 'relative',
+      display: 'inline-flex',
+      alignItems: 'stretch'
+    });
+
+    const originalPaddingLeft = target.style.paddingLeft || '';
+    target.dataset.quickContinueOriginalPaddingLeft = originalPaddingLeft;
+    target.style.paddingLeft = '23px';
+
+    target.before(wrapper);
+    wrapper.append(createPencilButton(target), target);
   }
 
-  function scheduleReveal(target) {
-    clearHoverTimer();
-    clearHideTimer();
-    activeTarget = target;
-    hoverTimer = setTimeout(() => {
-      hoverTimer = null;
-      revealFor(target);
-    }, HOVER_DELAY_MS);
+  function enhanceToolbarButtons(root = toolbar) {
+    if (!root?.isConnected) return;
+    let targets = [];
+    try { targets = [...root.querySelectorAll(TARGET_SELECTOR)]; } catch {}
+    for (const target of targets) enhanceTarget(target);
   }
 
-  function targetFromEvent(event) {
-    const node = event?.target;
-    if (!(node instanceof Element)) return null;
-    const target = node.closest(TARGET_SELECTOR);
-    if (!target || !toolbar?.contains(target)) return null;
-    return target;
-  }
+  function restoreToolbarButtons(root = toolbar) {
+    if (!root) return;
+    let wrappers = [];
+    try { wrappers = [...root.querySelectorAll(`[${EDIT_WRAPPER_ATTRIBUTE}]`)]; } catch {}
+    for (const wrapper of wrappers) {
+      const target = wrapper.querySelector(TARGET_SELECTOR);
+      if (!target) {
+        try { wrapper.remove(); } catch {}
+        continue;
+      }
 
-  function handlePointerOver(event) {
-    const target = targetFromEvent(event);
-    if (!target) return;
-    if (target === activeTarget && editButton && !editButton.hidden) {
-      clearHideTimer();
-      return;
+      const originalPaddingLeft = target.dataset.quickContinueOriginalPaddingLeft || '';
+      target.style.paddingLeft = originalPaddingLeft;
+      delete target.dataset.quickContinueOriginalPaddingLeft;
+      try { wrapper.replaceWith(target); } catch {}
     }
-    scheduleReveal(target);
-  }
-
-  function handlePointerOut(event) {
-    const target = targetFromEvent(event);
-    if (!target || target !== activeTarget) return;
-    const related = event.relatedTarget;
-    if (related && (target.contains(related) || editButton === related || editButton?.contains?.(related))) return;
-    scheduleHide();
   }
 
   function composerElement() {
@@ -392,37 +378,32 @@
   }
 
   function detachToolbar() {
-    clearHoverTimer();
-    clearHideTimer();
-    activeTarget = null;
     detachClockToggle();
-    if (toolbar) {
-      try { toolbar.removeEventListener('pointerover', handlePointerOver); } catch {}
-      try { toolbar.removeEventListener('pointerout', handlePointerOut); } catch {}
-      try { toolbar.removeEventListener('pointerleave', scheduleHide); } catch {}
-    }
-    try { editButton?.remove(); } catch {}
-    editButton = null;
+    restoreToolbarButtons(toolbar);
     toolbar = null;
   }
 
   function attachToolbar(nextToolbar) {
     if (!nextToolbar || nextToolbar === toolbar) {
-      if (nextToolbar) attachClockToggle(nextToolbar);
+      if (nextToolbar) {
+        enhanceToolbarButtons(nextToolbar);
+        attachClockToggle(nextToolbar);
+      }
       return;
     }
     detachToolbar();
     toolbar = nextToolbar;
-    toolbar.addEventListener('pointerover', handlePointerOver);
-    toolbar.addEventListener('pointerout', handlePointerOut);
-    toolbar.addEventListener('pointerleave', scheduleHide);
+    enhanceToolbarButtons(toolbar);
     attachClockToggle(toolbar);
   }
 
   function syncToolbar() {
     const nextToolbar = document.getElementById(TOOLBAR_ID);
     if (nextToolbar === toolbar) {
-      if (nextToolbar) attachClockToggle(nextToolbar);
+      if (nextToolbar) {
+        enhanceToolbarButtons(nextToolbar);
+        attachClockToggle(nextToolbar);
+      }
       return;
     }
     if (nextToolbar) attachToolbar(nextToolbar);

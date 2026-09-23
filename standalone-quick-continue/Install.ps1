@@ -66,4 +66,4 @@ Write-Host '  3. Choose Load unpacked'
 Write-Host "  4. Select: $InstallRoot"
 Write-Host ''
 Write-Host 'After the one-time load, managed updates are downloaded by the existing notifier helper. Quick Continue reloads itself and reinjects the current runtime into already-open ChatGPT tabs.'
-Write-Host 'Hover Continue or Project briefly to reveal Edit, or use Project > Edit, to change the live JSON config without reloading Chrome or ChatGPT.'
+Write-Host 'Click the pencil before Continue or Project, or use Project > Edit, to change the live JSON config without reloading Chrome or ChatGPT.'
