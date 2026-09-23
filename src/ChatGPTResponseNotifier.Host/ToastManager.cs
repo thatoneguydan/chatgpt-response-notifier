@@ -15,6 +15,7 @@ internal sealed class ToastManager
     private const double MarginRight = 16;
     private const double MarginBottom = 16;
     private const double Gap = 10;
+    private const string DeliveryTombstonePrefix = "delivery:";
 
     private readonly NotificationStateStore _store;
     private readonly AcceptedNotificationStore _acceptedStore;
@@ -34,9 +35,16 @@ internal sealed class ToastManager
     {
         foreach (var record in _store.Load().OrderBy(item => item.CompletedAt))
         {
-            _acceptedStore.Remember(record.Id);
+            var deliveryTombstone = DeliveryTombstone(record);
+            if (deliveryTombstone is not null && _acceptedStore.Contains(deliveryTombstone))
+            {
+                continue;
+            }
+
+            RememberAcceptance(record);
             AddWindow(record, persist: false);
         }
+        Persist();
         Restack();
     }
 
@@ -47,8 +55,27 @@ internal sealed class ToastManager
         var existing = _windows.FirstOrDefault(window => window.Record.Id == record.Id);
         if (existing is not null)
         {
-            _acceptedStore.Remember(record.Id);
+            RememberAcceptance(record);
             return new ToastShowResult(true, false, "already-open", "not-applicable");
+        }
+
+        var deliveryKey = record.DeliveryKey.Trim();
+        if (deliveryKey.Length > 0)
+        {
+            var sameResponse = _windows.FirstOrDefault(window =>
+                string.Equals(window.Record.DeliveryKey.Trim(), deliveryKey, StringComparison.Ordinal));
+            if (sameResponse is not null)
+            {
+                RememberAcceptance(record);
+                return new ToastShowResult(true, false, "response-already-open", "not-applicable");
+            }
+
+            var deliveryTombstone = DeliveryTombstone(deliveryKey);
+            if (_acceptedStore.Contains(deliveryTombstone))
+            {
+                _acceptedStore.Remember(record.Id);
+                return new ToastShowResult(true, false, "response-already-accepted", "not-applicable");
+            }
         }
 
         if (_acceptedStore.Contains(record.Id))
@@ -106,6 +133,21 @@ internal sealed class ToastManager
         Restack();
     }
 
+    private static string? DeliveryTombstone(NotificationRecord record) => DeliveryTombstone(record.DeliveryKey);
+
+    private static string? DeliveryTombstone(string? deliveryKey)
+    {
+        var normalized = (deliveryKey ?? string.Empty).Trim();
+        return normalized.Length == 0 ? null : DeliveryTombstonePrefix + normalized;
+    }
+
+    private void RememberAcceptance(NotificationRecord record)
+    {
+        _acceptedStore.Remember(record.Id);
+        var deliveryTombstone = DeliveryTombstone(record);
+        if (deliveryTombstone is not null) _acceptedStore.Remember(deliveryTombstone);
+    }
+
     private string AddWindow(NotificationRecord record, bool persist)
     {
         var desktopTarget = WindowsVirtualDesktopSwitcher.CaptureCurrentDesktop();
@@ -141,7 +183,7 @@ internal sealed class ToastManager
         if (persist)
         {
             Persist();
-            _acceptedStore.Remember(record.Id);
+            RememberAcceptance(record);
         }
 
         window.Show();
