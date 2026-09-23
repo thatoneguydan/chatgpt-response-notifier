@@ -29,7 +29,6 @@
       ],
       "js": [
         "attachment-script.js",
-        "automation-route-refresh.js",
         "content-script.js",
         "persistence-script.js",
         "status-code.js",
@@ -38,6 +37,15 @@
         "bounded-recovery-script.js",
         "status-script.js",
         "recovery-script.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "automation-route-refresh.js"
       ],
       "run_at": "document_start"
     },
