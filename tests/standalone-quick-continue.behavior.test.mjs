@@ -23,21 +23,21 @@ test('standalone extension stays background-free with only local storage permiss
   assert.equal(manifest.host_permissions, undefined);
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['prompt-format.js', 'config.js', 'content-script.js']);
-  assert.equal(manifest.version, '1.2.4');
+  assert.equal(manifest.version, '1.2.5');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
 
-test('bundled JSON contains both prompt texts and saved projects', () => {
-  assert.equal(bundledConfig.continueText, 'Continue until you finish or need something from me.');
-  assert.equal(bundledConfig.projectText, 'Continue {project} from canonical GitHub state until you finish or need me.');
+test('bundled JSON contains editable prompt templates and saved projects', () => {
+  assert.equal(bundledConfig.continueText, '[{time}] Continue until you finish or need something from me.');
+  assert.equal(bundledConfig.projectText, '[{time}] Continue {project} from canonical GitHub state until you finish or need me.');
   assert.ok(Array.isArray(bundledConfig.projects));
   assert.ok(bundledConfig.projects.includes('campaign desk'));
   assert.ok(bundledConfig.projects.includes('notifier extension'));
   assert.equal(new Set(bundledConfig.projects.map((value) => value.toLowerCase())).size, bundledConfig.projects.length);
 });
 
-test('prompt formatter uses configurable Continue and Project text', () => {
+test('prompt formatter places configurable time and project placeholders', () => {
   const context = { globalThis: {}, Intl, Date };
   context.globalThis = context;
   vm.runInNewContext(promptSource, context);
@@ -45,15 +45,19 @@ test('prompt formatter uses configurable Continue and Project text', () => {
   const api = context.ChatGPTQuickContinuePrompts;
   const date = new Date('2026-09-18T09:20:00-04:00');
 
-  const normal = api.continuePrompt('Keep going please.', date);
+  const normal = api.continuePrompt('[{time}] Keep going please.', date);
+  const movedTime = api.continuePrompt('Keep going please. Sent at {time}.', date);
   const project = api.projectContinuePrompt(
     '  campaign   desk  ',
-    'Resume {project} from canonical GitHub state.',
+    'At {time}, resume {project} from canonical GitHub state.',
     date
   );
+  const legacy = api.continuePrompt('Legacy continue text.', date);
 
   assert.equal(normal, '[Sep 18, 9:20 AM] Keep going please.');
-  assert.equal(project, '[Sep 18, 9:20 AM] Resume campaign desk from canonical GitHub state.');
+  assert.equal(movedTime, 'Keep going please. Sent at Sep 18, 9:20 AM.');
+  assert.equal(project, 'At Sep 18, 9:20 AM, resume campaign desk from canonical GitHub state.');
+  assert.equal(legacy, '[Sep 18, 9:20 AM] Legacy continue text.');
   assert.equal(api.projectContinuePrompt('campaign desk', 'No placeholder here.', date), '');
 });
 
@@ -78,9 +82,9 @@ test('project picker is non-modal, exposes Edit, and never auto-focuses', () => 
 });
 
 test('prompt and config APIs are versioned so reinjection cannot retain stale globals indefinitely', () => {
-  assert.match(promptSource, /const RUNTIME_VERSION = 2/);
+  assert.match(promptSource, /const RUNTIME_VERSION = 3/);
   assert.match(promptSource, /runtimeVersion: RUNTIME_VERSION/);
-  assert.match(configSource, /const RUNTIME_VERSION = 2/);
+  assert.match(configSource, /const RUNTIME_VERSION = 3/);
   assert.match(configSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
@@ -166,10 +170,18 @@ test('config controller loads bundled JSON only from the extension and validates
     projects: ['Campaign Desk', 'campaign desk', 'Time Tracker']
   });
 
-  assert.equal(saved.continueText, 'Continue this work.');
-  assert.equal(saved.projectText, 'Continue {project} now.');
+  assert.equal(saved.continueText, '[{time}] Continue this work.');
+  assert.equal(saved.projectText, '[{time}] Continue {project} now.');
   assert.deepEqual([...saved.projects], ['Campaign Desk', 'Time Tracker']);
-  assert.equal(observed.continueText, 'Continue this work.');
+  assert.equal(observed.continueText, '[{time}] Continue this work.');
+
+  const moved = await api.save({
+    continueText: 'At {time}, continue this work.',
+    projectText: 'Resume {project} at {time}.',
+    projects: ['Campaign Desk']
+  });
+  assert.equal(moved.continueText, 'At {time}, continue this work.');
+  assert.equal(moved.projectText, 'Resume {project} at {time}.');
 
   await assert.rejects(
     () => api.save({
