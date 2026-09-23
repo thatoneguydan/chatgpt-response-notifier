@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
   if (Number(globalThis.ChatGPTQuickContinuePrompts?.runtimeVersion || 0) === RUNTIME_VERSION) return;
 
   const normalizeInline = (value) => String(value || '').replace(/\s+/g, ' ').trim();
@@ -19,12 +19,20 @@
     }
   }
 
+  function renderTimeText(template, date = new Date()) {
+    const text = normalizeInline(template);
+    if (!text) return '';
+    const time = formatTimestamp(date);
+    if (!text.includes('{time}')) return `[${time}] ${text}`;
+    return text.split('{time}').join(time);
+  }
+
   function timestamped(message, date = new Date()) {
-    return `[${formatTimestamp(date)}] ${normalizeInline(message)}`;
+    return renderTimeText(`[{time}] ${normalizeInline(message)}`, date);
   }
 
   function continuePrompt(continueText, date = new Date()) {
-    return timestamped(continueText, date);
+    return renderTimeText(continueText, date);
   }
 
   function renderProjectText(projectText, projectName) {
@@ -36,13 +44,14 @@
 
   function projectContinuePrompt(projectName, projectText, date = new Date()) {
     const message = renderProjectText(projectText, projectName);
-    return message ? timestamped(message, date) : '';
+    return message ? renderTimeText(message, date) : '';
   }
 
   globalThis.ChatGPTQuickContinuePrompts = Object.freeze({
     runtimeVersion: RUNTIME_VERSION,
     normalizeInline,
     formatTimestamp,
+    renderTimeText,
     timestamped,
     continuePrompt,
     renderProjectText,
