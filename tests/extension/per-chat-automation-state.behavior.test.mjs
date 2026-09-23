@@ -27,10 +27,9 @@ test('chat route changes invalidate only notifier state UI so the next render re
   assert.doesNotMatch(routeRefreshSource, /fetch\s*\(|XMLHttpRequest|WebSocket|tabs\.update|windows\.update/);
 });
 
-test('route refresh is loaded immediately after the automation attachment runtime', () => {
-  const scripts = manifest.content_scripts[0].js;
-  const attachmentIndex = scripts.indexOf('attachment-script.js');
-  const refreshIndex = scripts.indexOf('automation-route-refresh.js');
-  assert.ok(attachmentIndex >= 0);
-  assert.equal(refreshIndex, attachmentIndex + 1);
+test('route refresh is a dedicated document-start content script without changing the canonical automation bundle', () => {
+  const entry = manifest.content_scripts.find((item) => Array.isArray(item.js) && item.js.length === 1 && item.js[0] === 'automation-route-refresh.js');
+  assert.ok(entry);
+  assert.equal(entry.run_at, 'document_start');
+  assert.deepEqual(entry.matches, ['https://chatgpt.com/*']);
 });
