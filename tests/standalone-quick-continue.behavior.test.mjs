@@ -26,7 +26,7 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['prompt-format.js', 'config.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.11');
+  assert.equal(manifest.version, '1.2.12');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -95,18 +95,20 @@ test('project picker is non-modal, exposes Edit, and never auto-focuses', () => 
   assert.doesNotMatch(contentSource, /\.title\s*=/);
 });
 
-test('persistent pencil Edit controls reuse the existing in-page JSON editor without reparenting toolbar buttons', () => {
+test('persistent pencil Edit controls are independent sibling buttons and do not alter action-button hover', () => {
   assert.match(hoverEditSource, /button\[aria-label="Send timestamped Continue"\]/);
   assert.match(hoverEditSource, /button\[aria-label="Project Continue"\]/);
-  assert.match(hoverEditSource, /const EDIT_WRAPPER_ATTRIBUTE = 'data-quick-continue-pencil-edit'/);
+  assert.match(hoverEditSource, /const EDIT_TARGET_ATTRIBUTE = 'data-quick-continue-pencil-target'/);
   assert.match(hoverEditSource, /const EDIT_PENCIL_ATTRIBUTE = 'data-quick-continue-pencil-button'/);
+  assert.match(hoverEditSource, /document\.createElement\('button'\)/);
   assert.match(hoverEditSource, /pencil\.textContent = '✎'/);
+  assert.match(hoverEditSource, /pencil\.setAttribute\('aria-label', editLabelFor\(target\)\)/);
   assert.match(hoverEditSource, /pencil\.addEventListener\('pointerenter'/);
   assert.match(hoverEditSource, /pencil\.addEventListener\('pointerleave'/);
   assert.match(hoverEditSource, /pencil\.style\.background = active/);
-  assert.match(hoverEditSource, /event\.stopPropagation\(\)/);
-  assert.match(hoverEditSource, /target\.insertBefore\(createPencilButton\(\), target\.firstChild\)/);
-  assert.doesNotMatch(hoverEditSource, /target\.before\(wrapper\)|wrapper\.append\(/);
+  assert.match(hoverEditSource, /target\.before\(pencil\)/);
+  assert.doesNotMatch(hoverEditSource, /target\.insertBefore\(createPencilButton\(\), target\.firstChild\)/);
+  assert.doesNotMatch(hoverEditSource, /target\.style\.(?:display|alignItems|gap)/);
   assert.match(hoverEditSource, /new MutationObserver\(scheduleToolbarSync\)/);
   assert.match(hoverEditSource, /requestAnimationFrame/);
   assert.match(hoverEditSource, /button\[aria-label="Edit Quick Continue JSON"\]/);
@@ -153,7 +155,7 @@ test('prompt and config APIs are versioned so reinjection cannot retain stale gl
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
   assert.match(configSource, /chrome\.storage\.onChanged\.removeListener\(handleStorageChanged\)/);
-  assert.match(hoverEditSource, /const RUNTIME_VERSION = 4/);
+  assert.match(hoverEditSource, /const RUNTIME_VERSION = 5/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
   assert.match(conversationStateSource, /const RUNTIME_VERSION = 1/);
@@ -310,8 +312,20 @@ test('toolbar sync does not continuously retrigger itself through unchanged cloc
   assert.doesNotMatch(contentSource, /if \(clock\) clock\.textContent = formatClock\(now\)/);
 });
 
+test('toolbar self-heals missing core controls and recovers from transient composer rerenders', () => {
+  assert.match(contentSource, /const TOOLBAR_HIDE_GRACE_MS = 600/);
+  assert.match(contentSource, /function toolbarStructureIntact\(root\)/);
+  assert.match(contentSource, /button\[aria-label="Send timestamped Continue"\]/);
+  assert.match(contentSource, /button\[aria-label="Project Continue"\]/);
+  assert.match(contentSource, /function discardToolbar\(\)/);
+  assert.match(contentSource, /if \(root && !toolbarStructureIntact\(root\)\)/);
+  assert.match(contentSource, /discardToolbar\(\);/);
+  assert.match(contentSource, /if \(composer && anchor && visible\(anchor\)\) \{\s+scheduleSync\(\);\s+return;/);
+  assert.match(contentSource, /\}, TOOLBAR_HIDE_GRACE_MS\);/);
+});
+
 test('standalone runtime hot-replaces stale generations, restores a detached toolbar, and ignores notifier-only churn', () => {
-  assert.match(contentSource, /const RUNTIME_VERSION = 5/);
+  assert.match(contentSource, /const RUNTIME_VERSION = 6/);
   assert.match(contentSource, /const previousRuntime = globalThis\.__chatgptQuickContinueRuntime/);
   assert.match(contentSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.doesNotMatch(contentSource, /__chatgptQuickContinueInstalled/);
