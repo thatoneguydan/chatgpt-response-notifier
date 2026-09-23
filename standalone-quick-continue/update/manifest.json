@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
-  "version": "1.2.11",
-  "sourceCommit": "8b5329331773aa8f17205add0f552e6a5d97cae9",
-  "downloadUrl": "https://github.com/thatoneguydan/chatgpt-response-notifier/releases/download/quick-continue-v1.2.11/ChatGPT-Quick-Continue-1.2.11.zip",
-  "sha256": "0fbf4928c8235dff925a28dd278f6e461310a0f63d677ece5f3e370c2c12a590"
+  "version": "1.2.12",
+  "sourceCommit": "ce2e85f24da5f309cef60239878f43904cac1e0c",
+  "downloadUrl": "https://github.com/thatoneguydan/chatgpt-response-notifier/releases/download/quick-continue-v1.2.12/ChatGPT-Quick-Continue-1.2.12.zip",
+  "sha256": "ef471db44d121a0b2e6823c52f2c77887f6bdad0f9f012c9ba267e12f87378f4"
 }
