@@ -24,7 +24,7 @@ test('standalone extension stays background-free with only local storage permiss
   assert.equal(manifest.host_permissions, undefined);
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['prompt-format.js', 'config.js', 'content-script.js', 'hover-edit-script.js']);
-  assert.equal(manifest.version, '1.2.6');
+  assert.equal(manifest.version, '1.2.7');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -94,6 +94,22 @@ test('delayed hover Edit reuses the existing in-page JSON editor', () => {
   assert.doesNotMatch(hoverEditSource, /XMLHttpRequest|WebSocket|fetch\(/);
 });
 
+test('clock toggle timestamps only trusted manual sends and preserves multiline entry behavior', () => {
+  assert.match(hoverEditSource, /const CLOCK_SELECTOR = '\[aria-label="Current local time"\]'/);
+  assert.match(hoverEditSource, /setAttribute\('aria-pressed', String\(manualTimestampEnabled\)\)/);
+  assert.match(hoverEditSource, /outline: manualTimestampEnabled \? '1px solid currentColor' : '1px solid transparent'/);
+  assert.match(hoverEditSource, /ChatGPTQuickContinuePrompts\?\.formatTimestamp/);
+  assert.match(hoverEditSource, /function hasLeadingTimestamp\(text\)/);
+  assert.match(hoverEditSource, /event\?\.isTrusted !== true/);
+  assert.match(hoverEditSource, /event\.key !== 'Enter' \|\| event\.shiftKey \|\| event\.altKey/);
+  assert.match(hoverEditSource, /event\.isComposing \|\| event\.keyCode === 229/);
+  assert.match(hoverEditSource, /document\.execCommand\('insertText', false, prefix\)/);
+  assert.match(hoverEditSource, /document\.addEventListener\('click', handleManualSendClick, true\)/);
+  assert.match(hoverEditSource, /document\.addEventListener\('keydown', handleManualSendKeydown, true\)/);
+  assert.match(hoverEditSource, /document\.removeEventListener\('click', handleManualSendClick, true\)/);
+  assert.match(hoverEditSource, /document\.removeEventListener\('keydown', handleManualSendKeydown, true\)/);
+});
+
 test('prompt and config APIs are versioned so reinjection cannot retain stale globals indefinitely', () => {
   assert.match(promptSource, /const RUNTIME_VERSION = 3/);
   assert.match(promptSource, /runtimeVersion: RUNTIME_VERSION/);
@@ -102,7 +118,7 @@ test('prompt and config APIs are versioned so reinjection cannot retain stale gl
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
   assert.match(configSource, /chrome\.storage\.onChanged\.removeListener\(handleStorageChanged\)/);
-  assert.match(hoverEditSource, /const RUNTIME_VERSION = 1/);
+  assert.match(hoverEditSource, /const RUNTIME_VERSION = 2/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
 });
