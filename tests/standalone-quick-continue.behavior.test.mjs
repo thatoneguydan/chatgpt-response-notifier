@@ -13,6 +13,7 @@ const bundledConfig = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'confi
 const promptSource = fs.readFileSync(path.join(extensionRoot, 'prompt-format.js'), 'utf8');
 const configSource = fs.readFileSync(path.join(extensionRoot, 'config.js'), 'utf8');
 const contentSource = fs.readFileSync(path.join(extensionRoot, 'content-script.js'), 'utf8');
+const hoverEditSource = fs.readFileSync(path.join(extensionRoot, 'hover-edit-script.js'), 'utf8');
 const installerSource = fs.readFileSync(path.join(extensionRoot, 'Install.ps1'), 'utf8');
 const updater124Source = fs.readFileSync(path.join(extensionRoot, 'Update-Installed-1.2.4.ps1'), 'utf8');
 
@@ -22,8 +23,8 @@ test('standalone extension stays background-free with only local storage permiss
   assert.deepEqual(manifest.permissions, ['storage']);
   assert.equal(manifest.host_permissions, undefined);
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
-  assert.deepEqual(manifest.content_scripts[0].js, ['prompt-format.js', 'config.js', 'content-script.js']);
-  assert.equal(manifest.version, '1.2.5');
+  assert.deepEqual(manifest.content_scripts[0].js, ['prompt-format.js', 'config.js', 'content-script.js', 'hover-edit-script.js']);
+  assert.equal(manifest.version, '1.2.6');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -81,6 +82,18 @@ test('project picker is non-modal, exposes Edit, and never auto-focuses', () => 
   assert.doesNotMatch(contentSource, /\.title\s*=/);
 });
 
+test('delayed hover Edit reuses the existing in-page JSON editor', () => {
+  assert.match(hoverEditSource, /const HOVER_DELAY_MS = 700/);
+  assert.match(hoverEditSource, /button\[aria-label="Send timestamped Continue"\]/);
+  assert.match(hoverEditSource, /button\[aria-label="Project Continue"\]/);
+  assert.match(hoverEditSource, /button\.textContent = 'Edit'/);
+  assert.match(hoverEditSource, /Edit Continue and Project text/);
+  assert.match(hoverEditSource, /button\[aria-label="Edit Quick Continue JSON"\]/);
+  assert.match(hoverEditSource, /if \(projectPopover\.hidden\) projectButton\.click\(\)/);
+  assert.match(hoverEditSource, /root\.querySelector\('button\[aria-label="Edit Quick Continue JSON"\]'\)\?\.click\(\)/);
+  assert.doesNotMatch(hoverEditSource, /XMLHttpRequest|WebSocket|fetch\(/);
+});
+
 test('prompt and config APIs are versioned so reinjection cannot retain stale globals indefinitely', () => {
   assert.match(promptSource, /const RUNTIME_VERSION = 3/);
   assert.match(promptSource, /runtimeVersion: RUNTIME_VERSION/);
@@ -89,6 +102,9 @@ test('prompt and config APIs are versioned so reinjection cannot retain stale gl
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
   assert.match(configSource, /chrome\.storage\.onChanged\.removeListener\(handleStorageChanged\)/);
+  assert.match(hoverEditSource, /const RUNTIME_VERSION = 1/);
+  assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
+  assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
 });
 
 test('inline JSON Save applies through config storage without reload or refresh calls', () => {
