@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 4;
+  const RUNTIME_VERSION = 5;
   const previousRuntime = globalThis.__chatgptQuickContinueHoverEditRuntime;
   if (Number(previousRuntime?.version || 0) === RUNTIME_VERSION) return;
   const restoredTimestampState = Boolean(previousRuntime?.manualTimestampEnabled);
@@ -19,7 +19,7 @@
     'button[aria-label="Send message"]',
     'button[aria-label="Send"]'
   ].join(',');
-  const EDIT_WRAPPER_ATTRIBUTE = 'data-quick-continue-pencil-edit';
+  const EDIT_TARGET_ATTRIBUTE = 'data-quick-continue-pencil-target';
   const EDIT_PENCIL_ATTRIBUTE = 'data-quick-continue-pencil-button';
 
   let observer = null;
@@ -46,47 +46,50 @@
     }, 0);
   }
 
+  function editLabelFor(target) {
+    return target?.getAttribute?.('aria-label') === 'Project Continue'
+      ? 'Edit Project text'
+      : 'Edit Continue text';
+  }
+
   function setPencilHover(pencil, active) {
     if (!pencil) return;
     pencil.style.background = active
       ? 'var(--main-surface-tertiary, rgba(127,127,127,.18))'
-      : 'transparent';
-    pencil.style.opacity = active ? '1' : '.62';
+      : 'var(--main-surface-secondary, rgba(127,127,127,.10))';
+    pencil.style.opacity = active ? '1' : '.72';
   }
 
-  function createPencilButton() {
-    const pencil = document.createElement('span');
+  function createPencilButton(target) {
+    const pencil = document.createElement('button');
+    pencil.type = 'button';
     pencil.textContent = '✎';
     pencil.setAttribute(EDIT_PENCIL_ATTRIBUTE, 'true');
-    pencil.setAttribute('aria-hidden', 'true');
+    pencil.setAttribute('aria-label', editLabelFor(target));
     Object.assign(pencil.style, {
       display: 'inline-flex',
       alignItems: 'center',
       justifyContent: 'center',
-      width: '14px',
-      height: '14px',
-      flex: '0 0 14px',
+      width: '20px',
+      height: '23px',
       margin: '0',
       padding: '0',
-      border: '0',
-      borderRadius: '3px',
-      background: 'transparent',
+      border: '1px solid var(--border-light, rgba(127,127,127,.25))',
+      borderRadius: '6px',
+      background: 'var(--main-surface-secondary, rgba(127,127,127,.10))',
       color: 'inherit',
       font: 'inherit',
       fontSize: '11px',
       fontWeight: '600',
       lineHeight: '1',
-      opacity: '.62',
+      opacity: '.72',
       cursor: 'pointer',
-      userSelect: 'none'
+      userSelect: 'none',
+      flex: '0 0 20px'
     });
 
     pencil.addEventListener('pointerenter', () => setPencilHover(pencil, true));
     pencil.addEventListener('pointerleave', () => setPencilHover(pencil, false));
-    pencil.addEventListener('pointerdown', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-    });
     pencil.addEventListener('click', (event) => {
       event.preventDefault();
       event.stopPropagation();
@@ -98,16 +101,11 @@
 
   function enhanceTarget(target) {
     if (!target?.isConnected || !toolbar?.contains(target)) return;
-    if (target.hasAttribute?.(EDIT_WRAPPER_ATTRIBUTE)) return;
+    if (target.hasAttribute?.(EDIT_TARGET_ATTRIBUTE)) return;
 
-    target.dataset.quickContinueOriginalDisplay = target.style.display || '';
-    target.dataset.quickContinueOriginalAlignItems = target.style.alignItems || '';
-    target.dataset.quickContinueOriginalGap = target.style.gap || '';
-    target.setAttribute(EDIT_WRAPPER_ATTRIBUTE, 'true');
-    target.style.display = 'inline-flex';
-    target.style.alignItems = 'center';
-    target.style.gap = '3px';
-    target.insertBefore(createPencilButton(), target.firstChild);
+    const pencil = createPencilButton(target);
+    target.setAttribute(EDIT_TARGET_ATTRIBUTE, 'true');
+    target.before(pencil);
   }
 
   function enhanceToolbarButtons(root = toolbar) {
@@ -119,21 +117,19 @@
 
   function restoreToolbarButtons(root = toolbar) {
     if (!root) return;
+    let pencils = [];
     let targets = [];
+    try { pencils = [...root.querySelectorAll(`[${EDIT_PENCIL_ATTRIBUTE}]`)]; } catch {}
     try {
       targets = [...root.querySelectorAll(
-        TARGET_SELECTOR.split(',').map((selector) => `${selector}[${EDIT_WRAPPER_ATTRIBUTE}]`).join(',')
+        TARGET_SELECTOR.split(',').map((selector) => `${selector}[${EDIT_TARGET_ATTRIBUTE}]`).join(',')
       )];
     } catch {}
+    for (const pencil of pencils) {
+      try { pencil.remove(); } catch {}
+    }
     for (const target of targets) {
-      try { target.querySelector(`[${EDIT_PENCIL_ATTRIBUTE}]`)?.remove(); } catch {}
-      target.style.display = target.dataset.quickContinueOriginalDisplay || '';
-      target.style.alignItems = target.dataset.quickContinueOriginalAlignItems || '';
-      target.style.gap = target.dataset.quickContinueOriginalGap || '';
-      delete target.dataset.quickContinueOriginalDisplay;
-      delete target.dataset.quickContinueOriginalAlignItems;
-      delete target.dataset.quickContinueOriginalGap;
-      target.removeAttribute(EDIT_WRAPPER_ATTRIBUTE);
+      try { target.removeAttribute(EDIT_TARGET_ATTRIBUTE); } catch {}
     }
   }
 
