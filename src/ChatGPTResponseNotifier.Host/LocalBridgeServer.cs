@@ -18,20 +18,28 @@ internal sealed class LocalBridgeServer : IAsyncDisposable
     private readonly WebApplication _app;
     private readonly Func<NativeMessage, Task> _onMessage;
     private readonly Func<object> _readyMessageFactory;
+    private readonly Func<CancellationToken, Task<object>>? _quickContinueUpdate;
     private readonly Action<int>? _onClientCountChanged;
     private readonly ConcurrentDictionary<Guid, WebSocket> _clients = new();
 
-    private LocalBridgeServer(WebApplication app, Func<NativeMessage, Task> onMessage, Func<object> readyMessageFactory, Action<int>? onClientCountChanged)
+    private LocalBridgeServer(
+        WebApplication app,
+        Func<NativeMessage, Task> onMessage,
+        Func<object> readyMessageFactory,
+        Func<CancellationToken, Task<object>>? quickContinueUpdate,
+        Action<int>? onClientCountChanged)
     {
         _app = app;
         _onMessage = onMessage;
         _readyMessageFactory = readyMessageFactory;
+        _quickContinueUpdate = quickContinueUpdate;
         _onClientCountChanged = onClientCountChanged;
     }
 
     public static async Task<LocalBridgeServer> StartAsync(
         Func<NativeMessage, Task> onMessage,
         Func<object> readyMessageFactory,
+        Func<CancellationToken, Task<object>>? quickContinueUpdate,
         Action<int>? onClientCountChanged,
         CancellationToken cancellationToken)
     {
@@ -43,12 +51,13 @@ internal sealed class LocalBridgeServer : IAsyncDisposable
         });
 
         var app = builder.Build();
-        var server = new LocalBridgeServer(app, onMessage, readyMessageFactory, onClientCountChanged);
+        var server = new LocalBridgeServer(app, onMessage, readyMessageFactory, quickContinueUpdate, onClientCountChanged);
         app.UseWebSockets(new WebSocketOptions
         {
             KeepAliveInterval = TimeSpan.FromSeconds(20)
         });
         app.Map(LocalBridgeConstants.Path, server.HandleRequestAsync);
+        app.Map("/quick-continue/update", server.HandleQuickContinueUpdateRequestAsync);
         await app.StartAsync(cancellationToken).ConfigureAwait(false);
         return server;
     }
@@ -87,6 +96,33 @@ internal sealed class LocalBridgeServer : IAsyncDisposable
 
         if (changed) NotifyClientCountChanged();
         return sent;
+    }
+
+    private async Task HandleQuickContinueUpdateRequestAsync(HttpContext context)
+    {
+        if (!HttpMethods.IsGet(context.Request.Method))
+        {
+            context.Response.StatusCode = StatusCodes.Status405MethodNotAllowed;
+            return;
+        }
+
+        context.Response.Headers.CacheControl = "no-store";
+        context.Response.Headers.AccessControlAllowOrigin = "*";
+
+        var updater = _quickContinueUpdate;
+        if (updater is null)
+        {
+            context.Response.StatusCode = StatusCodes.Status503ServiceUnavailable;
+            await context.Response.WriteAsJsonAsync(new
+            {
+                installedVersion = QuickContinueBundleInstaller.ReadInstalledVersion(),
+                state = "unavailable"
+            }, cancellationToken: context.RequestAborted).ConfigureAwait(false);
+            return;
+        }
+
+        var payload = await updater(context.RequestAborted).ConfigureAwait(false);
+        await context.Response.WriteAsJsonAsync(payload, cancellationToken: context.RequestAborted).ConfigureAwait(false);
     }
 
     private async Task HandleRequestAsync(HttpContext context)
