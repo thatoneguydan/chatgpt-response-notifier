@@ -26,7 +26,7 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['prompt-format.js', 'config.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.10');
+  assert.equal(manifest.version, '1.2.11');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -95,7 +95,7 @@ test('project picker is non-modal, exposes Edit, and never auto-focuses', () => 
   assert.doesNotMatch(contentSource, /\.title\s*=/);
 });
 
-test('persistent pencil Edit controls reuse the existing in-page JSON editor without hover-delay behavior', () => {
+test('persistent pencil Edit controls reuse the existing in-page JSON editor without reparenting toolbar buttons', () => {
   assert.match(hoverEditSource, /button\[aria-label="Send timestamped Continue"\]/);
   assert.match(hoverEditSource, /button\[aria-label="Project Continue"\]/);
   assert.match(hoverEditSource, /const EDIT_WRAPPER_ATTRIBUTE = 'data-quick-continue-pencil-edit'/);
@@ -105,6 +105,10 @@ test('persistent pencil Edit controls reuse the existing in-page JSON editor wit
   assert.match(hoverEditSource, /pencil\.addEventListener\('pointerleave'/);
   assert.match(hoverEditSource, /pencil\.style\.background = active/);
   assert.match(hoverEditSource, /event\.stopPropagation\(\)/);
+  assert.match(hoverEditSource, /target\.insertBefore\(createPencilButton\(\), target\.firstChild\)/);
+  assert.doesNotMatch(hoverEditSource, /target\.before\(wrapper\)|wrapper\.append\(/);
+  assert.match(hoverEditSource, /new MutationObserver\(scheduleToolbarSync\)/);
+  assert.match(hoverEditSource, /requestAnimationFrame/);
   assert.match(hoverEditSource, /button\[aria-label="Edit Quick Continue JSON"\]/);
   assert.match(hoverEditSource, /if \(projectPopover\.hidden\) projectButton\.click\(\)/);
   assert.match(hoverEditSource, /root\.querySelector\('button\[aria-label="Edit Quick Continue JSON"\]'\)\?\.click\(\)/);
@@ -149,7 +153,7 @@ test('prompt and config APIs are versioned so reinjection cannot retain stale gl
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
   assert.match(configSource, /chrome\.storage\.onChanged\.removeListener\(handleStorageChanged\)/);
-  assert.match(hoverEditSource, /const RUNTIME_VERSION = 3/);
+  assert.match(hoverEditSource, /const RUNTIME_VERSION = 4/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
   assert.match(conversationStateSource, /const RUNTIME_VERSION = 1/);
