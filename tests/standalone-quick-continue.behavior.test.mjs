@@ -14,6 +14,7 @@ const promptSource = fs.readFileSync(path.join(extensionRoot, 'prompt-format.js'
 const configSource = fs.readFileSync(path.join(extensionRoot, 'config.js'), 'utf8');
 const contentSource = fs.readFileSync(path.join(extensionRoot, 'content-script.js'), 'utf8');
 const hoverEditSource = fs.readFileSync(path.join(extensionRoot, 'hover-edit-script.js'), 'utf8');
+const conversationStateSource = fs.readFileSync(path.join(extensionRoot, 'conversation-state.js'), 'utf8');
 const installerSource = fs.readFileSync(path.join(extensionRoot, 'Install.ps1'), 'utf8');
 const updater124Source = fs.readFileSync(path.join(extensionRoot, 'Update-Installed-1.2.4.ps1'), 'utf8');
 
@@ -23,8 +24,8 @@ test('standalone extension stays background-free with only local storage permiss
   assert.deepEqual(manifest.permissions, ['storage']);
   assert.equal(manifest.host_permissions, undefined);
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
-  assert.deepEqual(manifest.content_scripts[0].js, ['prompt-format.js', 'config.js', 'content-script.js', 'hover-edit-script.js']);
-  assert.equal(manifest.version, '1.2.7');
+  assert.deepEqual(manifest.content_scripts[0].js, ['prompt-format.js', 'config.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
+  assert.equal(manifest.version, '1.2.8');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -110,6 +111,19 @@ test('clock toggle timestamps only trusted manual sends and preserves multiline 
   assert.match(hoverEditSource, /document\.removeEventListener\('keydown', handleManualSendKeydown, true\)/);
 });
 
+test('manual timestamp preference is isolated by ChatGPT conversation and follows SPA navigation', () => {
+  assert.doesNotThrow(() => new vm.Script(conversationStateSource));
+  assert.match(conversationStateSource, /STORAGE_PREFIX = 'quick-continue:manual-timestamp:'/);
+  assert.match(conversationStateSource, /function conversationIdFromUrl/);
+  assert.match(conversationStateSource, /chrome\.storage\.local\.get\(key\)/);
+  assert.match(conversationStateSource, /chrome\.storage\.local\.set\(\{ \[storageKey\(conversationId\)\]: enabled === true \}\)/);
+  assert.match(conversationStateSource, /if \(!previousConversationId && provisionalTouched\)/);
+  assert.match(conversationStateSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
+  assert.match(conversationStateSource, /navigatesuccess/);
+  assert.match(conversationStateSource, /event\?\.isTrusted !== true/);
+  assert.doesNotMatch(conversationStateSource, /XMLHttpRequest|WebSocket|fetch\(/);
+});
+
 test('prompt and config APIs are versioned so reinjection cannot retain stale globals indefinitely', () => {
   assert.match(promptSource, /const RUNTIME_VERSION = 3/);
   assert.match(promptSource, /runtimeVersion: RUNTIME_VERSION/);
@@ -121,6 +135,8 @@ test('prompt and config APIs are versioned so reinjection cannot retain stale gl
   assert.match(hoverEditSource, /const RUNTIME_VERSION = 2/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
+  assert.match(conversationStateSource, /const RUNTIME_VERSION = 1/);
+  assert.match(conversationStateSource, /__chatgptQuickContinueConversationStateRuntime/);
 });
 
 test('inline JSON Save applies through config storage without reload or refresh calls', () => {
