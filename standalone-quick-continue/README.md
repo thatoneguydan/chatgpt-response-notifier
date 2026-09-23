@@ -13,14 +13,14 @@ When ChatGPT Response Notifier is also enabled, the notifier may add its own sma
 - Click the **time at the right side of the toolbar** to toggle timestamps for ordinary manually typed ChatGPT messages. When enabled, the time gets an outline. A timestamp is prepended at the moment a manual Send click or Enter-to-send action occurs, so the draft stays untouched while you type.
 - Manual timestamp mode is remembered independently for each ChatGPT conversation. A chat with timestamps on stays on when you return to it, while another chat can stay off. A conversation with no saved preference starts off. A new unsaved chat keeps a provisional choice only until ChatGPT assigns that new conversation its ID, then that choice is stored for the new chat.
 - **Continue** and **Project** sends are excluded from the manual-message timestamp toggle because Quick Continue already renders their configured `{time}` placeholder itself.
-- Hovering **Continue** or **Project** for about 700 ms reveals a small **Edit** button beside that control. Clicking it opens the same in-page JSON editor directly, so normal prompt editing does not require locating `config.json` on disk.
+- **Continue** and **Project** each show a small **✎** immediately before the word. Hovering the pencil highlights only the pencil; clicking it opens the same in-page JSON editor directly. There is no hover delay or separate Edit button to reveal.
 - Clicking a saved project immediately sends the configured Project template with `{project}` replaced by that title.
 - `{time}` is replaced by the local timestamp at send time in either template, so the JSON controls exactly where the timestamp appears.
 - **Other project…** remains available for one-off names.
 - **Edit** opens the current raw JSON config directly inside the Project menu. **Save** validates and applies it immediately without reloading the extension or refreshing ChatGPT.
 - The Project menu normally opens upward. If that would cross the viewport top, it flips below the toolbar; if neither side fully fits, it uses the side with more room.
 - Toolbar layout syncs keep the existing toolbar visible; brief ChatGPT composer rerenders are given a 200 ms grace period before the toolbar is hidden, preventing one-frame flicker.
-- Runtime 1.2.9 adds managed self-reload/update activation while preserving 1.2.8 per-conversation timestamp persistence, 1.2.7 timestamping, 1.2.6 delayed hover editing, template-controlled timestamp placement, and existing hot-replacement behavior.
+- Runtime 1.2.10 replaces delayed hover editing with persistent per-button pencil controls while preserving 1.2.9 managed self-reload/update activation, 1.2.8 per-conversation timestamp persistence, 1.2.7 timestamping, template-controlled timestamp placement, and existing hot-replacement behavior.
 
 The bundled `config.json` is the readable/default configuration:
 
@@ -48,7 +48,7 @@ The installed default file is:
 %LOCALAPPDATA%\ChatGPTQuickContinue\Extension\config.json
 ```
 
-Editing that physical file changes the defaults used by a fresh/reset configuration; normal ongoing edits should use the hover **Edit** control or **Project > Edit** so they apply immediately.
+Editing that physical file changes the defaults used by a fresh/reset configuration; normal ongoing edits should use either pencil control or **Project > Edit** so they apply immediately.
 
 ## Managed updates
 
@@ -66,7 +66,7 @@ Editing that physical file changes the defaults used by a fresh/reset configurat
 - Quick Continue's own programmatic Continue/Project Send clicks are ignored by the manual timestamp hook because they are not trusted user events.
 - A manually entered message that already begins with a bracketed time is not stamped again.
 - Per-chat timestamp state is kept only in Chrome local extension storage; switching chats performs no ChatGPT network request.
-- The Project menu and hover Edit affordance remain available for config editing even when sending is unavailable.
+- The Project menu and pencil Edit controls remain available for config editing even when sending is unavailable.
 - Actual send controls remain available while ChatGPT is generating, so Continue/Project can be queued as follow-up messages; they are disabled when the composer already has text.
 - Auto-send uses ChatGPT's real enabled Send button.
 - Each operator action causes at most one Send-button click. There are no automatic retries.
