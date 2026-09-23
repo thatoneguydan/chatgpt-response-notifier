@@ -1,10 +1,10 @@
 # ChatGPT Quick Continue
 
-A tiny, separately installable Chrome extension for timestamped continuation prompts on `chatgpt.com`.
+A small, separately installable Chrome extension for timestamped continuation prompts on `chatgpt.com`.
 
-It is intentionally independent from ChatGPT Response Notifier. It has no service worker, notification system, response monitoring, recovery loop, helper connection, `webRequest`, or background network behavior. The only added Chrome permission is `storage`, used for the live local JSON config and the per-conversation manual timestamp preference.
+Quick Continue remains separate from ChatGPT Response Notifier for its actual send controls and per-chat timestamp/config state. When the notifier helper is installed, Quick Continue also uses that already-running local helper as a narrowly scoped update transport: the helper downloads a pinned, hashed Quick Continue release into `%LOCALAPPDATA%\ChatGPTQuickContinue\Extension`, then Quick Continue reloads itself and reinjects the current runtime into already-open ChatGPT tabs. If the helper is unavailable, Quick Continue keeps working normally; only managed updates pause.
 
-When ChatGPT Response Notifier is also enabled, the notifier may add its own small monitoring-state light immediately before **Continue** plus a compact active-chat auto-continue countdown above the controls. Quick Continue does not read or write notifier state itself; disabling the notifier removes that integration without changing Quick Continue's send controls.
+When ChatGPT Response Notifier is also enabled, the notifier may add its own small monitoring-state light immediately before **Continue** plus a compact active-chat auto-continue countdown above the controls. Quick Continue does not read or write notifier automation state itself; disabling the notifier removes that integration without changing Quick Continue's send controls.
 
 ## Controls
 
@@ -20,7 +20,7 @@ When ChatGPT Response Notifier is also enabled, the notifier may add its own sma
 - **Edit** opens the current raw JSON config directly inside the Project menu. **Save** validates and applies it immediately without reloading the extension or refreshing ChatGPT.
 - The Project menu normally opens upward. If that would cross the viewport top, it flips below the toolbar; if neither side fully fits, it uses the side with more room.
 - Toolbar layout syncs keep the existing toolbar visible; brief ChatGPT composer rerenders are given a 200 ms grace period before the toolbar is hidden, preventing one-frame flicker.
-- Runtime 1.2.8 adds per-conversation persistence for the manual-message timestamp toggle while preserving 1.2.7 timestamping, 1.2.6 delayed hover editing, template-controlled timestamp placement, and existing hot-replacement/reattachment behavior. Existing saved templates that predate `{time}` are automatically normalized to the equivalent `[{time}] ...` form, preserving their current output while making the placeholder visible in the editor.
+- Runtime 1.2.9 adds managed self-reload/update activation while preserving 1.2.8 per-conversation timestamp persistence, 1.2.7 timestamping, 1.2.6 delayed hover editing, template-controlled timestamp placement, and existing hot-replacement behavior.
 
 The bundled `config.json` is the readable/default configuration:
 
@@ -50,6 +50,14 @@ The installed default file is:
 
 Editing that physical file changes the defaults used by a fresh/reset configuration; normal ongoing edits should use the hover **Edit** control or **Project > Edit** so they apply immediately.
 
+## Managed updates
+
+- The existing ChatGPT Response Notifier Windows helper checks the published Quick Continue update feed and only accepts release ZIPs from this repository's GitHub release route with the published SHA-256 digest.
+- Updates are written in place to the stable unpacked-extension directory with `manifest.json` copied last. The installed `config.json` is preserved.
+- Quick Continue's small service worker polls only the loopback helper (`127.0.0.1`) every 15 minutes and on browser/extension startup. It does not download code itself.
+- When the helper reports a different installed version, Quick Continue calls `chrome.runtime.reload()` on itself. The freshly loaded worker then reinjects the current extension scripts into already-open `chatgpt.com` tabs, so page refreshes are not required.
+- If the notifier helper is absent or stopped, the update check quietly does nothing. Continue/Project/timestamp functionality remains local and usable.
+
 ## Safety behavior
 
 - Existing ChatGPT drafts are never overwritten by Continue or Project.
@@ -63,7 +71,7 @@ Editing that physical file changes the defaults used by a fresh/reset configurat
 - Auto-send uses ChatGPT's real enabled Send button.
 - Each operator action causes at most one Send-button click. There are no automatic retries.
 - If the Send button does not become ready, the generated prompt is left in the composer for inspection/manual sending.
-- Config storage is local to the extension; there is no external config sync or network request.
+- Config storage is local to the extension; managed update traffic is limited to the local notifier helper.
 
 ## Install
 
@@ -73,10 +81,8 @@ Run the included installer from PowerShell with a temporary execution-policy byp
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
 ```
 
-It copies the extension and bundled config to the stable path `%LOCALAPPDATA%\ChatGPTQuickContinue\Extension` and prints the one-time **Load unpacked** steps for `chrome://extensions`. It does not open Chrome, change Chrome policy, write the registry, or install any background service.
+It copies the extension and bundled config to the stable path `%LOCALAPPDATA%\ChatGPTQuickContinue\Extension` and prints the one-time **Load unpacked** steps for `chrome://extensions`.
 
-For an existing installation, use the version-specific updater included with the release from Dan's normal interactive Windows account. The repository's self-hosted runner executes as `NetworkService` and is intentionally not permitted to write this user-profile extension folder. The updater replaces the changed runtime files while preserving the installed `config.json`; the live JSON saved through the in-page editor and per-conversation timestamp preferences remain in Chrome local extension storage.
+Once 1.2.9 or newer has been loaded once, later managed releases require no PowerShell command, no manual extension reload, and no ChatGPT page refresh. The existing notifier helper installs the files and Quick Continue reloads/reinjects itself.
 
-After updating to 1.2.8, reload the unpacked extension in `chrome://extensions` and reload each already-open ChatGPT host page before those pages run the new per-chat timestamp behavior. A newly opened ChatGPT page after the extension reload already gets the current runtime.
-
-Because this is a separate extension, it can stay enabled while ChatGPT Response Notifier is disabled or under repair. If the notifier is later enabled too, Quick Continue suppresses the notifier's older quick-prompt toolbar so only the standalone controls are shown.
+Because this is a separate extension, it can stay enabled while ChatGPT Response Notifier is disabled or under repair. Its controls continue to work in that state; only managed update delivery waits for the notifier helper to return. If the notifier is enabled too, Quick Continue suppresses the notifier's older quick-prompt toolbar so only the standalone controls are shown.
