@@ -128,3 +128,45 @@ jobs:
             git push origin HEAD:main
             if ($LASTEXITCODE -ne 0) { throw 'Could not publish the Quick Continue update feed.' }
           }
+
+      - name: Install and verify released Quick Continue on Glass
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $feedPath = '.\standalone-quick-continue\update\manifest.json'
+          $feed = Get-Content -LiteralPath $feedPath -Raw | ConvertFrom-Json
+          $expectedVersion = [string]$feed.version
+          if ([string]::IsNullOrWhiteSpace($expectedVersion)) {
+            throw 'Published Quick Continue update feed has no version.'
+          }
+
+          $endpoint = 'http://127.0.0.1:38473/quick-continue/update'
+          $lastResponse = $null
+          $lastFailure = $null
+          $verified = $false
+
+          for ($attempt = 1; $attempt -le 6; $attempt += 1) {
+            try {
+              $lastResponse = Invoke-RestMethod -Uri $endpoint -Method Get -TimeoutSec 300
+              $installedVersion = [string]$lastResponse.installedVersion
+              $state = [string]$lastResponse.state
+              Write-Host "Quick Continue deployment acceptance attempt $attempt`: expected=$expectedVersion installed=$installedVersion state=$state"
+              if ($installedVersion -eq $expectedVersion) {
+                $verified = $true
+                break
+              }
+              $lastFailure = "helper returned installedVersion=$installedVersion state=$state"
+            }
+            catch {
+              $lastFailure = $_.Exception.Message
+              Write-Warning "Quick Continue deployment acceptance attempt $attempt failed: $lastFailure"
+            }
+
+            if ($attempt -lt 6) { Start-Sleep -Seconds 5 }
+          }
+
+          if (-not $verified) {
+            throw "Quick Continue $expectedVersion was published but Glass did not verify that version through the local helper. Last result: $lastFailure"
+          }
+
+          Write-Host "Quick Continue $expectedVersion is installed on Glass and confirmed by the local helper."
