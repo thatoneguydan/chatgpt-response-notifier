@@ -6,6 +6,7 @@ on:
     paths:
       - 'standalone-quick-continue/**'
       - '.github/workflows/quick-continue-release.yml'
+      - '!standalone-quick-continue/update/manifest.json'
   workflow_dispatch:
 
 permissions:
@@ -78,11 +79,13 @@ jobs:
           Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal -Force
           $sha256 = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
 
-          gh release view $tag --json targetCommitish *> $null
+          gh release view $tag --json tagName *> $null
           $releaseExists = $LASTEXITCODE -eq 0
           if ($releaseExists) {
-            $existing = gh release view $tag --json targetCommitish | ConvertFrom-Json
-            if ([string]$existing.targetCommitish -ne $sourceCommit) {
+            git fetch origin "refs/tags/${tag}:refs/tags/${tag}" --force
+            if ($LASTEXITCODE -ne 0) { throw 'Could not fetch existing Quick Continue release tag.' }
+            $existingSource = (git rev-list -n 1 $tag).Trim()
+            if ($existingSource -ne $sourceCommit) {
               throw "Quick Continue tag $tag already exists for a different source commit. Bump the Quick Continue version before publishing new runtime changes."
             }
             gh release upload $tag $zip --clobber
