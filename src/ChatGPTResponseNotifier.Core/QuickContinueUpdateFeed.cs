@@ -49,6 +49,10 @@ public static class QuickContinueUpdateFeed
             throw new InvalidDataException("Quick Continue update download URL is outside the pinned release route.");
         }
 
-        return new PublicUpdateManifest(version, sourceCommit, downloadUrl, sha256);
+        return new PublicUpdateManifest(
+            Version: version,
+            SourceCommit: sourceCommit,
+            DownloadUrl: downloadUrl,
+            Sha256: sha256);
     }
 }
