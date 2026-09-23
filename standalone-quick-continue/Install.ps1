@@ -12,7 +12,8 @@ $requiredFiles = @(
     'config.js',
     'config.json',
     'content-script.js',
-    'hover-edit-script.js'
+    'hover-edit-script.js',
+    'conversation-state.js'
 )
 
 foreach ($file in $requiredFiles) {
@@ -31,6 +32,7 @@ $managedFiles = @(
     'config.json',
     'content-script.js',
     'hover-edit-script.js',
+    'conversation-state.js',
     'README.md'
 )
 
