@@ -1,0 +1,115 @@
+name: Build and publish Quick Continue release
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'standalone-quick-continue/**'
+      - '.github/workflows/quick-continue-release.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Validate Quick Continue
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          foreach ($script in @(
+            '.\standalone-quick-continue\background.js',
+            '.\standalone-quick-continue\prompt-format.js',
+            '.\standalone-quick-continue\config.js',
+            '.\standalone-quick-continue\content-script.js',
+            '.\standalone-quick-continue\hover-edit-script.js',
+            '.\standalone-quick-continue\conversation-state.js'
+          )) {
+            node --check $script
+            if ($LASTEXITCODE -ne 0) { throw "Quick Continue syntax validation failed: $script" }
+          }
+          node --test .\tests\standalone-quick-continue.behavior.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Quick Continue behavior tests failed.' }
+
+      - name: Build release and publish update feed
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $manifestPath = '.\standalone-quick-continue\manifest.json'
+          $manifest = Get-Content -LiteralPath $manifestPath -Raw | ConvertFrom-Json
+          $version = [string]$manifest.version
+          if ([string]::IsNullOrWhiteSpace($version)) { throw 'Quick Continue manifest version is empty.' }
+          $tag = "quick-continue-v$version"
+          $sourceCommit = $env:GITHUB_SHA
+          $assetName = "ChatGPT-Quick-Continue-$version.zip"
+          $artifactRoot = Join-Path $env:RUNNER_TEMP ("chatgpt-quick-continue-release-$version")
+          $stage = Join-Path $artifactRoot 'stage'
+          Remove-Item -LiteralPath $artifactRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+
+          $runtimeFiles = @(
+            'manifest.json',
+            'background.js',
+            'prompt-format.js',
+            'config.js',
+            'config.json',
+            'content-script.js',
+            'hover-edit-script.js',
+            'conversation-state.js',
+            'README.md'
+          )
+          foreach ($name in $runtimeFiles) {
+            $source = Join-Path '.\standalone-quick-continue' $name
+            if (-not (Test-Path -LiteralPath $source -PathType Leaf)) { throw "Quick Continue release file missing: $name" }
+            Copy-Item -LiteralPath $source -Destination (Join-Path $stage $name) -Force
+          }
+
+          $zip = Join-Path $artifactRoot $assetName
+          Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zip -CompressionLevel Optimal -Force
+          $sha256 = (Get-FileHash -LiteralPath $zip -Algorithm SHA256).Hash.ToLowerInvariant()
+
+          gh release view $tag --json targetCommitish *> $null
+          $releaseExists = $LASTEXITCODE -eq 0
+          if ($releaseExists) {
+            $existing = gh release view $tag --json targetCommitish | ConvertFrom-Json
+            if ([string]$existing.targetCommitish -ne $sourceCommit) {
+              throw "Quick Continue tag $tag already exists for a different source commit. Bump the Quick Continue version before publishing new runtime changes."
+            }
+            gh release upload $tag $zip --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Could not refresh Quick Continue release asset.' }
+          }
+          else {
+            gh release create $tag $zip --target $sourceCommit --title "ChatGPT Quick Continue $version" --notes "Managed ChatGPT Quick Continue release $version."
+            if ($LASTEXITCODE -ne 0) { throw 'Could not create Quick Continue release.' }
+          }
+
+          $downloadUrl = "https://github.com/thatoneguydan/chatgpt-response-notifier/releases/download/$tag/$assetName"
+          $updateDirectory = '.\standalone-quick-continue\update'
+          New-Item -ItemType Directory -Path $updateDirectory -Force | Out-Null
+          $updateManifest = [ordered]@{
+            schemaVersion = 1
+            version = $version
+            sourceCommit = $sourceCommit
+            downloadUrl = $downloadUrl
+            sha256 = $sha256
+          }
+          $updateManifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $updateDirectory 'manifest.json') -Encoding UTF8
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add standalone-quick-continue/update/manifest.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "Publish Quick Continue update manifest for $tag"
+            git push origin HEAD:main
+          }
