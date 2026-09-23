@@ -10,13 +10,14 @@ When ChatGPT Response Notifier is also enabled, the notifier may add its own sma
 
 - **Continue** immediately sends the configured Continue template.
 - **Project** opens a compact non-modal project picker.
+- Hovering **Continue** or **Project** for about 700 ms reveals a small **Edit** button beside that control. Clicking it opens the same in-page JSON editor directly, so normal prompt editing does not require locating `config.json` on disk.
 - Clicking a saved project immediately sends the configured Project template with `{project}` replaced by that title.
 - `{time}` is replaced by the local timestamp at send time in either template, so the JSON controls exactly where the timestamp appears.
 - **Other project…** remains available for one-off names.
 - **Edit** opens the current raw JSON config directly inside the Project menu. **Save** validates and applies it immediately without reloading the extension or refreshing ChatGPT.
 - The Project menu normally opens upward. If that would cross the viewport top, it flips below the toolbar; if neither side fully fits, it uses the side with more room.
 - Toolbar layout syncs keep the existing toolbar visible; brief ChatGPT composer rerenders are given a 200 ms grace period before the toolbar is hidden, preventing one-frame flicker.
-- Runtime 1.2.5 preserves the existing hot-replacement/reattachment behavior and adds template-controlled timestamp placement. Existing saved templates that predate `{time}` are automatically normalized to the equivalent `[{time}] ...` form, preserving their current output while making the placeholder visible in the editor.
+- Runtime 1.2.6 adds the delayed hover-edit affordance while preserving the 1.2.5 template-controlled timestamp placement and existing hot-replacement/reattachment behavior. Existing saved templates that predate `{time}` are automatically normalized to the equivalent `[{time}] ...` form, preserving their current output while making the placeholder visible in the editor.
 
 The bundled `config.json` is the readable/default configuration:
 
@@ -44,12 +45,12 @@ The installed default file is:
 %LOCALAPPDATA%\ChatGPTQuickContinue\Extension\config.json
 ```
 
-Editing that physical file changes the defaults used by a fresh/reset configuration; normal ongoing edits should use **Project > Edit** so they apply immediately.
+Editing that physical file changes the defaults used by a fresh/reset configuration; normal ongoing edits should use the hover **Edit** control or **Project > Edit** so they apply immediately.
 
 ## Safety behavior
 
 - Existing ChatGPT drafts are never overwritten.
-- The Project menu remains available for config editing even when sending is unavailable.
+- The Project menu and hover Edit affordance remain available for config editing even when sending is unavailable.
 - Actual send controls remain available while ChatGPT is generating, so Continue/Project can be queued as follow-up messages; they are disabled when the composer already has text.
 - Auto-send uses ChatGPT's real enabled Send button.
 - Each operator action causes at most one Send-button click. There are no automatic retries.
@@ -66,8 +67,8 @@ powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Install.ps1
 
 It copies the extension and bundled config to the stable path `%LOCALAPPDATA%\ChatGPTQuickContinue\Extension` and prints the one-time **Load unpacked** steps for `chrome://extensions`. It does not open Chrome, change Chrome policy, write the registry, or install any background service.
 
-For an existing installation, use the version-specific updater included with the release from Dan's normal interactive Windows account. The repository's self-hosted runner executes as `NetworkService` and is intentionally not permitted to write this user-profile extension folder. The updater replaces the changed runtime files while preserving the installed `config.json`; the live JSON saved through **Project > Edit** remains in Chrome local extension storage.
+For an existing installation, use the version-specific updater included with the release from Dan's normal interactive Windows account. The repository's self-hosted runner executes as `NetworkService` and is intentionally not permitted to write this user-profile extension folder. The updater replaces the changed runtime files while preserving the installed `config.json`; the live JSON saved through the in-page editor remains in Chrome local extension storage.
 
-Because template/runtime files changed in 1.2.5, Chrome requires reloading the unpacked extension and reloading each already-open ChatGPT host page before those pages run the new code. A newly opened ChatGPT page after the extension reload already gets the current runtime.
+Because the manifest gains the hover-edit content script in 1.2.6, Chrome requires reloading the unpacked extension and reloading each already-open ChatGPT host page before those pages run the new code. A newly opened ChatGPT page after the extension reload already gets the current runtime.
 
 Because this is a separate extension, it can stay enabled while ChatGPT Response Notifier is disabled or under repair. If the notifier is later enabled too, Quick Continue suppresses the notifier's older quick-prompt toolbar so only the standalone controls are shown.
