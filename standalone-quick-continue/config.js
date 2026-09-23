@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
   const previousRuntime = globalThis.ChatGPTQuickContinueConfig;
   if (Number(previousRuntime?.runtimeVersion || 0) === RUNTIME_VERSION) return;
   try { previousRuntime?.dispose?.(); } catch {}
@@ -13,6 +13,11 @@
   let loadPromise = null;
 
   const normalizeInline = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+  const ensureTimePlaceholder = (value) => {
+    const text = normalizeInline(value);
+    if (!text || text.includes('{time}')) return text;
+    return `[{time}] ${text}`;
+  };
 
   function normalizeProjectList(value) {
     if (!Array.isArray(value)) throw new Error('"projects" must be an array.');
@@ -38,8 +43,8 @@
       throw new Error('Config must be a JSON object.');
     }
 
-    const continueText = normalizeInline(value.continueText);
-    const projectText = normalizeInline(value.projectText);
+    const continueText = ensureTimePlaceholder(value.continueText);
+    const projectText = ensureTimePlaceholder(value.projectText);
 
     if (!continueText) throw new Error('"continueText" must not be blank.');
     if (!projectText) throw new Error('"projectText" must not be blank.');
