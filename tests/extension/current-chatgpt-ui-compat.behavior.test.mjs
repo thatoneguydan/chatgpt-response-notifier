@@ -87,10 +87,10 @@ test('recovery hard-refresh cadence is persistently gated to at least sixty seco
 });
 
 test('service worker installs injection compatibility before background and refresh policy after it', () => {
-  assert.match(
-    bootstrap,
-    /importScripts\('page-runtime-compat-background\.js', 'background\.js', 'recovery-refresh-policy-background\.js'\)/
-  );
+  const compatAt = bootstrap.indexOf("importScripts('page-runtime-compat-background.js')");
+  const backgroundAt = bootstrap.indexOf("importScripts('background.js')");
+  const refreshAt = bootstrap.indexOf("importScripts('recovery-refresh-policy-background.js')");
+  assert.ok(compatAt >= 0 && backgroundAt > compatAt && refreshAt > backgroundAt);
   assert.doesNotMatch(runtimeCompat, /\bfetch\s*\(|XMLHttpRequest|WebSocket|backend-api/);
   assert.doesNotMatch(refreshPolicy, /\bfetch\s*\(|XMLHttpRequest|WebSocket|backend-api/);
 });
