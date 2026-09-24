@@ -6,6 +6,7 @@ const read = (relative) => readFileSync(new URL(`../../${relative}`, import.meta
 const feed = read('src/ChatGPTResponseNotifier.Core/QuickContinueUpdateFeed.cs');
 const installer = read('src/ChatGPTResponseNotifier.Core/QuickContinueBundleInstaller.cs');
 const service = read('src/ChatGPTResponseNotifier.Host/QuickContinueUpdateService.cs');
+const publicUpdateService = read('src/ChatGPTResponseNotifier.Host/PublicUpdateService.cs');
 const bridge = read('src/ChatGPTResponseNotifier.Host/LocalBridgeServer.cs');
 const app = read('src/ChatGPTResponseNotifier.Host/NativeHostApplication.cs');
 const quickWorkflow = read('.github/workflows/quick-continue-release.yml');
@@ -27,6 +28,16 @@ test('Quick Continue feed checks bypass stale CDN and HTTP client caches', () =>
   assert.match(service, /NoStore = true/);
   assert.match(service, /_http\.SendAsync\(manifestRequest, HttpCompletionOption\.ResponseContentRead/);
   assert.doesNotMatch(service, /_http\.GetAsync\(QuickContinueUpdateFeed\.ManifestUrl/);
+});
+
+test('notifier public feed checks also bypass stale CDN and HTTP client caches', () => {
+  assert.match(publicUpdateService, /cacheBust=\{DateTimeOffset\.UtcNow\.ToUnixTimeMilliseconds\(\)\}/);
+  assert.match(publicUpdateService, /new HttpRequestMessage\(HttpMethod\.Get, manifestUrl\)/);
+  assert.match(publicUpdateService, /CacheControlHeaderValue/);
+  assert.match(publicUpdateService, /NoCache = true/);
+  assert.match(publicUpdateService, /NoStore = true/);
+  assert.match(publicUpdateService, /_http\.SendAsync\(manifestRequest, HttpCompletionOption\.ResponseContentRead/);
+  assert.doesNotMatch(publicUpdateService, /_http\.GetAsync\(PublicUpdateFeed\.ManifestUrl/);
 });
 
 test('helper updates only the fixed Quick Continue user-profile root and preserves config', () => {
