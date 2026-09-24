@@ -33,14 +33,6 @@
   const nativeClosest = Element.prototype.closest;
   const nativeGetAttribute = Element.prototype.getAttribute;
 
-  function nativeQuery(root, selector) {
-    try {
-      if (root instanceof Document) return nativeDocumentQuerySelector.call(root, selector);
-      if (root instanceof Element) return nativeElementQuerySelector.call(root, selector);
-    } catch {}
-    return null;
-  }
-
   function nativeQueryAll(root, selector) {
     try {
       if (root instanceof Document) return Array.from(nativeDocumentQuerySelectorAll.call(root, selector));
@@ -70,8 +62,10 @@
     if (left === right) return 0;
     try {
       const position = left.compareDocumentPosition(right);
-      if (position & Node.DOCUMENT_POSITION_FOLLOWING) return -1;
-      if (position & Node.DOCUMENT_POSITION_PRECEDING) return 1;
+      const following = typeof Node === 'function' ? Node.DOCUMENT_POSITION_FOLLOWING : 4;
+      const preceding = typeof Node === 'function' ? Node.DOCUMENT_POSITION_PRECEDING : 2;
+      if (position & following) return -1;
+      if (position & preceding) return 1;
     } catch {}
     return 0;
   }
@@ -84,7 +78,9 @@
     const combined = [...legacy];
     for (const roleNode of roles) {
       if (legacy.some((turn) => turn === roleNode || turn.contains?.(roleNode))) continue;
-      const sameRoleAncestor = nativeClosestTo(roleNode.parentElement || roleNode, `[data-message-author-role="${semanticRole(roleNode)}"], [data-turn="${semanticRole(roleNode)}"]`);
+      const role = semanticRole(roleNode);
+      const parent = roleNode.parentElement || roleNode;
+      const sameRoleAncestor = nativeClosestTo(parent, `[data-message-author-role="${role}"], [data-turn="${role}"]`);
       if (sameRoleAncestor && sameRoleAncestor !== roleNode) continue;
       combined.push(roleNode);
     }
@@ -119,14 +115,11 @@
       'form textarea',
       '[contenteditable="true"]'
     ];
-    const candidates = [];
     for (const selector of selectors) {
-      for (const node of nativeQueryAll(root, selector)) {
-        if (usableComposer(node)) candidates.push(node);
-      }
-      if (candidates.length) break;
+      const candidates = nativeQueryAll(root, selector).filter(usableComposer);
+      if (candidates.length) return candidates[candidates.length - 1];
     }
-    return candidates[candidates.length - 1] || null;
+    return null;
   }
 
   function enabledButton(button) {
@@ -134,8 +127,7 @@
   }
 
   function fallbackSend(root) {
-    const candidates = nativeQueryAll(root, 'button').filter(enabledButton);
-    for (const button of candidates) {
+    for (const button of nativeQueryAll(root, 'button').filter(enabledButton)) {
       const testId = String(nativeAttribute(button, 'data-testid') || '').toLowerCase();
       const label = String(nativeAttribute(button, 'aria-label') || '').trim().toLowerCase();
       if (/^(send|send prompt|send message)$/.test(label)) return button;
@@ -145,8 +137,7 @@
   }
 
   function fallbackStop(root) {
-    const buttons = nativeQueryAll(root, 'button');
-    for (const button of buttons) {
+    for (const button of nativeQueryAll(root, 'button')) {
       if (!visibleEnough(button)) continue;
       const testId = String(nativeAttribute(button, 'data-testid') || '').toLowerCase();
       const label = String(nativeAttribute(button, 'aria-label') || '').trim().toLowerCase();
@@ -157,7 +148,8 @@
   }
 
   function compatibleQuery(root, selector, original) {
-    const direct = original.call(root, selector);
+    let direct = null;
+    try { direct = original.call(root, selector); } catch { return null; }
     if (direct) return direct;
     if (LEGACY_COMPOSER_SELECTORS.has(selector)) return fallbackComposer(root);
     if (LEGACY_SEND_SELECTORS.has(selector)) return fallbackSend(root);
@@ -165,34 +157,34 @@
     return null;
   }
 
-  Document.prototype.querySelector = function notifierCompatDocumentQuerySelector(selector) {
+  function notifierCompatDocumentQuerySelector(selector) {
     return compatibleQuery(this, String(selector || ''), nativeDocumentQuerySelector);
-  };
+  }
 
-  Element.prototype.querySelector = function notifierCompatElementQuerySelector(selector) {
-    return compatibleQuery(this, String(selector || ''), nativeElementQuerySelector);
-  };
-
-  Document.prototype.querySelectorAll = function notifierCompatDocumentQuerySelectorAll(selector) {
+  function notifierCompatDocumentQuerySelectorAll(selector) {
     const value = String(selector || '');
     if (value === LEGACY_TURN_SELECTOR) return compatibleTurns(this);
     return nativeDocumentQuerySelectorAll.call(this, selector);
-  };
+  }
 
-  Element.prototype.querySelectorAll = function notifierCompatElementQuerySelectorAll(selector) {
+  function notifierCompatElementQuerySelector(selector) {
+    return compatibleQuery(this, String(selector || ''), nativeElementQuerySelector);
+  }
+
+  function notifierCompatElementQuerySelectorAll(selector) {
     const value = String(selector || '');
     if (value === LEGACY_TURN_SELECTOR) return compatibleTurns(this);
     return nativeElementQuerySelectorAll.call(this, selector);
-  };
+  }
 
-  Element.prototype.closest = function notifierCompatClosest(selector) {
+  function notifierCompatClosest(selector) {
     const value = String(selector || '');
     const direct = nativeClosest.call(this, selector);
     if (direct || value !== LEGACY_TURN_SELECTOR) return direct;
     return nativeClosestTo(this, SEMANTIC_ROLE_SELECTOR);
-  };
+  }
 
-  Element.prototype.getAttribute = function notifierCompatGetAttribute(name) {
+  function notifierCompatGetAttribute(name) {
     const value = nativeGetAttribute.call(this, name);
     if (value != null || String(name || '').toLowerCase() !== 'data-testid') return value;
     const role = semanticRole(this);
@@ -208,7 +200,14 @@
     const roles = nativeQueryAll(document, SEMANTIC_ROLE_SELECTOR).filter((node) => semanticRole(node));
     const index = Math.max(0, roles.indexOf(this));
     return `conversation-turn-compat-${role}-${index}`;
-  };
+  }
+
+  Document.prototype.querySelector = notifierCompatDocumentQuerySelector;
+  Document.prototype.querySelectorAll = notifierCompatDocumentQuerySelectorAll;
+  Element.prototype.querySelector = notifierCompatElementQuerySelector;
+  Element.prototype.querySelectorAll = notifierCompatElementQuerySelectorAll;
+  Element.prototype.closest = notifierCompatClosest;
+  Element.prototype.getAttribute = notifierCompatGetAttribute;
 
   const runtime = {
     version: RUNTIME_VERSION,
@@ -226,44 +225,6 @@
       if (globalThis.__chatgptNotifierPageDomCompat === runtime) delete globalThis.__chatgptNotifierPageDomCompat;
     }
   };
-
-  // Named declarations are intentionally used so dispose() can compare function identities.
-  function notifierCompatDocumentQuerySelector(selector) { return compatibleQuery(this, String(selector || ''), nativeDocumentQuerySelector); }
-  function notifierCompatDocumentQuerySelectorAll(selector) {
-    const value = String(selector || '');
-    if (value === LEGACY_TURN_SELECTOR) return compatibleTurns(this);
-    return nativeDocumentQuerySelectorAll.call(this, selector);
-  }
-  function notifierCompatElementQuerySelector(selector) { return compatibleQuery(this, String(selector || ''), nativeElementQuerySelector); }
-  function notifierCompatElementQuerySelectorAll(selector) {
-    const value = String(selector || '');
-    if (value === LEGACY_TURN_SELECTOR) return compatibleTurns(this);
-    return nativeElementQuerySelectorAll.call(this, selector);
-  }
-  function notifierCompatClosest(selector) {
-    const value = String(selector || '');
-    const direct = nativeClosest.call(this, selector);
-    if (direct || value !== LEGACY_TURN_SELECTOR) return direct;
-    return nativeClosestTo(this, SEMANTIC_ROLE_SELECTOR);
-  }
-  function notifierCompatGetAttribute(name) {
-    const value = nativeGetAttribute.call(this, name);
-    if (value != null || String(name || '').toLowerCase() !== 'data-testid') return value;
-    const role = semanticRole(this);
-    if (!role) return value;
-    const messageId = String(nativeAttribute(this, 'data-message-id') || nativeAttribute(this, 'data-turn-id') || '').trim();
-    if (messageId) return `conversation-turn-${messageId}`;
-    const roles = nativeQueryAll(document, SEMANTIC_ROLE_SELECTOR).filter((node) => semanticRole(node));
-    const index = Math.max(0, roles.indexOf(this));
-    return `conversation-turn-compat-${role}-${index}`;
-  }
-
-  Document.prototype.querySelector = notifierCompatDocumentQuerySelector;
-  Document.prototype.querySelectorAll = notifierCompatDocumentQuerySelectorAll;
-  Element.prototype.querySelector = notifierCompatElementQuerySelector;
-  Element.prototype.querySelectorAll = notifierCompatElementQuerySelectorAll;
-  Element.prototype.closest = notifierCompatClosest;
-  Element.prototype.getAttribute = notifierCompatGetAttribute;
 
   globalThis.__chatgptNotifierPageDomCompat = runtime;
 })();
