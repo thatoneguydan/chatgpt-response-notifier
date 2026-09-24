@@ -28,7 +28,6 @@
         "https://chatgpt.com/*"
       ],
       "js": [
-        "page-dom-compat.js",
         "attachment-script.js",
         "content-script.js",
         "persistence-script.js",
