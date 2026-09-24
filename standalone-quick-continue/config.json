@@ -1,7 +1,7 @@
 {
   "continueText": "[{time}] Continue until you finish or need something from me.",
   "projectText": "[{time}] Continue {project} from canonical GitHub state until you finish or need me.",
-  "manualTimestampText": "[{time}]",
+  "manualTimestampText": "[{time}] {message}",
   "projects": [
     "campaign desk",
     "notifier extension",
