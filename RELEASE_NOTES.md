@@ -1,7 +1,6 @@
-# ChatGPT Response Notifier 0.9.64
+# ChatGPT Response Notifier 0.9.65
 
-- The existing Windows helper now also manages releases for the separate ChatGPT Quick Continue extension when that extension is installed at its stable user-profile path.
-- Quick Continue updates are accepted only from the pinned repository release route with the published SHA-256 digest, preserve the installed config defaults, and publish the extension manifest last.
-- A narrow loopback update endpoint lets Quick Continue detect the helper-installed version without opening the notifier's privileged WebSocket bridge to another extension.
-- Quick Continue 1.2.9 adds a small service worker that checks only the loopback helper, reloads its own extension when the installed version changes, and reinjects the current runtime into already-open ChatGPT tabs.
-- If the notifier helper is unavailable, Quick Continue's Continue/Project/timestamp features keep working; only managed update delivery pauses.
+- Quick Continue update checks now bypass stale raw-GitHub/CDN caches by using a unique manifest request URL plus explicit no-cache/no-store headers.
+- This prevents the Windows helper from remaining stuck on an older Quick Continue feed after a newer release has already been published.
+- Quick Continue 1.2.14 fixes the in-page JSON editor after managed hot updates by disposing stale page runtimes before rebinding them to the current config API.
+- Existing Quick Continue config and per-conversation timestamp state remain preserved across the update.
