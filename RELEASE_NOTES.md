@@ -1,6 +1,6 @@
-# ChatGPT Response Notifier 0.9.68
+# ChatGPT Response Notifier 0.9.69
 
-- `INCOMPLETE_CONTINUE` and the other incomplete work-status codes now preserve the existing auto-continue countdown and attempts-used state instead of clearing or replenishing them before a continuation is confirmed.
-- If an incomplete status is observed after an older runtime has already lost its watchdog timer, the notifier repairs the state with a bounded retry rather than going inert.
-- Work-status handling now defaults recognized non-stop statuses to continuation; only `PLANNING_ACTIVE`, `COMPLETE_APPLIED`, `COMPLETE_NO_CHANGES`, and `BLOCKED_HUMAN` are explicit status-driven stops.
-- Explicit operator resets, explicit terminal/blocked states, and the existing three-send watchdog cap remain authoritative.
+- A new ChatGPT request while the green automation control is active now re-arms a stopped or missing auto-continue watchdog instead of inheriting the previous turn's stopped state.
+- During the short request/DOM ordering window, the prior prompt and its terminal footer are withheld from the new request so an old `COMPLETE_*` footer cannot immediately stop the freshly re-armed watchdog.
+- Normal active watchdogs are not re-armed on every request, so automatic continuations still retain the existing three-send cap instead of resetting their budget.
+- A terminal status that belongs to the newly rendered prompt remains authoritative; explicit operator pause and `BLOCKED_HUMAN` behavior are unchanged.
