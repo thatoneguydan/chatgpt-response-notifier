@@ -1,12 +1,14 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 5;
+  const RUNTIME_VERSION = 6;
   const previousRuntime = globalThis.__chatgptQuickContinueHoverEditRuntime;
   if (Number(previousRuntime?.version || 0) === RUNTIME_VERSION) return;
   const restoredTimestampState = Boolean(previousRuntime?.manualTimestampEnabled);
   try { previousRuntime?.dispose?.(); } catch {}
 
+  const prompts = globalThis.ChatGPTQuickContinuePrompts;
+  const configApi = globalThis.ChatGPTQuickContinueConfig;
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const CLOCK_SELECTOR = '[aria-label="Current local time"]';
   const TARGET_SELECTOR = [
@@ -21,13 +23,21 @@
   ].join(',');
   const EDIT_TARGET_ATTRIBUTE = 'data-quick-continue-pencil-target';
   const EDIT_PENCIL_ATTRIBUTE = 'data-quick-continue-pencil-button';
+  const DEFAULT_MANUAL_TIMESTAMP_TEXT = '[{time}]';
 
   let observer = null;
   let toolbar = null;
   let clockToggle = null;
   let manualTimestampEnabled = restoredTimestampState;
+  let manualTimestampText = DEFAULT_MANUAL_TIMESTAMP_TEXT;
+  let unsubscribeConfig = null;
   let scheduledSync = null;
   let scheduledWithAnimationFrame = false;
+
+  function applyManualTimestampConfig(config) {
+    const next = String(config?.manualTimestampText ?? '').trim();
+    manualTimestampText = next || DEFAULT_MANUAL_TIMESTAMP_TEXT;
+  }
 
   function openConfigEditor() {
     const root = toolbar;
@@ -158,7 +168,7 @@
 
   function formatPromptTimestamp(date = new Date()) {
     try {
-      const formatter = globalThis.ChatGPTQuickContinuePrompts?.formatTimestamp;
+      const formatter = prompts?.formatTimestamp;
       if (typeof formatter === 'function') return formatter(date);
     } catch {}
     try {
@@ -171,6 +181,17 @@
     } catch {
       return date.toLocaleString();
     }
+  }
+
+  function manualTimestampPrefix(date = new Date()) {
+    try {
+      const renderer = prompts?.renderTimeText;
+      if (typeof renderer === 'function') {
+        const rendered = String(renderer(manualTimestampText, date) || '').trim();
+        if (rendered) return `${rendered} `;
+      }
+    } catch {}
+    return `[${formatPromptTimestamp(date)}] `;
   }
 
   function hasLeadingTimestamp(text) {
@@ -238,7 +259,7 @@
     if (!node) return false;
     const before = rawComposerText(node);
     if (!before.trim() || hasLeadingTimestamp(before)) return false;
-    const prefix = `[${formatPromptTimestamp(date)}] `;
+    const prefix = manualTimestampPrefix(date);
     if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) {
       return prependTextControl(node, prefix);
     }
@@ -405,6 +426,11 @@
     }
   }
 
+  try {
+    unsubscribeConfig = configApi?.subscribe?.(applyManualTimestampConfig) || null;
+    configApi?.load?.().then(applyManualTimestampConfig).catch(() => {});
+  } catch {}
+
   observer = new MutationObserver(scheduleToolbarSync);
   observer.observe(document.documentElement, { childList: true, subtree: true });
   document.addEventListener('click', handleManualSendClick, true);
@@ -418,6 +444,8 @@
     },
     dispose() {
       try { observer?.disconnect(); } catch {}
+      try { unsubscribeConfig?.(); } catch {}
+      unsubscribeConfig = null;
       try {
         if (scheduledSync !== null) {
           if (scheduledWithAnimationFrame && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(scheduledSync);
