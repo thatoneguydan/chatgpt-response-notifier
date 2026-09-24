@@ -1,11 +1,12 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 4;
+  const RUNTIME_VERSION = 5;
   if (Number(globalThis.ChatGPTQuickContinuePrompts?.runtimeVersion || 0) === RUNTIME_VERSION) return;
 
   const normalizeInline = (value) => String(value || '').replace(/\s+/g, ' ').trim();
   const normalizeTemplate = (value) => String(value ?? '').replace(/\r\n?/g, '\n').trim();
+  const normalizeMessage = (value) => String(value ?? '').replace(/\r\n?/g, '\n');
 
   function formatTimestamp(date = new Date()) {
     try {
@@ -48,12 +49,21 @@
     return message ? renderTimeText(message, date) : '';
   }
 
+  function renderManualMessage(manualTimestampText, message, date = new Date()) {
+    const body = normalizeMessage(message);
+    const template = renderTimeText(manualTimestampText, date);
+    if (!template) return body;
+    if (!template.includes('{message}')) return `${template} ${body}`.trim();
+    return template.split('{message}').join(body);
+  }
+
   globalThis.ChatGPTQuickContinuePrompts = Object.freeze({
     runtimeVersion: RUNTIME_VERSION,
     normalizeInline,
     normalizeTemplate,
     formatTimestamp,
     renderTimeText,
+    renderManualMessage,
     timestamped,
     continuePrompt,
     renderProjectText,
