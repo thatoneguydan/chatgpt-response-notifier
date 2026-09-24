@@ -85,6 +85,17 @@ jobs:
           node --test .\tests\standalone-quick-continue.behavior.test.mjs
           if ($LASTEXITCODE -ne 0) { throw 'Standalone Quick Continue behavior tests failed.' }
 
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path '.\tools\Invoke-NotifierManagedUpdateAcceptance.ps1'),
+            [ref]$tokens,
+            [ref]$errors)
+          if (@($errors).Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'Notifier managed-update acceptance script has PowerShell parse errors.'
+          }
+
           $manifest = Get-Content -LiteralPath .\extension\manifest.json -Raw | ConvertFrom-Json
           foreach ($forbidden in @('downloads', 'storage', 'nativeMessaging', 'notifications', 'offscreen')) {
             if ($manifest.permissions -contains $forbidden) { throw "Forbidden extension permission present: $forbidden" }
@@ -238,3 +249,12 @@ jobs:
             git push origin HEAD:main
             if ($LASTEXITCODE -ne 0) { throw 'Could not publish the notifier update feed.' }
           }
+
+      - name: Install and verify released notifier on Glass
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content -LiteralPath .\VERSION.txt -Raw).Trim()
+          if ([string]::IsNullOrWhiteSpace($version)) { throw 'VERSION.txt is empty.' }
+          & .\tools\Invoke-NotifierManagedUpdateAcceptance.ps1 -ExpectedVersion $version
+          if ($LASTEXITCODE -ne 0) { throw "Glass did not accept notifier $version through the live managed-update path." }
