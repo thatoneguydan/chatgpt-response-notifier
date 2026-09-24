@@ -12,6 +12,7 @@ $requiredFiles = @(
     'prompt-format.js',
     'config.js',
     'config.json',
+    'runtime-reset.js',
     'content-script.js',
     'hover-edit-script.js',
     'conversation-state.js'
@@ -32,6 +33,7 @@ $managedFiles = @(
     'prompt-format.js',
     'config.js',
     'config.json',
+    'runtime-reset.js',
     'content-script.js',
     'hover-edit-script.js',
     'conversation-state.js',
