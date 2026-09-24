@@ -434,7 +434,7 @@
       statusCode: inheritedPriorPrompt ? '' : turnState.statusCode,
       hasStatusEvidence: !inheritedPriorPrompt && turnState.hasStatusEvidence === true,
       workStartSignal: !inheritedPriorPrompt && turnState.workStartSignal === true,
-      projectStartSignal: !inheritedPriorPrompt && turnState.projectStartSignal === true,
+      projectStartSignal: turnState.projectStartSignal === true && !inheritedPriorPrompt,
       observable,
       online: navigator.onLine !== false,
       manualStopped,
