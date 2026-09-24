@@ -27,7 +27,7 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['prompt-format.js', 'config.js', 'runtime-reset.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.14');
+  assert.equal(manifest.version, '1.2.15');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -71,7 +71,7 @@ test('bundled JSON contains editable prompt templates and saved projects', () =>
   assert.equal(new Set(bundledConfig.projects.map((value) => value.toLowerCase())).size, bundledConfig.projects.length);
 });
 
-test('prompt formatter places configurable time and project placeholders', () => {
+test('prompt formatter places configurable time and project placeholders and preserves newlines', () => {
   const context = { globalThis: {}, Intl, Date };
   context.globalThis = context;
   vm.runInNewContext(promptSource, context);
@@ -87,11 +87,19 @@ test('prompt formatter places configurable time and project placeholders', () =>
     date
   );
   const legacy = api.continuePrompt('Legacy continue text.', date);
+  const multiline = api.continuePrompt('[{time}] First line.\nSecond line.', date);
+  const multilineProject = api.projectContinuePrompt(
+    'campaign desk',
+    '[{time}] Continue {project}.\nUse GitHub status codes policy.',
+    date
+  );
 
   assert.equal(normal, '[Sep 18, 9:20 AM] Keep going please.');
   assert.equal(movedTime, 'Keep going please. Sent at Sep 18, 9:20 AM.');
   assert.equal(project, 'At Sep 18, 9:20 AM, resume campaign desk from canonical GitHub state.');
   assert.equal(legacy, '[Sep 18, 9:20 AM] Legacy continue text.');
+  assert.equal(multiline, '[Sep 18, 9:20 AM] First line.\nSecond line.');
+  assert.equal(multilineProject, '[Sep 18, 9:20 AM] Continue campaign desk.\nUse GitHub status codes policy.');
   assert.equal(api.projectContinuePrompt('campaign desk', 'No placeholder here.', date), '');
 });
 
@@ -171,9 +179,9 @@ test('manual timestamp preference is isolated by ChatGPT conversation and follow
 });
 
 test('prompt and config APIs are versioned so reinjection cannot retain stale globals indefinitely', () => {
-  assert.match(promptSource, /const RUNTIME_VERSION = 3/);
+  assert.match(promptSource, /const RUNTIME_VERSION = 4/);
   assert.match(promptSource, /runtimeVersion: RUNTIME_VERSION/);
-  assert.match(configSource, /const RUNTIME_VERSION = 4/);
+  assert.match(configSource, /const RUNTIME_VERSION = 5/);
   assert.match(configSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
@@ -195,7 +203,7 @@ test('inline JSON Save applies through config storage without reload or refresh 
   assert.match(configSource, /chrome\.storage\.local\.set/);
 });
 
-test('config controller loads bundled JSON only from the extension and validates project template', async () => {
+test('config controller loads bundled JSON only from the extension, preserves multiline templates, and validates project template', async () => {
   const storage = {};
   const changeListeners = [];
   const fetchCalls = [];
@@ -281,6 +289,18 @@ test('config controller loads bundled JSON only from the extension and validates
   assert.equal(moved.continueText, 'At {time}, continue this work.');
   assert.equal(moved.projectText, 'Resume {project} at {time}.');
   assert.equal(moved.manualTimestampText, 'Sent at {time}:');
+
+  const multiline = await api.save({
+    continueText: '[{time}] Continue until you finish.\nUse GitHub status codes policy.',
+    projectText: '[{time}] Continue {project}.\nUse GitHub status codes policy.',
+    manualTimestampText: '[{time}]',
+    projects: ['Campaign Desk']
+  });
+  assert.equal(multiline.continueText, '[{time}] Continue until you finish.\nUse GitHub status codes policy.');
+  assert.equal(multiline.projectText, '[{time}] Continue {project}.\nUse GitHub status codes policy.');
+  assert.equal(storage.quickContinueConfig.continueText, multiline.continueText);
+  assert.equal(JSON.parse(api.serialize(multiline)).continueText, multiline.continueText);
+  assert.match(api.serialize(multiline), /Continue until you finish\.\\nUse GitHub status codes policy\./);
 
   await assert.rejects(
     () => api.save({

@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 4;
+  const RUNTIME_VERSION = 5;
   const previousRuntime = globalThis.ChatGPTQuickContinueConfig;
   if (Number(previousRuntime?.runtimeVersion || 0) === RUNTIME_VERSION) return;
   try { previousRuntime?.dispose?.(); } catch {}
@@ -14,8 +14,9 @@
   let loadPromise = null;
 
   const normalizeInline = (value) => String(value ?? '').replace(/\s+/g, ' ').trim();
+  const normalizeTemplate = (value) => String(value ?? '').replace(/\r\n?/g, '\n').trim();
   const ensureTimePlaceholder = (value) => {
-    const text = normalizeInline(value);
+    const text = normalizeTemplate(value);
     if (!text || text.includes('{time}')) return text;
     return `[{time}] ${text}`;
   };
