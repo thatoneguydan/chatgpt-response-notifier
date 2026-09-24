@@ -149,13 +149,15 @@ jobs:
             try {
               $lastResponse = Invoke-RestMethod -Uri $endpoint -Method Get -TimeoutSec 300
               $installedVersion = [string]$lastResponse.installedVersion
-              $state = [string]$lastResponse.state
-              Write-Host "Quick Continue deployment acceptance attempt $attempt`: expected=$expectedVersion installed=$installedVersion state=$state"
+              $state = [string]$lastResponse.updateStatus.state
+              $availableVersion = [string]$lastResponse.updateStatus.availableVersion
+              $updateError = [string]$lastResponse.updateStatus.error
+              Write-Host "Quick Continue deployment acceptance attempt $attempt`: expected=$expectedVersion installed=$installedVersion state=$state available=$availableVersion error=$updateError"
               if ($installedVersion -eq $expectedVersion) {
                 $verified = $true
                 break
               }
-              $lastFailure = "helper returned installedVersion=$installedVersion state=$state"
+              $lastFailure = "helper returned installedVersion=$installedVersion state=$state availableVersion=$availableVersion error=$updateError"
             }
             catch {
               $lastFailure = $_.Exception.Message
