@@ -13,6 +13,7 @@ const bundledConfig = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'confi
 const backgroundSource = fs.readFileSync(path.join(extensionRoot, 'background.js'), 'utf8');
 const promptSource = fs.readFileSync(path.join(extensionRoot, 'prompt-format.js'), 'utf8');
 const configSource = fs.readFileSync(path.join(extensionRoot, 'config.js'), 'utf8');
+const runtimeResetSource = fs.readFileSync(path.join(extensionRoot, 'runtime-reset.js'), 'utf8');
 const contentSource = fs.readFileSync(path.join(extensionRoot, 'content-script.js'), 'utf8');
 const hoverEditSource = fs.readFileSync(path.join(extensionRoot, 'hover-edit-script.js'), 'utf8');
 const conversationStateSource = fs.readFileSync(path.join(extensionRoot, 'conversation-state.js'), 'utf8');
@@ -25,8 +26,8 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.permissions].sort(), ['alarms', 'scripting', 'storage', 'tabs'].sort());
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
-  assert.deepEqual(manifest.content_scripts[0].js, ['prompt-format.js', 'config.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.13');
+  assert.deepEqual(manifest.content_scripts[0].js, ['prompt-format.js', 'config.js', 'runtime-reset.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
+  assert.equal(manifest.version, '1.2.14');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -38,8 +39,26 @@ test('managed updater talks only to loopback, reloads itself, and reinjects curr
   assert.match(backgroundSource, /chrome\.runtime\.reload\(\)/);
   assert.match(backgroundSource, /chrome\.tabs\.query\(\{ url: \['https:\/\/chatgpt\.com\/\*'\] \}\)/);
   assert.match(backgroundSource, /chrome\.scripting\.executeScript/);
+  assert.match(backgroundSource, /'runtime-reset\.js'/);
   assert.match(backgroundSource, /'conversation-state\.js'/);
   assert.doesNotMatch(backgroundSource, /github\.com|raw\.githubusercontent\.com|backend-api|XMLHttpRequest|WebSocket/);
+});
+
+test('runtime reset disposes stale page runtimes before current scripts rebind to the config API', () => {
+  assert.doesNotThrow(() => new vm.Script(runtimeResetSource));
+  const disposed = [];
+  const context = {
+    globalThis: {},
+    __chatgptQuickContinueRuntime: { dispose: () => disposed.push('content') },
+    __chatgptQuickContinueHoverEditRuntime: { dispose: () => disposed.push('hover') },
+    __chatgptQuickContinueConversationStateRuntime: { dispose: () => disposed.push('conversation') }
+  };
+  context.globalThis = context;
+  vm.runInNewContext(runtimeResetSource, context);
+  assert.deepEqual(disposed.sort(), ['content', 'conversation', 'hover']);
+  assert.equal('__chatgptQuickContinueRuntime' in context, false);
+  assert.equal('__chatgptQuickContinueHoverEditRuntime' in context, false);
+  assert.equal('__chatgptQuickContinueConversationStateRuntime' in context, false);
 });
 
 test('bundled JSON contains editable prompt templates and saved projects', () => {
@@ -288,6 +307,7 @@ test('installer copies managed worker/config files and removes the legacy projec
   assert.match(installerSource, /'background\.js'/);
   assert.match(installerSource, /'config\.js'/);
   assert.match(installerSource, /'config\.json'/);
+  assert.match(installerSource, /'runtime-reset\.js'/);
   assert.match(installerSource, /'conversation-state\.js'/);
   assert.match(installerSource, /'projects\.json'/);
   assert.match(installerSource, /Remove-Item -LiteralPath \$legacyProjects -Force/);

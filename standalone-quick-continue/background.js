@@ -5,6 +5,7 @@ const UPDATE_URL = 'http://127.0.0.1:38473/quick-continue/update';
 const CONTENT_FILES = [
   'prompt-format.js',
   'config.js',
+  'runtime-reset.js',
   'content-script.js',
   'hover-edit-script.js',
   'conversation-state.js'
