@@ -19,6 +19,16 @@ test('Quick Continue feed is pinned to the canonical release route and digest', 
   assert.match(feed, /SourceCommit/);
 });
 
+test('Quick Continue feed checks bypass stale CDN and HTTP client caches', () => {
+  assert.match(service, /cacheBust=\{DateTimeOffset\.UtcNow\.ToUnixTimeMilliseconds\(\)\}/);
+  assert.match(service, /new HttpRequestMessage\(HttpMethod\.Get, manifestUrl\)/);
+  assert.match(service, /CacheControlHeaderValue/);
+  assert.match(service, /NoCache = true/);
+  assert.match(service, /NoStore = true/);
+  assert.match(service, /_http\.SendAsync\(manifestRequest, HttpCompletionOption\.ResponseContentRead/);
+  assert.doesNotMatch(service, /_http\.GetAsync\(QuickContinueUpdateFeed\.ManifestUrl/);
+});
+
 test('helper updates only the fixed Quick Continue user-profile root and preserves config', () => {
   assert.match(installer, /ChatGPTQuickContinue/);
   assert.match(installer, /Extension/);
