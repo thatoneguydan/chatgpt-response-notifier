@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 6;
+  const RUNTIME_VERSION = 7;
   const previousRuntime = globalThis.__chatgptQuickContinueHoverEditRuntime;
   if (Number(previousRuntime?.version || 0) === RUNTIME_VERSION) return;
   const restoredTimestampState = Boolean(previousRuntime?.manualTimestampEnabled);
@@ -11,19 +11,13 @@
   const configApi = globalThis.ChatGPTQuickContinueConfig;
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const CLOCK_SELECTOR = '[aria-label="Current local time"]';
-  const TARGET_SELECTOR = [
-    'button[aria-label="Send timestamped Continue"]',
-    'button[aria-label="Project Continue"]'
-  ].join(',');
   const SEND_BUTTON_SELECTOR = [
     'button[data-testid="send-button"]',
     'button[aria-label="Send prompt"]',
     'button[aria-label="Send message"]',
     'button[aria-label="Send"]'
   ].join(',');
-  const EDIT_TARGET_ATTRIBUTE = 'data-quick-continue-pencil-target';
-  const EDIT_PENCIL_ATTRIBUTE = 'data-quick-continue-pencil-button';
-  const DEFAULT_MANUAL_TIMESTAMP_TEXT = '[{time}]';
+  const DEFAULT_MANUAL_TIMESTAMP_TEXT = '[{time}] {message}';
 
   let observer = null;
   let toolbar = null;
@@ -35,112 +29,8 @@
   let scheduledWithAnimationFrame = false;
 
   function applyManualTimestampConfig(config) {
-    const next = String(config?.manualTimestampText ?? '').trim();
+    const next = String(config?.manualTimestampText ?? '').replace(/\r\n?/g, '\n').trim();
     manualTimestampText = next || DEFAULT_MANUAL_TIMESTAMP_TEXT;
-  }
-
-  function openConfigEditor() {
-    const root = toolbar;
-    if (!root?.isConnected) return;
-
-    const projectButton = root.querySelector('button[aria-label="Project Continue"]');
-    const projectPopover = root.querySelector('[role="group"][aria-label="Project Continue"]');
-    const configEditButton = root.querySelector('button[aria-label="Edit Quick Continue JSON"]');
-    if (!projectButton || !projectPopover || !configEditButton) return;
-
-    if (projectPopover.hidden) projectButton.click();
-    setTimeout(() => {
-      try {
-        root.querySelector('button[aria-label="Edit Quick Continue JSON"]')?.click();
-      } catch {}
-    }, 0);
-  }
-
-  function editLabelFor(target) {
-    return target?.getAttribute?.('aria-label') === 'Project Continue'
-      ? 'Edit Project text'
-      : 'Edit Continue text';
-  }
-
-  function setPencilHover(pencil, active) {
-    if (!pencil) return;
-    pencil.style.background = active
-      ? 'var(--main-surface-tertiary, rgba(127,127,127,.18))'
-      : 'var(--main-surface-secondary, rgba(127,127,127,.10))';
-    pencil.style.opacity = active ? '1' : '.72';
-  }
-
-  function createPencilButton(target) {
-    const pencil = document.createElement('button');
-    pencil.type = 'button';
-    pencil.textContent = '✎';
-    pencil.setAttribute(EDIT_PENCIL_ATTRIBUTE, 'true');
-    pencil.setAttribute('aria-label', editLabelFor(target));
-    Object.assign(pencil.style, {
-      display: 'inline-flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      width: '20px',
-      height: '23px',
-      margin: '0',
-      padding: '0',
-      border: '1px solid var(--border-light, rgba(127,127,127,.25))',
-      borderRadius: '6px',
-      background: 'var(--main-surface-secondary, rgba(127,127,127,.10))',
-      color: 'inherit',
-      font: 'inherit',
-      fontSize: '11px',
-      fontWeight: '600',
-      lineHeight: '1',
-      opacity: '.72',
-      cursor: 'pointer',
-      userSelect: 'none',
-      flex: '0 0 20px'
-    });
-
-    pencil.addEventListener('pointerenter', () => setPencilHover(pencil, true));
-    pencil.addEventListener('pointerleave', () => setPencilHover(pencil, false));
-    pencil.addEventListener('click', (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      openConfigEditor();
-    });
-
-    return pencil;
-  }
-
-  function enhanceTarget(target) {
-    if (!target?.isConnected || !toolbar?.contains(target)) return;
-    if (target.hasAttribute?.(EDIT_TARGET_ATTRIBUTE)) return;
-
-    const pencil = createPencilButton(target);
-    target.setAttribute(EDIT_TARGET_ATTRIBUTE, 'true');
-    target.before(pencil);
-  }
-
-  function enhanceToolbarButtons(root = toolbar) {
-    if (!root?.isConnected) return;
-    let targets = [];
-    try { targets = [...root.querySelectorAll(TARGET_SELECTOR)]; } catch {}
-    for (const target of targets) enhanceTarget(target);
-  }
-
-  function restoreToolbarButtons(root = toolbar) {
-    if (!root) return;
-    let pencils = [];
-    let targets = [];
-    try { pencils = [...root.querySelectorAll(`[${EDIT_PENCIL_ATTRIBUTE}]`)]; } catch {}
-    try {
-      targets = [...root.querySelectorAll(
-        TARGET_SELECTOR.split(',').map((selector) => `${selector}[${EDIT_TARGET_ATTRIBUTE}]`).join(',')
-      )];
-    } catch {}
-    for (const pencil of pencils) {
-      try { pencil.remove(); } catch {}
-    }
-    for (const target of targets) {
-      try { target.removeAttribute(EDIT_TARGET_ATTRIBUTE); } catch {}
-    }
   }
 
   function composerElement() {
@@ -166,6 +56,10 @@
     }
   }
 
+  function normalizedComposerText(value) {
+    return String(value ?? '').replace(/\r\n?/g, '\n');
+  }
+
   function formatPromptTimestamp(date = new Date()) {
     try {
       const formatter = prompts?.formatTimestamp;
@@ -183,20 +77,20 @@
     }
   }
 
-  function manualTimestampPrefix(date = new Date()) {
+  function renderManualMessage(message, date = new Date()) {
     try {
-      const renderer = prompts?.renderTimeText;
+      const renderer = prompts?.renderManualMessage;
       if (typeof renderer === 'function') {
-        const rendered = String(renderer(manualTimestampText, date) || '').trim();
-        if (rendered) return `${rendered} `;
+        const rendered = String(renderer(manualTimestampText, message, date) || '');
+        if (rendered) return rendered;
       }
     } catch {}
-    return `[${formatPromptTimestamp(date)}] `;
+    return `[${formatPromptTimestamp(date)}] ${normalizedComposerText(message)}`;
   }
 
   function hasLeadingTimestamp(text) {
     const value = String(text || '').trimStart();
-    return /^\[[^\]\r\n]{0,80}\d{1,2}:\d{2}(?:\s*[AP]M)?[^\]\r\n]{0,80}\]\s+/i.test(value);
+    return /^\[[^\]\r\n]{0,80}\d{1,2}:\d{2}(?:\s*[AP]M)?[^\]\r\n]{0,80}\](?:\s|$)/i.test(value);
   }
 
   function dispatchInput(node, data) {
@@ -211,59 +105,63 @@
     }
   }
 
-  function prependTextControl(node, prefix) {
-    const before = String(node.value || '');
-    const next = `${prefix}${before}`;
+  function replaceTextControl(node, text) {
+    const next = normalizedComposerText(text);
     try {
       const proto = node instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
       const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
       if (setter) setter.call(node, next);
       else node.value = next;
-      dispatchInput(node, prefix);
-      return String(node.value || '') === next;
+      dispatchInput(node, next);
+      return normalizedComposerText(node.value) === next;
     } catch {
       return false;
     }
   }
 
-  function prependContentEditable(node, prefix) {
-    const before = rawComposerText(node);
-    if (!before.trim()) return false;
+  function replaceContentEditableFallback(node, text) {
+    const next = normalizedComposerText(text);
+    try {
+      const fragment = document.createDocumentFragment();
+      const lines = next.split('\n');
+      lines.forEach((line, index) => {
+        if (index > 0) fragment.append(document.createElement('br'));
+        if (line) fragment.append(document.createTextNode(line));
+      });
+      node.replaceChildren(fragment);
+      dispatchInput(node, next);
+      return normalizedComposerText(rawComposerText(node)) === next;
+    } catch {
+      return false;
+    }
+  }
 
+  function replaceContentEditable(node, text) {
+    const next = normalizedComposerText(text);
     try { node.focus({ preventScroll: true }); } catch { try { node.focus(); } catch {} }
 
     try {
       const selection = window.getSelection?.();
       const range = document.createRange?.();
-      if (selection && range) {
+      if (selection && range && typeof document.execCommand === 'function') {
         range.selectNodeContents(node);
-        range.collapse(true);
         selection.removeAllRanges();
         selection.addRange(range);
-        if (typeof document.execCommand === 'function' && document.execCommand('insertText', false, prefix)) {
-          if (rawComposerText(node).startsWith(prefix)) return true;
+        if (document.execCommand('insertText', false, next)) {
+          if (normalizedComposerText(rawComposerText(node)) === next) return true;
         }
       }
     } catch {}
 
-    try {
-      node.textContent = `${prefix}${before}`;
-      dispatchInput(node, prefix);
-      return rawComposerText(node).startsWith(prefix);
-    } catch {
-      return false;
-    }
+    return replaceContentEditableFallback(node, next);
   }
 
-  function prependTimestampToComposer(node, date = new Date()) {
+  function replaceComposerText(node, text) {
     if (!node) return false;
-    const before = rawComposerText(node);
-    if (!before.trim() || hasLeadingTimestamp(before)) return false;
-    const prefix = manualTimestampPrefix(date);
     if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) {
-      return prependTextControl(node, prefix);
+      return replaceTextControl(node, text);
     }
-    if (node.isContentEditable) return prependContentEditable(node, prefix);
+    if (node.isContentEditable) return replaceContentEditable(node, text);
     return false;
   }
 
@@ -281,9 +179,11 @@
   function stampManualMessage() {
     if (!manualTimestampEnabled) return false;
     const composer = composerElement();
-    if (!composer || !rawComposerText(composer).trim()) return false;
-    if (hasLeadingTimestamp(rawComposerText(composer))) return true;
-    return prependTimestampToComposer(composer, new Date());
+    if (!composer) return false;
+    const before = rawComposerText(composer);
+    if (!before.trim()) return false;
+    if (hasLeadingTimestamp(before)) return true;
+    return replaceComposerText(composer, renderManualMessage(before, new Date()));
   }
 
   function handleManualSendClick(event) {
@@ -378,31 +278,23 @@
 
   function detachToolbar() {
     detachClockToggle();
-    restoreToolbarButtons(toolbar);
     toolbar = null;
   }
 
   function attachToolbar(nextToolbar) {
     if (!nextToolbar || nextToolbar === toolbar) {
-      if (nextToolbar) {
-        enhanceToolbarButtons(nextToolbar);
-        attachClockToggle(nextToolbar);
-      }
+      if (nextToolbar) attachClockToggle(nextToolbar);
       return;
     }
     detachToolbar();
     toolbar = nextToolbar;
-    enhanceToolbarButtons(toolbar);
     attachClockToggle(toolbar);
   }
 
   function syncToolbar() {
     const nextToolbar = document.getElementById(TOOLBAR_ID);
     if (nextToolbar === toolbar) {
-      if (nextToolbar) {
-        enhanceToolbarButtons(nextToolbar);
-        attachClockToggle(nextToolbar);
-      }
+      if (nextToolbar) attachClockToggle(nextToolbar);
       return;
     }
     if (nextToolbar) attachToolbar(nextToolbar);

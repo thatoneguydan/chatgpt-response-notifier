@@ -27,7 +27,7 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['prompt-format.js', 'config.js', 'runtime-reset.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.15');
+  assert.equal(manifest.version, '1.2.16');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -64,14 +64,14 @@ test('runtime reset disposes stale page runtimes before current scripts rebind t
 test('bundled JSON contains editable prompt templates and saved projects', () => {
   assert.equal(bundledConfig.continueText, '[{time}] Continue until you finish or need something from me.');
   assert.equal(bundledConfig.projectText, '[{time}] Continue {project} from canonical GitHub state until you finish or need me.');
-  assert.equal(bundledConfig.manualTimestampText, '[{time}]');
+  assert.equal(bundledConfig.manualTimestampText, '[{time}] {message}');
   assert.ok(Array.isArray(bundledConfig.projects));
   assert.ok(bundledConfig.projects.includes('campaign desk'));
   assert.ok(bundledConfig.projects.includes('notifier extension'));
   assert.equal(new Set(bundledConfig.projects.map((value) => value.toLowerCase())).size, bundledConfig.projects.length);
 });
 
-test('prompt formatter places configurable time and project placeholders and preserves newlines', () => {
+test('prompt formatter places configurable time, project, and message placeholders and preserves newlines', () => {
   const context = { globalThis: {}, Intl, Date };
   context.globalThis = context;
   vm.runInNewContext(promptSource, context);
@@ -93,6 +93,8 @@ test('prompt formatter places configurable time and project placeholders and pre
     '[{time}] Continue {project}.\nUse GitHub status codes policy.',
     date
   );
+  const manual = api.renderManualMessage('[{time}]\n{message}', 'First line.\nSecond line.', date);
+  const movedMessage = api.renderManualMessage('{message}\nSent at {time}.', 'Custom body.', date);
 
   assert.equal(normal, '[Sep 18, 9:20 AM] Keep going please.');
   assert.equal(movedTime, 'Keep going please. Sent at Sep 18, 9:20 AM.');
@@ -100,13 +102,18 @@ test('prompt formatter places configurable time and project placeholders and pre
   assert.equal(legacy, '[Sep 18, 9:20 AM] Legacy continue text.');
   assert.equal(multiline, '[Sep 18, 9:20 AM] First line.\nSecond line.');
   assert.equal(multilineProject, '[Sep 18, 9:20 AM] Continue campaign desk.\nUse GitHub status codes policy.');
+  assert.equal(manual, '[Sep 18, 9:20 AM]\nFirst line.\nSecond line.');
+  assert.equal(movedMessage, 'Custom body.\nSent at Sep 18, 9:20 AM.');
   assert.equal(api.projectContinuePrompt('campaign desk', 'No placeholder here.', date), '');
 });
 
-test('send path still clicks the real ChatGPT Send button at most once', () => {
+test('send path still clicks the real ChatGPT Send button at most once and writes multiline content explicitly', () => {
   assert.match(contentSource, /button\[data-testid="send-button"\]/);
   assert.match(contentSource, /sendButton\.click\(\)/);
   assert.equal((contentSource.match(/sendButton\.click\(\)/g) || []).length, 1);
+  assert.match(contentSource, /function writeContentEditable\(node, text\)/);
+  assert.match(contentSource, /value\.split\('\\n'\)/);
+  assert.match(contentSource, /document\.createElement\('br'\)/);
   assert.doesNotMatch(contentSource, /XMLHttpRequest/);
   assert.doesNotMatch(contentSource, /WebSocket/);
   assert.match(contentSource, /chatgpt-notifier-quick-prompts/);
@@ -123,42 +130,32 @@ test('project picker is non-modal, exposes Edit, and never auto-focuses', () => 
   assert.doesNotMatch(contentSource, /\.title\s*=/);
 });
 
-test('persistent pencil Edit controls are independent sibling buttons and do not alter action-button hover', () => {
-  assert.match(hoverEditSource, /button\[aria-label="Send timestamped Continue"\]/);
-  assert.match(hoverEditSource, /button\[aria-label="Project Continue"\]/);
-  assert.match(hoverEditSource, /const EDIT_TARGET_ATTRIBUTE = 'data-quick-continue-pencil-target'/);
-  assert.match(hoverEditSource, /const EDIT_PENCIL_ATTRIBUTE = 'data-quick-continue-pencil-button'/);
-  assert.match(hoverEditSource, /document\.createElement\('button'\)/);
-  assert.match(hoverEditSource, /pencil\.textContent = '✎'/);
-  assert.match(hoverEditSource, /pencil\.setAttribute\('aria-label', editLabelFor\(target\)\)/);
-  assert.match(hoverEditSource, /pencil\.addEventListener\('pointerenter'/);
-  assert.match(hoverEditSource, /pencil\.addEventListener\('pointerleave'/);
-  assert.match(hoverEditSource, /pencil\.style\.background = active/);
-  assert.match(hoverEditSource, /target\.before\(pencil\)/);
-  assert.doesNotMatch(hoverEditSource, /target\.insertBefore\(createPencilButton\(\), target\.firstChild\)/);
-  assert.doesNotMatch(hoverEditSource, /target\.style\.(?:display|alignItems|gap)/);
+test('inline pencil controls are removed while Project Edit remains the JSON editor entry point', () => {
+  assert.doesNotMatch(hoverEditSource, /data-quick-continue-pencil|pencil\.textContent|createPencilButton|enhanceToolbarButtons|restoreToolbarButtons/);
+  assert.doesNotMatch(hoverEditSource, /Edit Project text|Edit Continue text/);
+  assert.doesNotMatch(contentSource, /data-quick-continue-pencil|pencil\.textContent|createPencilButton/);
+  assert.match(contentSource, /editButton\.textContent = 'Edit'/);
+  assert.match(contentSource, /editButton\.setAttribute\('aria-label', 'Edit Quick Continue JSON'\)/);
+  assert.match(contentSource, /openConfigEditor\(\)/);
   assert.match(hoverEditSource, /new MutationObserver\(scheduleToolbarSync\)/);
   assert.match(hoverEditSource, /requestAnimationFrame/);
-  assert.match(hoverEditSource, /button\[aria-label="Edit Quick Continue JSON"\]/);
-  assert.match(hoverEditSource, /if \(projectPopover\.hidden\) projectButton\.click\(\)/);
-  assert.match(hoverEditSource, /root\.querySelector\('button\[aria-label="Edit Quick Continue JSON"\]'\)\?\.click\(\)/);
-  assert.doesNotMatch(hoverEditSource, /HOVER_DELAY_MS|HIDE_DELAY_MS/);
   assert.doesNotMatch(hoverEditSource, /XMLHttpRequest|WebSocket|fetch\(/);
 });
 
-test('clock toggle timestamps only trusted manual sends and preserves multiline entry behavior', () => {
+test('clock toggle renders the configured manual-message template only for trusted manual sends', () => {
   assert.match(hoverEditSource, /const CLOCK_SELECTOR = '\[aria-label="Current local time"\]'/);
   assert.match(hoverEditSource, /setAttribute\('aria-pressed', String\(manualTimestampEnabled\)\)/);
   assert.match(hoverEditSource, /outline: manualTimestampEnabled \? '1px solid currentColor' : '1px solid transparent'/);
   assert.match(hoverEditSource, /prompts\?\.formatTimestamp/);
-  assert.match(hoverEditSource, /prompts\?\.renderTimeText/);
+  assert.match(hoverEditSource, /prompts\?\.renderManualMessage/);
   assert.match(hoverEditSource, /manualTimestampText/);
   assert.match(hoverEditSource, /configApi\?\.subscribe/);
   assert.match(hoverEditSource, /function hasLeadingTimestamp\(text\)/);
   assert.match(hoverEditSource, /event\?\.isTrusted !== true/);
   assert.match(hoverEditSource, /event\.key !== 'Enter' \|\| event\.shiftKey \|\| event\.altKey/);
   assert.match(hoverEditSource, /event\.isComposing \|\| event\.keyCode === 229/);
-  assert.match(hoverEditSource, /document\.execCommand\('insertText', false, prefix\)/);
+  assert.match(hoverEditSource, /document\.execCommand\('insertText', false, next\)/);
+  assert.match(hoverEditSource, /document\.createElement\('br'\)/);
   assert.match(hoverEditSource, /document\.addEventListener\('click', handleManualSendClick, true\)/);
   assert.match(hoverEditSource, /document\.addEventListener\('keydown', handleManualSendKeydown, true\)/);
   assert.match(hoverEditSource, /document\.removeEventListener\('click', handleManualSendClick, true\)/);
@@ -179,14 +176,14 @@ test('manual timestamp preference is isolated by ChatGPT conversation and follow
 });
 
 test('prompt and config APIs are versioned so reinjection cannot retain stale globals indefinitely', () => {
-  assert.match(promptSource, /const RUNTIME_VERSION = 4/);
+  assert.match(promptSource, /const RUNTIME_VERSION = 5/);
   assert.match(promptSource, /runtimeVersion: RUNTIME_VERSION/);
-  assert.match(configSource, /const RUNTIME_VERSION = 5/);
+  assert.match(configSource, /const RUNTIME_VERSION = 6/);
   assert.match(configSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
   assert.match(configSource, /chrome\.storage\.onChanged\.removeListener\(handleStorageChanged\)/);
-  assert.match(hoverEditSource, /const RUNTIME_VERSION = 6/);
+  assert.match(hoverEditSource, /const RUNTIME_VERSION = 7/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
   assert.match(conversationStateSource, /const RUNTIME_VERSION = 1/);
@@ -203,7 +200,7 @@ test('inline JSON Save applies through config storage without reload or refresh 
   assert.match(configSource, /chrome\.storage\.local\.set/);
 });
 
-test('config controller loads bundled JSON only from the extension, preserves multiline templates, and validates project template', async () => {
+test('config controller loads bundled JSON only from the extension, preserves multiline templates, and migrates manual templates', async () => {
   const storage = {};
   const changeListeners = [];
   const fetchCalls = [];
@@ -250,7 +247,11 @@ test('config controller loads bundled JSON only from the extension, preserves mu
           }
         },
         onChanged: {
-          addListener: (listener) => changeListeners.push(listener)
+          addListener: (listener) => changeListeners.push(listener),
+          removeListener: (listener) => {
+            const index = changeListeners.indexOf(listener);
+            if (index >= 0) changeListeners.splice(index, 1);
+          }
         }
       }
     }
@@ -261,7 +262,7 @@ test('config controller loads bundled JSON only from the extension, preserves mu
   const api = context.ChatGPTQuickContinueConfig;
   const initial = await api.load();
   assert.equal(initial.continueText, bundledConfig.continueText);
-  assert.equal(initial.manualTimestampText, '[{time}]');
+  assert.equal(initial.manualTimestampText, '[{time}] {message}');
   assert.equal(fetchCalls.length, 1);
   assert.equal(fetchCalls[0].url, 'chrome-extension://quick-continue/config.json');
 
@@ -275,10 +276,10 @@ test('config controller loads bundled JSON only from the extension, preserves mu
 
   assert.equal(saved.continueText, '[{time}] Continue this work.');
   assert.equal(saved.projectText, '[{time}] Continue {project} now.');
-  assert.equal(saved.manualTimestampText, '[{time}]');
+  assert.equal(saved.manualTimestampText, '[{time}] {message}');
   assert.deepEqual([...saved.projects], ['Campaign Desk', 'Time Tracker']);
   assert.equal(observed.continueText, '[{time}] Continue this work.');
-  assert.equal(observed.manualTimestampText, '[{time}]');
+  assert.equal(observed.manualTimestampText, '[{time}] {message}');
 
   const moved = await api.save({
     continueText: 'At {time}, continue this work.',
@@ -288,19 +289,22 @@ test('config controller loads bundled JSON only from the extension, preserves mu
   });
   assert.equal(moved.continueText, 'At {time}, continue this work.');
   assert.equal(moved.projectText, 'Resume {project} at {time}.');
-  assert.equal(moved.manualTimestampText, 'Sent at {time}:');
+  assert.equal(moved.manualTimestampText, 'Sent at {time}: {message}');
 
   const multiline = await api.save({
     continueText: '[{time}] Continue until you finish.\nUse GitHub status codes policy.',
     projectText: '[{time}] Continue {project}.\nUse GitHub status codes policy.',
-    manualTimestampText: '[{time}]',
+    manualTimestampText: '[{time}]\n{message}',
     projects: ['Campaign Desk']
   });
   assert.equal(multiline.continueText, '[{time}] Continue until you finish.\nUse GitHub status codes policy.');
   assert.equal(multiline.projectText, '[{time}] Continue {project}.\nUse GitHub status codes policy.');
+  assert.equal(multiline.manualTimestampText, '[{time}]\n{message}');
   assert.equal(storage.quickContinueConfig.continueText, multiline.continueText);
   assert.equal(JSON.parse(api.serialize(multiline)).continueText, multiline.continueText);
+  assert.equal(JSON.parse(api.serialize(multiline)).manualTimestampText, multiline.manualTimestampText);
   assert.match(api.serialize(multiline), /Continue until you finish\.\\nUse GitHub status codes policy\./);
+  assert.match(api.serialize(multiline), /\[\{time\}\]\\n\{message\}/);
 
   await assert.rejects(
     () => api.save({
@@ -374,7 +378,7 @@ test('toolbar self-heals missing core controls and recovers from transient compo
 });
 
 test('standalone runtime hot-replaces stale generations, restores a detached toolbar, and ignores notifier-only churn', () => {
-  assert.match(contentSource, /const RUNTIME_VERSION = 6/);
+  assert.match(contentSource, /const RUNTIME_VERSION = 7/);
   assert.match(contentSource, /const previousRuntime = globalThis\.__chatgptQuickContinueRuntime/);
   assert.match(contentSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.doesNotMatch(contentSource, /__chatgptQuickContinueInstalled/);

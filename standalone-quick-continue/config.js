@@ -1,13 +1,13 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 5;
+  const RUNTIME_VERSION = 6;
   const previousRuntime = globalThis.ChatGPTQuickContinueConfig;
   if (Number(previousRuntime?.runtimeVersion || 0) === RUNTIME_VERSION) return;
   try { previousRuntime?.dispose?.(); } catch {}
 
   const STORAGE_KEY = 'quickContinueConfig';
-  const DEFAULT_MANUAL_TIMESTAMP_TEXT = '[{time}]';
+  const DEFAULT_MANUAL_TIMESTAMP_TEXT = '[{time}] {message}';
   const MAX_PROJECTS = 40;
   const listeners = new Set();
   let current = null;
@@ -19,6 +19,12 @@
     const text = normalizeTemplate(value);
     if (!text || text.includes('{time}')) return text;
     return `[{time}] ${text}`;
+  };
+  const ensureManualMessageTemplate = (value) => {
+    let text = ensureTimePlaceholder(value ?? DEFAULT_MANUAL_TIMESTAMP_TEXT);
+    if (!text) return text;
+    if (!text.includes('{message}')) text = `${text} {message}`;
+    return text;
   };
 
   function normalizeProjectList(value) {
@@ -47,15 +53,19 @@
 
     const continueText = ensureTimePlaceholder(value.continueText);
     const projectText = ensureTimePlaceholder(value.projectText);
-    const manualTimestampText = ensureTimePlaceholder(
-      value.manualTimestampText ?? DEFAULT_MANUAL_TIMESTAMP_TEXT
-    );
+    const manualTimestampText = ensureManualMessageTemplate(value.manualTimestampText);
 
     if (!continueText) throw new Error('"continueText" must not be blank.');
     if (!projectText) throw new Error('"projectText" must not be blank.');
     if (!manualTimestampText) throw new Error('"manualTimestampText" must not be blank.');
     if (!projectText.includes('{project}')) {
       throw new Error('"projectText" must include {project}.');
+    }
+    if (!manualTimestampText.includes('{time}')) {
+      throw new Error('"manualTimestampText" must include {time}.');
+    }
+    if (!manualTimestampText.includes('{message}')) {
+      throw new Error('"manualTimestampText" must include {message}.');
     }
 
     return Object.freeze({
