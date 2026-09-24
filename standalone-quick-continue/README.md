@@ -10,17 +10,18 @@ When ChatGPT Response Notifier is also enabled, the notifier may add its own sma
 
 - **Continue** immediately sends the configured Continue template.
 - **Project** opens a compact non-modal project picker.
-- Click the **time at the right side of the toolbar** to toggle timestamps for ordinary manually typed ChatGPT messages. When enabled, the time gets an outline. A timestamp is prepended at the moment a manual Send click or Enter-to-send action occurs, so the draft stays untouched while you type.
+- Click the **time at the right side of the toolbar** to toggle timestamps for ordinary manually typed ChatGPT messages. When enabled, the time gets an outline. The configured `manualTimestampText` is prepended at the moment a manual Send click or Enter-to-send action occurs, so the draft stays untouched while you type.
 - Manual timestamp mode is remembered independently for each ChatGPT conversation. A chat with timestamps on stays on when you return to it, while another chat can stay off. A conversation with no saved preference starts off. A new unsaved chat keeps a provisional choice only until ChatGPT assigns that new conversation its ID, then that choice is stored for the new chat.
+- The on/off state remains per conversation and is not part of the editable prompt JSON; `manualTimestampText` controls only what is inserted when that state is on.
 - **Continue** and **Project** sends are excluded from the manual-message timestamp toggle because Quick Continue already renders their configured `{time}` placeholder itself.
 - **Continue** and **Project** each show a small **✎** immediately before the word. Hovering the pencil highlights only the pencil; clicking it opens the same in-page JSON editor directly. There is no hover delay or separate Edit button to reveal.
 - Clicking a saved project immediately sends the configured Project template with `{project}` replaced by that title.
-- `{time}` is replaced by the local timestamp at send time in either template, so the JSON controls exactly where the timestamp appears.
+- `{time}` is replaced by the local timestamp at send time in `continueText`, `projectText`, and `manualTimestampText`, so the JSON controls the surrounding timestamp wording.
 - **Other project…** remains available for one-off names.
 - **Edit** opens the current raw JSON config directly inside the Project menu. **Save** validates and applies it immediately without reloading the extension or refreshing ChatGPT.
 - The Project menu normally opens upward. If that would cross the viewport top, it flips below the toolbar; if neither side fully fits, it uses the side with more room.
-- Toolbar layout syncs keep the existing toolbar visible; brief ChatGPT composer rerenders are given a 200 ms grace period before the toolbar is hidden, preventing one-frame flicker.
-- Runtime 1.2.10 replaces delayed hover editing with persistent per-button pencil controls while preserving 1.2.9 managed self-reload/update activation, 1.2.8 per-conversation timestamp persistence, 1.2.7 timestamping, template-controlled timestamp placement, and existing hot-replacement behavior.
+- Toolbar layout syncs keep the existing toolbar visible; brief ChatGPT composer rerenders are given a 600 ms grace period before the toolbar is hidden, preventing one-frame flicker.
+- Runtime 1.2.13 adds editable manual-message timestamp text while preserving per-conversation timestamp state, persistent pencil editing, managed self-updates, and hot-replacement behavior.
 
 The bundled `config.json` is the readable/default configuration:
 
@@ -28,6 +29,7 @@ The bundled `config.json` is the readable/default configuration:
 {
   "continueText": "[{time}] Continue until you finish or need something from me.",
   "projectText": "[{time}] Continue {project} from canonical GitHub state until you finish or need me.",
+  "manualTimestampText": "[{time}]",
   "projects": [
     "campaign desk",
     "notifier extension"
@@ -40,7 +42,7 @@ Template placeholders:
 - `{time}` — the local send timestamp, for example `Sep 23, 11:08 AM`.
 - `{project}` — the selected or typed project name; required in `projectText`.
 
-You can move `{time}` anywhere in either template. `projectText` must contain `{project}`. If a legacy saved template has no `{time}`, the config controller inserts `[{time}] ` at the front so old behavior is preserved. The Edit UI stores the validated live copy in Chrome local extension storage. Changes propagate to other open ChatGPT tabs through `chrome.storage.onChanged`.
+You can move `{time}` anywhere in `continueText`, `projectText`, or `manualTimestampText`. `projectText` must contain `{project}`. If a saved template has no `{time}`, the config controller inserts `[{time}] ` at the front so old behavior is preserved. Existing saved configs that predate `manualTimestampText` automatically receive the default `[{time}]` value when loaded, and the field then appears in the in-page JSON editor. The Edit UI stores the validated live copy in Chrome local extension storage. Changes propagate to other open ChatGPT tabs through `chrome.storage.onChanged`.
 
 The installed default file is:
 
