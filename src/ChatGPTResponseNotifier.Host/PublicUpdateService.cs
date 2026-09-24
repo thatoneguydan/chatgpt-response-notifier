@@ -48,7 +48,14 @@ internal sealed class PublicUpdateService : IDisposable
             var currentVersion = BundleInstaller.ReadInstalledExtensionVersion() ?? _status.CurrentVersion;
             await SetStatusAsync(new UpdateStatusSnapshot("checking", currentVersion)).ConfigureAwait(false);
 
-            using var manifestResponse = await _http.GetAsync(PublicUpdateFeed.ManifestUrl, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
+            var manifestUrl = $"{PublicUpdateFeed.ManifestUrl}?cacheBust={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+            using var manifestRequest = new HttpRequestMessage(HttpMethod.Get, manifestUrl);
+            manifestRequest.Headers.CacheControl = new CacheControlHeaderValue
+            {
+                NoCache = true,
+                NoStore = true
+            };
+            using var manifestResponse = await _http.SendAsync(manifestRequest, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
             manifestResponse.EnsureSuccessStatusCode();
             var manifestJson = await manifestResponse.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             var manifest = PublicUpdateFeed.Parse(manifestJson);
