@@ -271,6 +271,7 @@
       return { kind: 'reload', state: 'scheduled', reason: POST_RELOAD_EXPLICIT_REASON };
     }
     if (observation.assistantKey && observation.stableTerminal) return { kind: '', state: 'resolved', reason: 'status-missing-passive' };
+    if (observation.assistantKey) return { kind: '', state: 'observing', reason: 'response-present-after-reload' };
     if (!observation.assistantKey && Number(observation.silentIdleConfirmations || 0) >= 2) return { kind: 'continue', state: 'scheduled', reason: 'post-reload-silent-stop' };
     return { kind: '', state: 'attention', reason: 'post-reload-outcome-ambiguous' };
   }

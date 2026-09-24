@@ -1,6 +1,6 @@
-# ChatGPT Response Notifier 0.9.66
+# ChatGPT Response Notifier 0.9.67
 
-- Notifier self-update checks now bypass stale raw-GitHub/CDN caches with a unique manifest request URL plus explicit no-cache/no-store headers.
-- Quick Continue update checks retain the same cache-bypass protection added in 0.9.65.
-- Quick Continue 1.2.14 fixes the in-page JSON editor after managed hot updates by disposing stale page runtimes before rebinding them to the current config API.
-- Existing notifier state, Quick Continue config, and per-conversation timestamp state remain preserved across the update.
+- A current `Message delivery timed out` interruption still triggers the existing bounded refresh recovery path.
+- If the timeout clears after refresh while the response turn remains present, recovery now returns to observation instead of pausing automation for ambiguous attention.
+- The existing auto-continue countdown and attempts-remaining state therefore continue instead of requiring a manual Resume.
+- If the interruption remains after refresh, bounded recovery still retries it; genuinely ambiguous no-response states still fail closed for attention.
