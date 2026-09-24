@@ -152,6 +152,8 @@ test('post-reload explicit interruption schedules another reload while stable or
   assert.equal(model.postReloadDecision({ ...base, documentId: 'doc-old' }, expected).reason, 'document-did-not-change-after-reload');
   assert.deepEqual({ ...model.postReloadDecision({ ...base, statusCode: 'INCOMPLETE_LIMIT' }, expected) }, { kind: '', state: 'resolved', reason: 'coded:INCOMPLETE_LIMIT' });
   assert.deepEqual({ ...model.postReloadDecision({ ...base, assistantKey: 'assistant-1', stableTerminal: true, silentIdleConfirmations: 0 }, expected) }, { kind: '', state: 'resolved', reason: 'status-missing-passive' });
+  assert.deepEqual({ ...model.postReloadDecision({ ...base, assistantKey: 'assistant-1', stableTerminal: false, silentIdleConfirmations: 0 }, expected) }, { kind: '', state: 'observing', reason: 'response-present-after-reload' });
+  assert.deepEqual({ ...model.postReloadDecision({ ...base, assistantKey: '', silentIdleConfirmations: 0 }, expected) }, { kind: '', state: 'attention', reason: 'post-reload-outcome-ambiguous' });
   assert.deepEqual({ ...model.postReloadDecision({ ...base, assistantKey: '', silentIdleConfirmations: 2 }, expected) }, { kind: 'continue', state: 'scheduled', reason: 'post-reload-silent-stop' });
   assert.deepEqual({ ...model.postReloadDecision({
     ...base, assistantKey: 'assistant-1', explicitInterruption: true,
