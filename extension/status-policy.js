@@ -1,10 +1,10 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 10;
+  const RUNTIME_VERSION = 11;
   if (globalThis.ChatGPTNotifierContinuationPolicy?.runtimeVersion === RUNTIME_VERSION) return;
 
-  const MONITOR_POLICY_VERSION = 7;
+  const MONITOR_POLICY_VERSION = 8;
   const MISSING_FOOTER_GRACE_MS = 30_000;
   const SILENT_IDLE_FIRST_MS = 90_000;
   const SILENT_IDLE_CONFIRM_MS = 30_000;
@@ -22,6 +22,13 @@
     'INCOMPLETE_HANDOFF'
   ]);
   const AUTO_CONTINUE_STATUS_CODE_SET = new Set(AUTO_CONTINUE_STATUS_CODES);
+  const DEFINITIVE_STOP_STATUS_CODES = Object.freeze([
+    'PLANNING_ACTIVE',
+    'COMPLETE_APPLIED',
+    'COMPLETE_NO_CHANGES',
+    'BLOCKED_HUMAN'
+  ]);
+  const DEFINITIVE_STOP_STATUS_CODE_SET = new Set(DEFINITIVE_STOP_STATUS_CODES);
   const EXPLICIT_INTERRUPTION_KINDS = new Set([
     'connection-interrupted', 'request-error', 'request-rejected', 'timed-out', 'timeout',
     'connection-lost', 'systems-taking-longer', 'generation-error'
@@ -61,8 +68,18 @@
     });
   }
 
+  function isDefinitiveStopStatusCode(value) {
+    return DEFINITIVE_STOP_STATUS_CODE_SET.has(String(value || ''));
+  }
+
   function isAutoContinueStatusCode(value) {
-    return AUTO_CONTINUE_STATUS_CODE_SET.has(String(value || ''));
+    const statusCode = String(value || '');
+    if (!statusCode || isDefinitiveStopStatusCode(statusCode)) return false;
+    if (AUTO_CONTINUE_STATUS_CODE_SET.has(statusCode)) return true;
+    // A recognized status that is not an explicit stop defaults to continuation.
+    // This keeps future additive work-status codes fail-open for ongoing automation
+    // without weakening the parser's canonical-code validation.
+    return globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode) === true;
   }
 
   function isCurrentExplicitInterruption(observation = {}) {
@@ -245,7 +262,9 @@
     runtimeVersion: RUNTIME_VERSION,
     monitorPolicyVersion: MONITOR_POLICY_VERSION,
     autoContinueStatusCodes: AUTO_CONTINUE_STATUS_CODES,
+    definitiveStopStatusCodes: DEFINITIVE_STOP_STATUS_CODES,
     classifyApplicationText,
+    isDefinitiveStopStatusCode,
     isAutoContinueStatusCode,
     isCurrentExplicitInterruption,
     withStickyExplicitInterruption,
