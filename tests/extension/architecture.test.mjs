@@ -587,13 +587,13 @@ test('manifest adds only reviewed alarms permission for scheduled recovery wake'
   assert.deepEqual(manifest.permissions.sort(), ['alarms','scripting','tabs','webRequest'].sort());
   assert.deepEqual(manifest.host_permissions.sort(), ['https://chatgpt.com/*','ws://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].js, [
-    'attachment-script.js','content-script.js','persistence-script.js','status-code.js','status-policy.js','monitor-script.js','bounded-recovery-script.js','status-script.js','recovery-script.js'
+    'page-dom-compat.js','attachment-script.js','content-script.js','persistence-script.js','status-code.js','status-policy.js','monitor-script.js','bounded-recovery-script.js','status-script.js','recovery-script.js'
   ]);
 });
 
 test('local JavaScript is syntactically valid', () => {
   for (const relative of [
-    'extension/background.js','extension/service-worker.js','extension/cross-desktop-click-fallback-background.js','extension/attachment-script.js','extension/coordinator-background.js',
+    'extension/background.js','extension/page-dom-compat.js','extension/page-runtime-compat-background.js','extension/recovery-refresh-policy-background.js','extension/service-worker.js','extension/cross-desktop-click-fallback-background.js','extension/attachment-script.js','extension/coordinator-background.js',
     'extension/delivery-dedupe-hook.js','extension/delivery-reliability-background.js','extension/delivery-diagnostics-hook.js','extension/recovery-background.js','extension/recovery-script.js','extension/history-background.js','extension/status-code.js',
     'extension/status-policy.js','extension/status-script.js','extension/monitor-background.js','extension/monitor-script.js',
     'extension/recovery-model.js','extension/monitor-query-compat-background.js','extension/recovery-control-background.js',
