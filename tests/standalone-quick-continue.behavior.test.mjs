@@ -26,7 +26,7 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['prompt-format.js', 'config.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.12');
+  assert.equal(manifest.version, '1.2.13');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -45,6 +45,7 @@ test('managed updater talks only to loopback, reloads itself, and reinjects curr
 test('bundled JSON contains editable prompt templates and saved projects', () => {
   assert.equal(bundledConfig.continueText, '[{time}] Continue until you finish or need something from me.');
   assert.equal(bundledConfig.projectText, '[{time}] Continue {project} from canonical GitHub state until you finish or need me.');
+  assert.equal(bundledConfig.manualTimestampText, '[{time}]');
   assert.ok(Array.isArray(bundledConfig.projects));
   assert.ok(bundledConfig.projects.includes('campaign desk'));
   assert.ok(bundledConfig.projects.includes('notifier extension'));
@@ -122,7 +123,10 @@ test('clock toggle timestamps only trusted manual sends and preserves multiline 
   assert.match(hoverEditSource, /const CLOCK_SELECTOR = '\[aria-label="Current local time"\]'/);
   assert.match(hoverEditSource, /setAttribute\('aria-pressed', String\(manualTimestampEnabled\)\)/);
   assert.match(hoverEditSource, /outline: manualTimestampEnabled \? '1px solid currentColor' : '1px solid transparent'/);
-  assert.match(hoverEditSource, /ChatGPTQuickContinuePrompts\?\.formatTimestamp/);
+  assert.match(hoverEditSource, /prompts\?\.formatTimestamp/);
+  assert.match(hoverEditSource, /prompts\?\.renderTimeText/);
+  assert.match(hoverEditSource, /manualTimestampText/);
+  assert.match(hoverEditSource, /configApi\?\.subscribe/);
   assert.match(hoverEditSource, /function hasLeadingTimestamp\(text\)/);
   assert.match(hoverEditSource, /event\?\.isTrusted !== true/);
   assert.match(hoverEditSource, /event\.key !== 'Enter' \|\| event\.shiftKey \|\| event\.altKey/);
@@ -150,12 +154,12 @@ test('manual timestamp preference is isolated by ChatGPT conversation and follow
 test('prompt and config APIs are versioned so reinjection cannot retain stale globals indefinitely', () => {
   assert.match(promptSource, /const RUNTIME_VERSION = 3/);
   assert.match(promptSource, /runtimeVersion: RUNTIME_VERSION/);
-  assert.match(configSource, /const RUNTIME_VERSION = 3/);
+  assert.match(configSource, /const RUNTIME_VERSION = 4/);
   assert.match(configSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
   assert.match(configSource, /chrome\.storage\.onChanged\.removeListener\(handleStorageChanged\)/);
-  assert.match(hoverEditSource, /const RUNTIME_VERSION = 5/);
+  assert.match(hoverEditSource, /const RUNTIME_VERSION = 6/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
   assert.match(conversationStateSource, /const RUNTIME_VERSION = 1/);
@@ -230,6 +234,7 @@ test('config controller loads bundled JSON only from the extension and validates
   const api = context.ChatGPTQuickContinueConfig;
   const initial = await api.load();
   assert.equal(initial.continueText, bundledConfig.continueText);
+  assert.equal(initial.manualTimestampText, '[{time}]');
   assert.equal(fetchCalls.length, 1);
   assert.equal(fetchCalls[0].url, 'chrome-extension://quick-continue/config.json');
 
@@ -243,16 +248,20 @@ test('config controller loads bundled JSON only from the extension and validates
 
   assert.equal(saved.continueText, '[{time}] Continue this work.');
   assert.equal(saved.projectText, '[{time}] Continue {project} now.');
+  assert.equal(saved.manualTimestampText, '[{time}]');
   assert.deepEqual([...saved.projects], ['Campaign Desk', 'Time Tracker']);
   assert.equal(observed.continueText, '[{time}] Continue this work.');
+  assert.equal(observed.manualTimestampText, '[{time}]');
 
   const moved = await api.save({
     continueText: 'At {time}, continue this work.',
     projectText: 'Resume {project} at {time}.',
+    manualTimestampText: 'Sent at {time}:',
     projects: ['Campaign Desk']
   });
   assert.equal(moved.continueText, 'At {time}, continue this work.');
   assert.equal(moved.projectText, 'Resume {project} at {time}.');
+  assert.equal(moved.manualTimestampText, 'Sent at {time}:');
 
   await assert.rejects(
     () => api.save({
