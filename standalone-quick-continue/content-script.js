@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 6;
+  const RUNTIME_VERSION = 7;
   const prompts = globalThis.ChatGPTQuickContinuePrompts;
   const configApi = globalThis.ChatGPTQuickContinueConfig;
   if (!prompts || !configApi) return;
@@ -100,6 +100,23 @@
     }
   }
 
+  function writeContentEditable(node, text) {
+    const value = String(text ?? '').replace(/\r\n?/g, '\n');
+    try {
+      const fragment = document.createDocumentFragment();
+      const lines = value.split('\n');
+      lines.forEach((line, index) => {
+        if (index > 0) fragment.append(document.createElement('br'));
+        if (line) fragment.append(document.createTextNode(line));
+      });
+      node.replaceChildren(fragment);
+      dispatchInput(node, value);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   function writeComposer(node, text) {
     if (!node) return false;
     try {
@@ -110,8 +127,7 @@
         else node.value = text;
         dispatchInput(node, text);
       } else if (node.isContentEditable) {
-        node.textContent = text;
-        dispatchInput(node, text);
+        if (!writeContentEditable(node, text)) return false;
       } else {
         return false;
       }
