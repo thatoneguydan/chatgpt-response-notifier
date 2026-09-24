@@ -1,12 +1,13 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 3;
+  const RUNTIME_VERSION = 4;
   const previousRuntime = globalThis.ChatGPTQuickContinueConfig;
   if (Number(previousRuntime?.runtimeVersion || 0) === RUNTIME_VERSION) return;
   try { previousRuntime?.dispose?.(); } catch {}
 
   const STORAGE_KEY = 'quickContinueConfig';
+  const DEFAULT_MANUAL_TIMESTAMP_TEXT = '[{time}]';
   const MAX_PROJECTS = 40;
   const listeners = new Set();
   let current = null;
@@ -45,9 +46,13 @@
 
     const continueText = ensureTimePlaceholder(value.continueText);
     const projectText = ensureTimePlaceholder(value.projectText);
+    const manualTimestampText = ensureTimePlaceholder(
+      value.manualTimestampText ?? DEFAULT_MANUAL_TIMESTAMP_TEXT
+    );
 
     if (!continueText) throw new Error('"continueText" must not be blank.');
     if (!projectText) throw new Error('"projectText" must not be blank.');
+    if (!manualTimestampText) throw new Error('"manualTimestampText" must not be blank.');
     if (!projectText.includes('{project}')) {
       throw new Error('"projectText" must include {project}.');
     }
@@ -55,6 +60,7 @@
     return Object.freeze({
       continueText,
       projectText,
+      manualTimestampText,
       projects: Object.freeze(normalizeProjectList(value.projects))
     });
   }
@@ -63,6 +69,7 @@
     return {
       continueText: value.continueText,
       projectText: value.projectText,
+      manualTimestampText: value.manualTimestampText,
       projects: [...value.projects]
     };
   }
