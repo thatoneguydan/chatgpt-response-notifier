@@ -673,7 +673,7 @@ test('canonical project continuation prompts are fresh enrollment evidence witho
   assert.match(monitorPage, /function userHasCanonicalProjectStart/);
   assert.match(monitorPage, /from canonical GitHub state/);
   assert.match(monitorPage, /projectStartSignal: userHasCanonicalProjectStart\(userText\)/);
-  assert.match(monitorPage, /projectStartSignal: turnState\.projectStartSignal === true/);
+  assert.match(monitorPage, /projectStartSignal: !inheritedPriorPrompt && turnState\.projectStartSignal === true/);
 
   assert.match(monitorWorker, /projectStartSignal: snapshot\.projectStartSignal === true/);
   assert.match(monitorWorker, /clean\.projectStartSignal === true \|\| clean\.workStartSignal === true \|\| statusIsValid/);
