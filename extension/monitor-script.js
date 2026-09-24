@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 12;
+  const RUNTIME_VERSION = 13;
   try { globalThis.__chatgptNotifierMonitorRuntime?.dispose?.(); } catch {}
 
   const abortController = new AbortController();
@@ -33,6 +33,8 @@
   let lastIdentityKey = '';
   let stickyTerminalPromptKey = '';
   let stickyTerminalStatusCode = '';
+  let lastPublishedPromptKey = '';
+  let requestPriorPromptKey = '';
 
   const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
 
@@ -402,6 +404,15 @@
 
   function snapshot() {
     const turnState = latestTurnState();
+    const inheritedPriorPrompt = Boolean(
+      requestPriorPromptKey
+      && turnState.promptKey
+      && turnState.promptKey === requestPriorPromptKey
+    );
+    if (turnState.promptKey && !inheritedPriorPrompt) {
+      lastPublishedPromptKey = turnState.promptKey;
+      if (requestPriorPromptKey && turnState.promptKey !== requestPriorPromptKey) requestPriorPromptKey = '';
+    }
     const app = currentRequestApplicationState(turnState);
     const promptChanged = turnState.promptKey && turnState.promptKey !== manualStopPromptKey;
     if (manualStopped && promptChanged) manualStopped = false;
@@ -414,16 +425,16 @@
       conversationId: turnState.identity?.id || '',
       conversationUrl: turnState.identity?.url || '',
       documentId,
-      promptKey: turnState.promptKey,
-      previousPromptKey: turnState.previousPromptKey || '',
-      previousStatusCode: turnState.previousStatusCode || '',
-      promptRevision: turnState.promptRevision,
-      assistantKey: turnState.assistantKey,
-      assistantRevision: turnState.assistantRevision,
-      statusCode: turnState.statusCode,
-      hasStatusEvidence: turnState.hasStatusEvidence === true,
-      workStartSignal: turnState.workStartSignal === true,
-      projectStartSignal: turnState.projectStartSignal === true,
+      promptKey: inheritedPriorPrompt ? '' : turnState.promptKey,
+      previousPromptKey: inheritedPriorPrompt ? '' : (turnState.previousPromptKey || ''),
+      previousStatusCode: inheritedPriorPrompt ? '' : (turnState.previousStatusCode || ''),
+      promptRevision: inheritedPriorPrompt ? '' : turnState.promptRevision,
+      assistantKey: inheritedPriorPrompt ? '' : turnState.assistantKey,
+      assistantRevision: inheritedPriorPrompt ? '' : turnState.assistantRevision,
+      statusCode: inheritedPriorPrompt ? '' : turnState.statusCode,
+      hasStatusEvidence: !inheritedPriorPrompt && turnState.hasStatusEvidence === true,
+      workStartSignal: !inheritedPriorPrompt && turnState.workStartSignal === true,
+      projectStartSignal: !inheritedPriorPrompt && turnState.projectStartSignal === true,
       observable,
       online: navigator.onLine !== false,
       manualStopped,
@@ -534,6 +545,30 @@
     schedulePublish();
   }
 
+  async function rearmStoppedWatchdogForNewRequest() {
+    const identity = conversationIdentity();
+    if (!identity?.id) return false;
+    let overview = null;
+    try {
+      overview = await chrome.runtime.sendMessage({ type: 'GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER' });
+    } catch {
+      return false;
+    }
+    if (overview?.automationEnabled !== true || overview?.pausedByUser === true) return false;
+    const watchdog = overview?.codeWatchdog || null;
+    if (watchdog && watchdog.stopped !== true) return false;
+    try {
+      const result = await chrome.runtime.sendMessage({
+        type: 'ARM_CODE_WATCHDOG_FOR_SENDER',
+        conversationId: identity.id,
+        source: 'request-start-fail-open'
+      });
+      return result?.ok === true;
+    } catch {
+      return false;
+    }
+  }
+
   function setRequestPhase(message) {
     const phase = String(message?.phase || '');
     if (!['started', 'completed', 'error'].includes(phase)) return;
@@ -541,12 +576,17 @@
     const observedAt = Number(message?.observedAt || Date.now());
     const incomingStartedAt = Math.max(0, Number(message?.requestStartedAt || 0));
     if (phase === 'started') {
+      requestPriorPromptKey = lastPublishedPromptKey;
       requestPhase = 'started';
       requestId = incomingId;
       requestStartedAt = incomingStartedAt || observedAt;
       requestSettledAt = 0;
       manualStopped = false;
       resetStability();
+      rearmStoppedWatchdogForNewRequest()
+        .catch(() => false)
+        .finally(() => schedulePublish());
+      return;
     } else if (!requestId || !incomingId || requestId === incomingId) {
       requestPhase = phase;
       requestId = incomingId || requestId;
