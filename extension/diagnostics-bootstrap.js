@@ -1,6 +1,6 @@
 'use strict';
 
-importScripts('page-runtime-compat-background.js', 'background.js');
+importScripts('page-runtime-compat-background.js', 'background.js', 'recovery-refresh-policy-background.js');
 
 if (!globalThis.__chatgptNotifierBootstrapFailure) {
   try {
