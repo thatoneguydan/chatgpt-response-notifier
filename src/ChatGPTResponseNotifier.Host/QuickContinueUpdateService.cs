@@ -39,7 +39,14 @@ internal sealed class QuickContinueUpdateService : IDisposable
             }
 
             _status = new UpdateStatusSnapshot("checking", currentVersion);
-            using var manifestResponse = await _http.GetAsync(QuickContinueUpdateFeed.ManifestUrl, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
+            var manifestUrl = $"{QuickContinueUpdateFeed.ManifestUrl}?cacheBust={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+            using var manifestRequest = new HttpRequestMessage(HttpMethod.Get, manifestUrl);
+            manifestRequest.Headers.CacheControl = new CacheControlHeaderValue
+            {
+                NoCache = true,
+                NoStore = true
+            };
+            using var manifestResponse = await _http.SendAsync(manifestRequest, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
             manifestResponse.EnsureSuccessStatusCode();
             var manifestJson = await manifestResponse.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
             var manifest = QuickContinueUpdateFeed.Parse(manifestJson);
