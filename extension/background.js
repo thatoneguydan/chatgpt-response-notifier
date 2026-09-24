@@ -48,6 +48,7 @@ try {
     'recovery-background.js',
     'history-background.js',
     'monitor-background.js',
+    'watchdog-continuation-invariant-background.js',
     'monitor-query-compat-background.js',
     'recovery-control-background.js',
     'traffic-safety-background.js',
