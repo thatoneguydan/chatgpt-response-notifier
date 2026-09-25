@@ -12,7 +12,7 @@ const refreshPolicy = read('extension/recovery-refresh-policy-background.js');
 const bootstrap = read('extension/diagnostics-bootstrap.js');
 
 test('current ChatGPT UI compatibility loads before page readers and stays page-local', () => {
-  assert.equal(manifest.version, '0.9.73');
+  assert.equal(manifest.version, '0.9.74');
   assert.equal(manifest.content_scripts[0].js[0], 'page-dom-compat.js');
   assert.match(domCompat, /data-message-author-role=\\?"user\\?"/);
   assert.match(domCompat, /data-message-author-role=\\?"assistant\\?"/);
@@ -69,15 +69,10 @@ test('recovery hard-refresh cadence is persistently gated to at least sixty seco
     thresholds: Object.freeze({ profileActionSpacingMs: 30_000 }),
     marker: 'model'
   });
-  const context = vm.createContext({
-    globalThis: null,
-    ChatGPTNotifierContinuationPolicy: originalPolicy,
-    ChatGPTNotifierRecoveryModel: originalModel,
-    Object,
-    Number,
-    Math
-  });
+  const context = vm.createContext({ console });
   context.globalThis = context;
+  context.ChatGPTNotifierContinuationPolicy = originalPolicy;
+  context.ChatGPTNotifierRecoveryModel = originalModel;
   vm.runInContext(refreshPolicy, context);
 
   assert.equal(context.ChatGPTNotifierContinuationPolicy.thresholds.profileActionSpacingMs, 60_000);
