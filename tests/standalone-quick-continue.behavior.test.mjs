@@ -28,7 +28,7 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['dom-compat.js', 'prompt-format.js', 'config.js', 'runtime-reset.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.17');
+  assert.equal(manifest.version, '1.2.18');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -171,8 +171,10 @@ test('clock toggle renders the configured manual-message template only for trust
   assert.match(hoverEditSource, /event\?\.isTrusted !== true/);
   assert.match(hoverEditSource, /event\.key !== 'Enter' \|\| event\.shiftKey \|\| event\.altKey/);
   assert.match(hoverEditSource, /event\.isComposing \|\| event\.keyCode === 229/);
-  assert.match(hoverEditSource, /document\.execCommand\('insertText', false, next\)/);
+  assert.match(hoverEditSource, /next\.split\('\\n'\)/);
   assert.match(hoverEditSource, /document\.createElement\('br'\)/);
+  assert.match(hoverEditSource, /node\.replaceChildren\(fragment\)/);
+  assert.doesNotMatch(hoverEditSource, /document\.execCommand/);
   assert.match(hoverEditSource, /document\.addEventListener\('click', handleManualSendClick, true\)/);
   assert.match(hoverEditSource, /document\.addEventListener\('keydown', handleManualSendKeydown, true\)/);
   assert.match(hoverEditSource, /document\.removeEventListener\('click', handleManualSendClick, true\)/);
@@ -200,7 +202,7 @@ test('prompt and config APIs are versioned so reinjection cannot retain stale gl
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
   assert.match(configSource, /chrome\.storage\.onChanged\.removeListener\(handleStorageChanged\)/);
-  assert.match(hoverEditSource, /const RUNTIME_VERSION = 7/);
+  assert.match(hoverEditSource, /const RUNTIME_VERSION = 8/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
   assert.match(conversationStateSource, /const RUNTIME_VERSION = 1/);
