@@ -14,6 +14,7 @@ test('production loads request lifecycle correction after the canonical monitor 
   const lifecycleAt = bootstrap.indexOf("importScripts('watchdog-request-lifecycle-fix-background.js')");
   const quickBridgeAt = bootstrap.indexOf("importScripts('quick-continue-monitor-bridge-background.js')");
   assert.ok(backgroundAt >= 0 && lifecycleAt > backgroundAt && quickBridgeAt > lifecycleAt);
+  assert.match(source, /RUNTIME_VERSION = 2/);
   assert.doesNotThrow(() => new vm.Script(source));
 });
 
@@ -39,9 +40,29 @@ test('manual Monitor enable is deferred until a later request instead of creatin
   assert.match(source, /freshRequestStartedAt >= toggledAt/);
 });
 
-test('COMPLETE and BLOCKED terminal statuses have a direct watchdog stop route', () => {
+test('COMPLETE and BLOCKED terminal statuses serialize through the canonical watchdog queue and reset attempts', () => {
   assert.match(source, /PARK_CODE_WATCHDOG_FOR_TERMINAL_STATUS_FOR_SENDER/);
   assert.match(source, /policy\?\.isDefinitiveStopStatusCode\?\.\(statusCode\) !== true/);
-  assert.match(source, /monitor\.parkCodeWatchdogForTerminalStatus\(\{/);
+  assert.match(source, /const stopped = await monitor\.reconcileCodeWatchdog\(\{/);
+  assert.doesNotMatch(source, /monitor\.parkCodeWatchdogForTerminalStatus\(\{/);
+  assert.match(source, /resetStoppedAttempts\(target\.id, statusCode\)/);
+  assert.match(source, /sendCount:\s*0/);
+  assert.match(source, /lastAutomaticSentAt:\s*0/);
+  assert.match(source, /lastAutomaticPromptKey:\s*''/);
+  assert.match(source, /lastAutomaticParentPromptKey:\s*''/);
+  assert.match(source, /deadlineAt:\s*0/);
+  assert.match(source, /retryAt:\s*0/);
   assert.match(source, /publishOverview\(target\)/);
+});
+
+test('definitive terminal latch defeats late stale monitor snapshots until a genuinely newer request starts', () => {
+  assert.match(source, /TERMINAL_REASSERT_DELAYS_MS/);
+  assert.match(source, /terminalLatchesByConversation/);
+  assert.match(source, /rememberTerminalLatch\(target\.id, statusCode, promptKey, stoppedAt\)/);
+  assert.match(source, /message\?\.type === 'CHATGPT_MONITOR_STATE'/);
+  assert.match(source, /scheduleTerminalReassert\(conversationId, sender\.tab\.id\)/);
+  assert.match(source, /reassertTerminalLatch/);
+  assert.match(source, /freshRequestClearsTerminalLatch/);
+  assert.match(source, /requestStartedAt > Number\(latch\.stoppedAt \|\| 0\)/);
+  assert.match(source, /currentRequestStartedAt > Number\(activeLatch\.stoppedAt \|\| 0\)/);
 });
