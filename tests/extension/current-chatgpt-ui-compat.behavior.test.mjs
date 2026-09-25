@@ -69,10 +69,15 @@ test('recovery hard-refresh cadence is persistently gated to at least sixty seco
     thresholds: Object.freeze({ profileActionSpacingMs: 30_000 }),
     marker: 'model'
   });
-  const context = vm.createContext({ console });
+  const context = vm.createContext({
+    globalThis: null,
+    ChatGPTNotifierContinuationPolicy: originalPolicy,
+    ChatGPTNotifierRecoveryModel: originalModel,
+    Object,
+    Number,
+    Math
+  });
   context.globalThis = context;
-  context.ChatGPTNotifierContinuationPolicy = originalPolicy;
-  context.ChatGPTNotifierRecoveryModel = originalModel;
   vm.runInContext(refreshPolicy, context);
 
   assert.equal(context.ChatGPTNotifierContinuationPolicy.thresholds.profileActionSpacingMs, 60_000);
