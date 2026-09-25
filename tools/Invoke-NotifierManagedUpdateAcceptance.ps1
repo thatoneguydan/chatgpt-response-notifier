@@ -38,6 +38,8 @@ function Receive-BridgeJson {
     param(
         [Parameter(Mandatory = $true)]
         [Net.WebSockets.ClientWebSocket]$Socket,
+        [Parameter(Mandatory = $true)]
+        [ref]$Message,
         [int]$TimeoutSeconds = 20
     )
 
@@ -54,15 +56,15 @@ function Receive-BridgeJson {
             if ($result.MessageType -ne [Net.WebSockets.WebSocketMessageType]::Text) {
                 continue
             }
-            $stream.Write($buffer, 0, $result.Count)
+            [void]$stream.Write($buffer, 0, $result.Count)
         }
         while (-not $result.EndOfMessage)
 
-        return ($Utf8.GetString($stream.ToArray()) | ConvertFrom-Json -ErrorAction Stop)
+        $Message.Value = ($Utf8.GetString($stream.ToArray()) | ConvertFrom-Json -ErrorAction Stop)
     }
     finally {
-        $readTimeout.Dispose()
-        $stream.Dispose()
+        [void]$readTimeout.Dispose()
+        [void]$stream.Dispose()
     }
 }
 
@@ -78,57 +80,55 @@ function Send-BridgeJson {
     $segment = [ArraySegment[byte]]::new($bytes)
     $sendTimeout = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(10))
     try {
-        $Socket.SendAsync(
+        [void]$Socket.SendAsync(
             $segment,
             [Net.WebSockets.WebSocketMessageType]::Text,
             $true,
             $sendTimeout.Token).GetAwaiter().GetResult()
     }
     finally {
-        $sendTimeout.Dispose()
+        [void]$sendTimeout.Dispose()
     }
 }
 
-function Invoke-ManagedUpdateCheck {
+function Read-BridgeReady {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ref]$Ready
+    )
+
     $socket = $null
     Open-BridgeSocket -Socket ([ref]$socket)
     try {
-        # The helper sends host.ready immediately after the WebSocket handshake.
-        $ready = Receive-BridgeJson -Socket $socket -TimeoutSeconds 20
+        $message = $null
+        Receive-BridgeJson -Socket $socket -Message ([ref]$message) -TimeoutSeconds 20
+        if ([string]$message.type -ne 'host.ready') {
+            throw "Notifier helper bridge did not begin with host.ready; received '$([string]$message.type)'."
+        }
+        $Ready.Value = $message
+    }
+    finally {
+        try { [void]$socket.Dispose() } catch {}
+    }
+}
+
+function Request-ManagedUpdate {
+    $socket = $null
+    Open-BridgeSocket -Socket ([ref]$socket)
+    try {
+        $ready = $null
+        Receive-BridgeJson -Socket $socket -Message ([ref]$ready) -TimeoutSeconds 20
         if ([string]$ready.type -ne 'host.ready') {
             throw "Notifier helper bridge did not begin with host.ready; received '$([string]$ready.type)'."
         }
 
-        $requestId = [Guid]::NewGuid().ToString()
         Send-BridgeJson -Socket $socket -Payload ([ordered]@{
             type = 'update.check'
-            requestId = $requestId
+            requestId = [Guid]::NewGuid().ToString()
         })
-
-        $deadline = [DateTimeOffset]::UtcNow.AddSeconds(150)
-        while ([DateTimeOffset]::UtcNow -lt $deadline) {
-            $message = Receive-BridgeJson -Socket $socket -TimeoutSeconds 20
-            if ([string]$message.type -ne 'update.result') { continue }
-            if ([string]$message.requestId -ne $requestId) { continue }
-            return $message
-        }
-        throw 'Notifier helper did not return update.result before the acceptance deadline.'
     }
     finally {
-        try { $socket.Dispose() } catch {}
-    }
-}
-
-function Read-InstalledBridgeVersion {
-    $socket = $null
-    Open-BridgeSocket -Socket ([ref]$socket)
-    try {
-        $ready = Receive-BridgeJson -Socket $socket -TimeoutSeconds 20
-        if ([string]$ready.type -ne 'host.ready') { return '' }
-        return [string]$ready.installedExtensionVersion
-    }
-    finally {
-        try { $socket.Dispose() } catch {}
+        try { [void]$socket.Dispose() } catch {}
     }
 }
 
@@ -143,18 +143,20 @@ if ($RetryDelaySeconds -lt 1 -or $RetryDelaySeconds -gt 60) {
 }
 
 $installed = ''
-$lastState = ''
-$lastAvailable = ''
 $lastError = ''
 for ($attempt = 1; $attempt -le $Attempts; $attempt += 1) {
+    $requested = $false
     try {
-        $response = Invoke-ManagedUpdateCheck
-        $status = $response.updateStatus
-        $installed = [string]$status.currentVersion
-        $lastState = [string]$status.state
-        $lastAvailable = [string]$status.availableVersion
-        $lastError = [string]$status.error
-        Write-Host "Notifier live-update acceptance attempt $attempt`: expected=$ExpectedVersion installed=$installed state=$lastState available=$lastAvailable errorPresent=$(-not [string]::IsNullOrWhiteSpace($lastError))"
+        $ready = $null
+        Read-BridgeReady -Ready ([ref]$ready)
+        $installed = [string]$ready.installedExtensionVersion
+
+        if ($installed -ne $ExpectedVersion -and (($attempt - 1) % 4 -eq 0)) {
+            Request-ManagedUpdate
+            $requested = $true
+        }
+
+        Write-Host "Notifier live-update acceptance attempt $attempt`: expected=$ExpectedVersion installed=$installed updateRequested=$requested"
         if ($installed -eq $ExpectedVersion) { break }
     }
     catch {
@@ -166,16 +168,18 @@ for ($attempt = 1; $attempt -le $Attempts; $attempt += 1) {
 }
 
 if ($installed -ne $ExpectedVersion) {
-    throw "Notifier $ExpectedVersion was published but the Glass helper did not install it. Last result: installed=$installed state=$lastState available=$lastAvailable error=$lastError"
+    throw "Notifier $ExpectedVersion was published but the Glass helper did not report it installed. Last result: installed=$installed error=$lastError"
 }
 
-# The update result is emitted before the helper schedules its replacement.
-# Reconnect until the restarted helper itself reports the installed version.
+# Give a replacement helper time to take over the loopback endpoint, then
+# confirm a fresh host.ready still sees the installed release.
 $verifiedHost = $false
 $hostVersion = ''
 for ($attempt = 1; $attempt -le 30; $attempt += 1) {
     try {
-        $hostVersion = Read-InstalledBridgeVersion
+        $ready = $null
+        Read-BridgeReady -Ready ([ref]$ready)
+        $hostVersion = [string]$ready.installedExtensionVersion
         if ($hostVersion -eq $ExpectedVersion) {
             $verifiedHost = $true
             break
@@ -188,7 +192,7 @@ for ($attempt = 1; $attempt -le 30; $attempt += 1) {
 }
 
 if (-not $verifiedHost) {
-    throw "Notifier $ExpectedVersion installed, but the restarted Glass helper did not report that version. Last helper version: $hostVersion"
+    throw "Notifier $ExpectedVersion installed, but a fresh Glass helper connection did not report that version. Last helper version: $hostVersion"
 }
 
-Write-Host "Notifier $ExpectedVersion is installed on Glass and confirmed by the restarted local helper."
+Write-Host "Notifier $ExpectedVersion is installed on Glass and confirmed through a fresh local helper connection."
