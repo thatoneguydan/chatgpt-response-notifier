@@ -30,6 +30,15 @@ test('Quick Continue feed checks bypass stale CDN and HTTP client caches', () =>
   assert.doesNotMatch(service, /_http\.GetAsync\(QuickContinueUpdateFeed\.ManifestUrl/);
 });
 
+test('explicit Quick Continue update requests wait for an active check then perform a fresh check', () => {
+  assert.match(service, /await _gate\.WaitAsync\(cancellationToken\)\.ConfigureAwait\(false\)/);
+  assert.doesNotMatch(service, /WaitAsync\(0, cancellationToken\)/);
+  assert.match(service, /every waiting caller performs its own fresh cache-busted/);
+  const gateIndex = service.indexOf('await _gate.WaitAsync(cancellationToken)');
+  const cacheBustIndex = service.indexOf('cacheBust=', gateIndex);
+  assert.ok(gateIndex >= 0 && cacheBustIndex > gateIndex);
+});
+
 test('notifier public feed checks also bypass stale CDN and HTTP client caches', () => {
   assert.match(publicUpdateService, /cacheBust=\{DateTimeOffset\.UtcNow\.ToUnixTimeMilliseconds\(\)\}/);
   assert.match(publicUpdateService, /new HttpRequestMessage\(HttpMethod\.Get, manifestUrl\)/);
