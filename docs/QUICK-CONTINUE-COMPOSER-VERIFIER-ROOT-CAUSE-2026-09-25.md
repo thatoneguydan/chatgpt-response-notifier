@@ -21,4 +21,4 @@ Quick Continue 1.2.20 keeps exact verification but changes what is verified:
 - the `execCommand` boolean is ignored and the post-write logical editor contents are authoritative;
 - exact comparison remains in place, so a real added/removed blank line still blocks sending.
 
-A dedicated Lexical-style regression test models paragraph DOM and the false `execCommand` return case.
+The existing exact-newline behavior tests remain in the release gate; live ChatGPT verification is still required because the original defect depends on Chromium/Lexical DOM behavior.
