@@ -144,6 +144,37 @@ jobs:
             throw 'Published Quick Continue update feed has no version.'
           }
 
+          # The helper reads the raw.githubusercontent.com feed. A just-pushed main
+          # commit can reach the Git API before the raw edge cache exposes it, so do
+          # not ask Glass to update until the exact public feed it consumes is current.
+          $publicFeedBase = 'https://raw.githubusercontent.com/thatoneguydan/chatgpt-response-notifier/main/standalone-quick-continue/update/manifest.json'
+          $publicFeedVisible = $false
+          $lastPublicVersion = $null
+          $lastPublicFailure = $null
+          for ($attempt = 1; $attempt -le 24; $attempt += 1) {
+            try {
+              $cacheBust = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+              $publicFeed = Invoke-RestMethod -Uri "${publicFeedBase}?cacheBust=$cacheBust" -Headers @{ 'Cache-Control' = 'no-cache'; 'Pragma' = 'no-cache' } -TimeoutSec 30
+              $lastPublicVersion = [string]$publicFeed.version
+              Write-Host "Quick Continue public-feed propagation attempt $attempt`: expected=$expectedVersion visible=$lastPublicVersion"
+              if ($lastPublicVersion -eq $expectedVersion) {
+                $publicFeedVisible = $true
+                break
+              }
+              $lastPublicFailure = "public feed still reports version=$lastPublicVersion"
+            }
+            catch {
+              $lastPublicFailure = $_.Exception.Message
+              Write-Warning "Quick Continue public-feed propagation attempt $attempt failed: $lastPublicFailure"
+            }
+
+            if ($attempt -lt 24) { Start-Sleep -Seconds 5 }
+          }
+
+          if (-not $publicFeedVisible) {
+            throw "Quick Continue $expectedVersion was published to main but did not propagate to the public raw feed. Last result: $lastPublicFailure"
+          }
+
           $endpoint = 'http://127.0.0.1:38473/quick-continue/update'
           $lastResponse = $null
           $lastFailure = $null
