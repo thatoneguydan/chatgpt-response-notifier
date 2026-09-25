@@ -79,7 +79,7 @@ test('definitive rendered statuses directly park the watchdog', () => {
   assert.doesNotMatch(bridge, /type:\s*'CHATGPT_MONITOR_STATE'/);
 });
 
-test('status presentation has one compact owner and no competing pseudo status', () => {
+test('status presentation has one compact fixed owner and no competing pseudo status', () => {
   const bridge = readText('extension/quick-continue-monitor-bridge.js');
   const fallback = readText('extension/quick-continue-status-fallback.js');
 
@@ -87,11 +87,13 @@ test('status presentation has one compact owner and no competing pseudo status',
   assert.match(bridge, /display:\s*none !important/);
   assert.match(bridge, /content:\s*none !important/);
   assert.match(fallback, /RUNTIME_VERSION = 3/);
-  assert.match(fallback, /MAX_STATUS_WIDTH_PX = 240/);
-  assert.match(fallback, /width:\s*max-content !important/);
+  assert.match(fallback, /STATUS_WIDTH_PX = 200/);
   assert.match(fallback, /font-size:\s*10px !important/);
   assert.match(fallback, /background:\s*var\(--main-surface-primary, #fff\) !important/);
+  assert.match(fallback, /node\.style\.setProperty\('width', `\$\{statusWidth\}px`, 'important'\)/);
   assert.match(fallback, /stopReason\.startsWith\('status:'\)/);
+  assert.match(fallback, /manualOnlyDeadline/);
+  assert.match(fallback, /waitingForRequestStart === true/);
   assert.match(fallback, /if \(!watchdog\) return ''/);
   assert.match(fallback, /overview\?\.codeWatchdog/);
   assert.doesNotMatch(fallback, /MutationObserver/);
