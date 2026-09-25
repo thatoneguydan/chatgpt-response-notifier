@@ -3,8 +3,9 @@
 (() => {
   if (globalThis.__chatgptNotifierQuickContinueBridgeBackground) return;
 
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   const BRIDGE_FILE = 'quick-continue-monitor-bridge.js';
+  const STATUS_FALLBACK_FILE = 'quick-continue-status-fallback.js';
 
   function isChatGptUrl(value) {
     try {
@@ -15,10 +16,10 @@
     }
   }
 
-  async function bridgeCurrent(tabId) {
+  async function runtimeCurrent(tabId, type) {
     try {
-      const result = await chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_NOTIFIER_QUICK_BRIDGE_PING' });
-      return result?.ok === true && Number(result.runtimeVersion || 0) >= RUNTIME_VERSION;
+      const result = await chrome.tabs.sendMessage(tabId, { type });
+      return result?.ok === true && Number(result.runtimeVersion || 0) >= 1;
     } catch {
       return false;
     }
@@ -29,13 +30,27 @@
     let tab = null;
     try { tab = await chrome.tabs.get(tabId); } catch { return false; }
     if (!isChatGptUrl(tab?.url) || tab?.discarded === true || tab?.frozen === true) return false;
-    if (await bridgeCurrent(tabId)) return true;
-    try {
-      await chrome.scripting.executeScript({ target: { tabId }, files: [BRIDGE_FILE] });
-    } catch {
-      return false;
+
+    const bridgeReady = await runtimeCurrent(tabId, 'CHATGPT_NOTIFIER_QUICK_BRIDGE_PING');
+    if (!bridgeReady) {
+      try {
+        await chrome.scripting.executeScript({ target: { tabId }, files: [BRIDGE_FILE] });
+      } catch {
+        return false;
+      }
     }
-    return await bridgeCurrent(tabId);
+
+    const statusReady = await runtimeCurrent(tabId, 'CHATGPT_NOTIFIER_QUICK_STATUS_PING');
+    if (!statusReady) {
+      try {
+        await chrome.scripting.executeScript({ target: { tabId }, files: [STATUS_FALLBACK_FILE] });
+      } catch {
+        return false;
+      }
+    }
+
+    return await runtimeCurrent(tabId, 'CHATGPT_NOTIFIER_QUICK_BRIDGE_PING')
+      && await runtimeCurrent(tabId, 'CHATGPT_NOTIFIER_QUICK_STATUS_PING');
   }
 
   async function ensureExistingTabs() {
