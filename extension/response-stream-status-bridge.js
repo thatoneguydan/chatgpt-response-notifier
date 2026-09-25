@@ -1,9 +1,8 @@
 'use strict';
 
 (() => {
-  const INSTALL_KEY = '__chatgptNotifierStreamStatusBridgeV1';
-  if (globalThis[INSTALL_KEY]) return;
-  globalThis[INSTALL_KEY] = true;
+  const RUNTIME_VERSION = 2;
+  try { globalThis.__chatgptNotifierStreamStatusBridge?.dispose?.(); } catch {}
 
   const EVENT_MARKER = 'chatgpt-response-notifier-stream-status-v1';
   const ALLOWED_KINDS = new Set([
@@ -46,5 +45,16 @@
     } catch {}
   }
 
-  window.addEventListener('message', onMessage);
+  try { window.addEventListener('message', onMessage); } catch {}
+
+  const runtime = Object.freeze({
+    version: RUNTIME_VERSION,
+    dispose() {
+      try { window.removeEventListener('message', onMessage); } catch {}
+      if (globalThis.__chatgptNotifierStreamStatusBridge === runtime) {
+        delete globalThis.__chatgptNotifierStreamStatusBridge;
+      }
+    }
+  });
+  globalThis.__chatgptNotifierStreamStatusBridge = runtime;
 })();
