@@ -28,8 +28,8 @@
         "https://chatgpt.com/*"
       ],
       "js": [
-        "quick-continue-status-stabilizer.js",
         "page-dom-compat.js",
+        "quick-continue-status-stabilizer.js",
         "attachment-script.js",
         "content-script.js",
         "persistence-script.js",
