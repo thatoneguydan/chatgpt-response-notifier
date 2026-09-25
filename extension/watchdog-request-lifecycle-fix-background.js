@@ -176,7 +176,21 @@
       manualEnableDeferredAt: toggledAt
     }).catch(() => null);
     if (deferred) await publishOverview(target);
+
+    const requestAfterWrite = requestStartsByTab.get(tabId) || null;
+    const requestAfterWriteAt = Math.max(0, Number(requestAfterWrite?.requestStartedAt || 0));
+    if (requestAfterWriteAt >= toggledAt) {
+      return await armRequestStartForTab(tabId, requestAfterWrite.requestId, requestAfterWriteAt);
+    }
     return Boolean(deferred);
+  }
+
+  async function resolveManualEnableTabId(message, sender) {
+    if (Number.isInteger(sender?.tab?.id)) return sender.tab.id;
+    if (Number.isInteger(message?.tabId)) return message.tabId;
+    let tabs = [];
+    try { tabs = await chrome.tabs.query({ active: true, currentWindow: true, url: ['https://chatgpt.com/*'] }); } catch {}
+    return Number.isInteger(tabs[0]?.id) ? tabs[0].id : null;
   }
 
   async function parkTerminalStatusForSender(message, sender) {
@@ -261,12 +275,11 @@
     ) && message?.enabled === true && message?.resumeExistingRun !== true;
     if (!manualEnable) return false;
 
-    const tabId = Number.isInteger(sender?.tab?.id)
-      ? sender.tab.id
-      : (Number.isInteger(message?.tabId) ? message.tabId : null);
-    if (!Number.isInteger(tabId)) return false;
     const toggledAt = Date.now();
-    setTimeout(() => deferManualEnableTimer(tabId, toggledAt).catch(() => false), 0);
+    resolveManualEnableTabId(message, sender).then((tabId) => {
+      if (!Number.isInteger(tabId)) return;
+      setTimeout(() => deferManualEnableTimer(tabId, toggledAt).catch(() => false), 0);
+    }).catch(() => {});
     return false;
   });
 
@@ -275,6 +288,7 @@
     requestStartsByTab,
     armRequestStartForTab,
     deferManualEnableTimer,
+    resolveManualEnableTabId,
     parkTerminalStatusForSender
   });
 })();
