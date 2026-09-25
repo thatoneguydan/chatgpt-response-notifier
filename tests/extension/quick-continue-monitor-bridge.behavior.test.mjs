@@ -41,6 +41,17 @@ test('Continue and Project actions enable monitoring before arming the fresh use
   assert.ok(enableIndex >= 0 && freshTurnIndex > enableIndex && armIndex > freshTurnIndex);
 });
 
+test('Quick Continue bridge suppresses the legacy click-time arm before the fresh turn exists', () => {
+  const bridge = readText('extension/quick-continue-monitor-bridge.js');
+
+  assert.match(bridge, /window\.addEventListener\('click', handleQuickAction, \{ capture: true/);
+  assert.doesNotMatch(bridge, /document\.addEventListener\('click', handleQuickAction/);
+  assert.match(bridge, /LEGACY_MASKED_ARIA_LABEL = 'Quick Continue sending'/);
+  assert.match(bridge, /control\.setAttribute\('aria-label', LEGACY_MASKED_ARIA_LABEL\)/);
+  assert.match(bridge, /control\.setAttribute\('aria-label', originalLabel\)/);
+  assert.match(bridge, /setTimeout\(\(\) => \{/);
+});
+
 test('definitive status fallback stops the current prompt without inheriting an old footer', () => {
   const bridge = readText('extension/quick-continue-monitor-bridge.js');
 
