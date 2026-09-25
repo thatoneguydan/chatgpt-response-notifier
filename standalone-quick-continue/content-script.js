@@ -4,7 +4,8 @@
   const RUNTIME_VERSION = 7;
   const prompts = globalThis.ChatGPTQuickContinuePrompts;
   const configApi = globalThis.ChatGPTQuickContinueConfig;
-  if (!prompts || !configApi) return;
+  const composerApi = globalThis.ChatGPTQuickContinueComposer;
+  if (!prompts || !configApi || !composerApi) return;
 
   const previousRuntime = globalThis.__chatgptQuickContinueRuntime;
   if (Number(previousRuntime?.version || 0) === RUNTIME_VERSION) return;
@@ -47,11 +48,6 @@
   let configLoadPromise = null;
   let unsubscribeConfig = null;
 
-  const cleanComposer = (value) => String(value || '')
-    .replace(/[\u200B-\u200D\uFEFF]/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-
   function composerElement() {
     for (const selector of [
       '#prompt-textarea',
@@ -61,6 +57,10 @@
       let node = null;
       try { node = document.querySelector(selector); } catch {}
       if (!node || node.disabled || node.getAttribute?.('aria-disabled') === 'true') continue;
+      try {
+        const style = getComputedStyle(node);
+        if (node.hidden || style.display === 'none' || style.visibility === 'hidden') continue;
+      } catch {}
       if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement || node.isContentEditable) return node;
     }
     return null;
@@ -80,61 +80,11 @@
   }
 
   function composerText(node) {
-    try {
-      if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) return cleanComposer(node.value);
-      return cleanComposer(node?.innerText || node?.textContent || '');
-    } catch {
-      return '';
-    }
-  }
-
-  function dispatchInput(node, text) {
-    try {
-      node.dispatchEvent(new InputEvent('input', {
-        bubbles: true,
-        inputType: text ? 'insertText' : 'deleteContentBackward',
-        data: text || null
-      }));
-    } catch {
-      try { node.dispatchEvent(new Event('input', { bubbles: true })); } catch {}
-    }
-  }
-
-  function writeContentEditable(node, text) {
-    const value = String(text ?? '').replace(/\r\n?/g, '\n');
-    try {
-      const fragment = document.createDocumentFragment();
-      const lines = value.split('\n');
-      lines.forEach((line, index) => {
-        if (index > 0) fragment.append(document.createElement('br'));
-        if (line) fragment.append(document.createTextNode(line));
-      });
-      node.replaceChildren(fragment);
-      dispatchInput(node, value);
-      return true;
-    } catch {
-      return false;
-    }
+    return composerApi.read(node);
   }
 
   function writeComposer(node, text) {
-    if (!node) return false;
-    try {
-      if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) {
-        const proto = node instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-        const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-        if (setter) setter.call(node, text);
-        else node.value = text;
-        dispatchInput(node, text);
-      } else if (node.isContentEditable) {
-        if (!writeContentEditable(node, text)) return false;
-      } else {
-        return false;
-      }
-      return composerText(node) === cleanComposer(text);
-    } catch {
-      return false;
-    }
+    return composerApi.replace(node, text);
   }
 
   function enabledSend(composer) {
@@ -257,7 +207,7 @@
         setStatus('Send not ready; prompt left in composer.');
         return false;
       }
-      if (composerText(composer) !== cleanComposer(text)) {
+      if (composerText(composer) !== composerApi.normalize(text)) {
         setStatus('Composer changed; nothing sent.');
         return false;
       }

@@ -4,10 +4,10 @@
   if (globalThis.__chatgptNotifierQuickContinueBridgeBackground) return;
 
   const RUNTIME_VERSION = 5;
-  const BRIDGE_RUNTIME_VERSION = 2;
-  const STATUS_RUNTIME_VERSION = 5;
+  const BRIDGE_RUNTIME_VERSION = 3;
+  const STATUS_RUNTIME_VERSION = 7;
   const BRIDGE_FILE = 'quick-continue-monitor-bridge.js';
-  const STATUS_FALLBACK_FILE = 'quick-continue-status-fallback.js';
+  const STATUS_FILE = 'quick-continue-status-owner-v6.js';
 
   function isChatGptUrl(value) {
     try {
@@ -45,7 +45,7 @@
     const statusReady = await runtimeCurrent(tabId, 'CHATGPT_NOTIFIER_QUICK_STATUS_PING', STATUS_RUNTIME_VERSION);
     if (!statusReady) {
       try {
-        await chrome.scripting.executeScript({ target: { tabId }, files: [STATUS_FALLBACK_FILE] });
+        await chrome.scripting.executeScript({ target: { tabId }, files: [STATUS_FILE] });
       } catch {
         return false;
       }

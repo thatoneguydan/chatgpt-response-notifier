@@ -274,6 +274,7 @@
         const result = await chrome.runtime.sendMessage({
           type: 'ARM_CODE_WATCHDOG_FOR_SENDER',
           source: String(source || 'trusted-manual-fresh-turn'),
+          promptKey: newUserKey,
           requestId
         });
         if (result?.ok === true && String(result.requestId || '') === requestId) return true;
@@ -330,10 +331,8 @@
 
   function handleTrustedClick(event) {
     if (event?.isTrusted !== true) return;
-    if (quickToolbarSendControl(event.target)) {
-      scheduleTrustedSubmissionArm('quick-toolbar-fresh-turn-v3');
-      return;
-    }
+    // Quick Continue is armed by the bridge after its new user turn appears.
+    if (quickToolbarSendControl(event.target)) return;
     if (nativeSendControl(event.target)) scheduleTrustedSubmissionArm('trusted-send-click-v3');
   }
 

@@ -6,6 +6,7 @@ const CONTENT_FILES = [
   'dom-compat.js',
   'prompt-format.js',
   'config.js',
+  'composer-text.js',
   'runtime-reset.js',
   'content-script.js',
   'hover-edit-script.js',

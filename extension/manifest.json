@@ -111,7 +111,6 @@
         "https://chatgpt.com/*"
       ],
       "js": [
-        "quick-continue-status-stabilizer.js",
         "quick-continue-status-owner-v6.js"
       ],
       "run_at": "document_start"

@@ -21,3 +21,11 @@ Canonical baseline: `main` at `36f1a4fd64600fa92cb2cba3ff4ee1b627d3fb72` (notifi
 - Run the complete repository suite and a focused browser DOM exercise; audit adjacent races and package/release only after gates pass.
 
 No live Glass Chrome or Windows helper process is accessible from this execution environment. Source tests cannot establish actual Windows presentation or sound playback.
+
+## Implementation checkpoint 1
+
+Local source on this branch now removes the extra countdown owner, stabilizer injection and toolbar display mirroring. `quick-continue-status-owner-v6.js` now runs as runtime 7 and owns the one countdown row; it uses full toolbar width, black right-aligned wrapping text, a Reset control, and a revision-bound Stop control. The worker parks an operator-stopped watchdog without disabling Monitor, ignores late arms for the same prompt, and re-arms for a later request. `content-script.js` reports a page return only on an actual inactive-to-active transition.
+
+Quick Continue uses a shared `composer-text.js` editor transaction for both toolbar sends and manual timestamps and checks exact newline text before allowing a send. The new file is included in the manifest, open-tab reinjection, PowerShell install, managed ZIP release, validation, and the C# bundle validator. This explicit-file-list discovery is itself an additional update bug that otherwise would have made the new code fail after update.
+
+The local extension + standalone suite passes **484 of 484** tests (`node --test tests/extension/*.test.mjs tests/standalone-quick-continue.behavior.test.mjs`), including new exact-newline and operator Stop/rearm checks. The VM editor test cannot prove ChatGPT's current Lexical DOM serializes multiline `execCommand('insertText')` exactly; a real browser run remains needed. This code has not yet been packaged or observed on Glass. The notification silence remains unresolved; the outbox already retries missing helper acknowledgments in `delivery-reliability-background.js`, so the observed stream read errors and completion binding need further investigation before claiming a fix.

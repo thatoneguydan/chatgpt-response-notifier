@@ -10,6 +10,7 @@ public static class QuickContinueBundleInstaller
     {
         "manifest.json",
         "background.js",
+        "composer-text.js",
         "prompt-format.js",
         "config.js",
         "content-script.js",

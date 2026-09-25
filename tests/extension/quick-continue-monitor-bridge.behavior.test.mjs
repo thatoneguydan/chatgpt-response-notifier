@@ -11,46 +11,39 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   const bootstrap = readText('extension/diagnostics-bootstrap.js');
   const background = readText('extension/quick-continue-monitor-bridge-background.js');
   const bridge = readText('extension/quick-continue-monitor-bridge.js');
-  const fallback = readText('extension/quick-continue-status-fallback.js');
   const statusOwner = readText('extension/quick-continue-status-owner-v6.js');
   const pageAuthority = readText('extension/watchdog-page-authority-v3.js');
   const backgroundAuthority = readText('extension/watchdog-authority-v3-background.js');
-  const stabilizer = readText('extension/quick-continue-status-stabilizer.js');
 
   assert.equal(manifest.version, '0.9.81');
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-monitor-bridge.js')));
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-fallback.js')));
-  const stabilizerEntry = manifest.content_scripts.find((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-stabilizer.js'));
-  assert.ok(stabilizerEntry);
-  assert.equal(stabilizerEntry.run_at, 'document_start');
-  assert.ok(stabilizerEntry.js.includes('quick-continue-status-owner-v6.js'));
+  assert.ok(!manifest.content_scripts.some((entry) => entry.js?.includes('quick-continue-status-stabilizer.js')));
+  const statusEntry = manifest.content_scripts.find((entry) => entry.js?.includes('quick-continue-status-owner-v6.js'));
+  assert.equal(statusEntry?.run_at, 'document_start');
   const watchdogEntry = manifest.content_scripts.find((entry) => Array.isArray(entry.js) && entry.js.includes('watchdog-page-authority-v3.js'));
   assert.ok(watchdogEntry);
   assert.equal(watchdogEntry.run_at, 'document_start');
   assert.match(bootstrap, /importScripts\('quick-continue-monitor-bridge-background\.js'\)/);
   assert.match(bootstrap, /importScripts\('watchdog-authority-v3-background\.js'\)/);
   assert.match(background, /BRIDGE_FILE = 'quick-continue-monitor-bridge\.js'/);
-  assert.match(background, /STATUS_FALLBACK_FILE = 'quick-continue-status-fallback\.js'/);
-  assert.match(background, /BRIDGE_RUNTIME_VERSION = 2/);
-  assert.match(background, /STATUS_RUNTIME_VERSION = 5/);
+  assert.match(background, /STATUS_FILE = 'quick-continue-status-owner-v6\.js'/);
+  assert.match(background, /BRIDGE_RUNTIME_VERSION = 3/);
+  assert.match(background, /STATUS_RUNTIME_VERSION = 7/);
   assert.match(background, /runtimeCurrent\(tabId, 'CHATGPT_NOTIFIER_QUICK_STATUS_PING', STATUS_RUNTIME_VERSION\)/);
   assert.match(background, /files:\s*\[BRIDGE_FILE\]/);
-  assert.match(background, /files:\s*\[STATUS_FALLBACK_FILE\]/);
+  assert.match(background, /files:\s*\[STATUS_FILE\]/);
   assert.match(background, /ensureExistingTabs/);
   assert.match(background, /chrome\.tabs\.onUpdated\.addListener/);
   assert.match(background, /CHATGPT_NOTIFIER_QUICK_BRIDGE_PING/);
   assert.match(background, /CHATGPT_NOTIFIER_QUICK_STATUS_PING/);
-  assert.match(stabilizer, /chatgpt-notifier-countdown-v/);
-  assert.match(stabilizer, /display:\s*none !important/);
-  assert.match(statusOwner, /RUNTIME_VERSION = 6/);
+  assert.match(statusOwner, /RUNTIME_VERSION = 7/);
 
   assert.doesNotThrow(() => new vm.Script(background));
   assert.doesNotThrow(() => new vm.Script(bridge));
-  assert.doesNotThrow(() => new vm.Script(fallback));
   assert.doesNotThrow(() => new vm.Script(statusOwner));
   assert.doesNotThrow(() => new vm.Script(pageAuthority));
   assert.doesNotThrow(() => new vm.Script(backgroundAuthority));
-  assert.doesNotThrow(() => new vm.Script(stabilizer));
 });
 
 test('Continue and Project actions enable monitoring before arming the fresh user turn', () => {
@@ -77,7 +70,7 @@ test('trusted manual and Quick Continue sends explicitly reset the fresh-turn 30
   assert.match(pageAuthority, /handleTrustedClick/);
   assert.match(pageAuthority, /handleTrustedKeydown/);
   assert.match(pageAuthority, /handleTrustedSubmit/);
-  assert.match(pageAuthority, /quick-toolbar-fresh-turn-v3/);
+  assert.doesNotMatch(pageAuthority, /quick-toolbar-fresh-turn-v3/);
   assert.match(pageAuthority, /trusted-send-click-v3/);
   assert.match(pageAuthority, /trusted-enter-submit-v3/);
   assert.match(pageAuthority, /type:\s*'ARM_CODE_WATCHDOG_FOR_SENDER'/);
@@ -91,9 +84,7 @@ test('Quick Continue bridge suppresses the legacy click-time arm before the fres
 
   assert.match(bridge, /window\.addEventListener\('click', handleQuickAction, \{ capture: true/);
   assert.doesNotMatch(bridge, /document\.addEventListener\('click', handleQuickAction/);
-  assert.match(bridge, /LEGACY_MASKED_ARIA_LABEL = 'Quick Continue sending'/);
-  assert.match(bridge, /control\.setAttribute\('aria-label', LEGACY_MASKED_ARIA_LABEL\)/);
-  assert.match(bridge, /control\.setAttribute\('aria-label', originalLabel\)/);
+  assert.doesNotMatch(bridge, /LEGACY_MASKED_ARIA_LABEL|MutationObserver.*toolbar|style\.display/);
 });
 
 test('definitive rendered statuses have both legacy and v3 authoritative stop routes', () => {
@@ -114,15 +105,16 @@ test('definitive rendered statuses have both legacy and v3 authoritative stop ro
 test('status presentation has one versioned visible owner and never parks at a due label', () => {
   const owner = readText('extension/quick-continue-status-owner-v6.js');
 
-  assert.match(owner, /RUNTIME_VERSION = 6/);
-  assert.match(owner, /FALLBACK_ID = 'chatgpt-notifier-countdown-fallback-v6'/);
-  assert.match(owner, /LEGACY_FALLBACK_ID = 'chatgpt-notifier-countdown-fallback'/);
-  assert.match(owner, /STATUS_WIDTH_PX = 200/);
-  assert.match(owner, /font-size:\s*10px !important/);
-  assert.match(owner, /background:\s*var\(--main-surface-primary, #fff\) !important/);
-  assert.match(owner, /node\.style\.setProperty\('width', `\$\{statusWidth\}px`, 'important'\)/);
+  assert.match(owner, /RUNTIME_VERSION = 7/);
+  assert.match(owner, /STATUS_ID = 'chatgpt-notifier-countdown-fallback-v7'/);
+  assert.match(owner, /width: 100%/);
+  assert.match(owner, /color: #111/);
+  assert.match(owner, /text-align: right/);
+  assert.match(owner, /overflow-wrap: anywhere/);
+  assert.match(owner, /Stop current auto-continue timer/);
+  assert.match(owner, /STOP_CODE_WATCHDOG_TIMER_FOR_SENDER/);
   assert.match(owner, /stopReason\.startsWith\('status:'\)/);
-  assert.match(owner, /manualOnlyDeadline/);
+  assert.match(owner, /manualOnly/);
   assert.match(owner, /waitingForRequestStart === true/);
   assert.match(owner, /highestStateRevision/);
   assert.match(owner, /highestWatchdogRevision/);
