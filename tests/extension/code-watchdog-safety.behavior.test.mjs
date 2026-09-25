@@ -137,9 +137,7 @@ test('terminal watchdog state is prompt-scoped across request/DOM ordering races
   });
   context.globalThis = context;
   vm.runInContext(
-    `${monitorSource.slice(statusStart, stoppedEnd)}
-globalThis.__statusBelongs = statusSnapshotBelongsToCurrentWatchdog;
-globalThis.__stoppedOwns = stoppedWatchdogStillOwnsSnapshot;`,
+    `${monitorSource.slice(statusStart, stoppedEnd)}\nglobalThis.__statusBelongs = statusSnapshotBelongsToCurrentWatchdog;\nglobalThis.__stoppedOwns = stoppedWatchdogStillOwnsSnapshot;`,
     context
   );
 
@@ -151,8 +149,6 @@ globalThis.__stoppedOwns = stoppedWatchdogStillOwnsSnapshot;`,
     stopped: false
   };
 
-  // A stale prior-prompt footer can inherit the new page-global request timestamp.
-  // It must not overwrite the already-current prompt watchdog.
   assert.equal(statusBelongs({
     promptKey: 'conversation-1|user-old',
     requestStartedAt: 200_000
@@ -163,13 +159,11 @@ globalThis.__stoppedOwns = stoppedWatchdogStillOwnsSnapshot;`,
     requestStartedAt: 200_000
   }, currentActive), true);
 
-  // A genuinely newer prompt/status is allowed to advance.
   assert.equal(statusBelongs({
     promptKey: 'conversation-1|user-later',
     requestStartedAt: 200_001
   }, currentActive), true);
 
-  // Preserve the existing parent-terminal/automatic-child protection.
   assert.equal(statusBelongs({
     promptKey: 'conversation-1|user-parent',
     requestStartedAt: 200_000
@@ -187,15 +181,12 @@ globalThis.__stoppedOwns = stoppedWatchdogStillOwnsSnapshot;`,
     lastAutomaticSentAt: 0,
     lastAutomaticPromptKey: ''
   };
-  // A new request can start while the DOM still exposes the old prompt; do not
-  // mutate the tombstone's request timestamp just because the prompt is unchanged.
   assert.equal(stoppedOwns({
     promptKey: 'conversation-1|user-old',
     requestStartedAt: 200_000
   }, stopped), true);
   assert.equal(stopped.lastRequestStartedAt, 100_000);
 
-  // Once the new prompt is visible, the old terminal tombstone no longer owns it.
   assert.equal(stoppedOwns({
     promptKey: 'conversation-1|user-new',
     requestStartedAt: 200_000
@@ -239,8 +230,9 @@ test('30-minute no-code deadline is authoritative even while generation is activ
   }
 });
 
-test('status runtime generation advances for the hard-deadline page behavior', () => {
-  assert.match(statusSource, /const RUNTIME_VERSION = 15/);
+test('status runtime generation advances for the semantic-turn page behavior', () => {
+  assert.match(statusSource, /const RUNTIME_VERSION = 16/);
+  assert.match(monitorPageSource, /const RUNTIME_VERSION = 13/);
 });
 
 test('rendered status fallback accepts duplicate copies of one terminal footer but rejects conflicts', () => {

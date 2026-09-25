@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 15;
+  const RUNTIME_VERSION = 16;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me.';
   const DEFAULT_WAIT_MS = 30000;
@@ -55,17 +55,17 @@
     try {
       const direct = inline(turn?.getAttribute?.('data-turn') || turn?.getAttribute?.('data-message-author-role') || '').toLowerCase();
       if (direct === 'user' || direct === 'assistant') return direct;
-      if (turn?.querySelector?.('[data-message-author-role="user"]')) return 'user';
-      if (turn?.querySelector?.('[data-message-author-role="assistant"]')) return 'assistant';
+      if (turn?.querySelector?.('[data-message-author-role="user"], [data-turn="user"]')) return 'user';
+      if (turn?.querySelector?.('[data-message-author-role="assistant"], [data-turn="assistant"]')) return 'assistant';
     } catch {}
     return '';
   }
   function turnId(turn, role, index) {
-    return String(turn?.getAttribute?.('data-testid') || turn?.id || `${role}-${index}`).trim();
+    return String(turn?.getAttribute?.('data-testid') || turn?.getAttribute?.('data-message-id') || turn?.getAttribute?.('data-turn-id') || turn?.id || `${role}-${index}`).trim();
   }
   function roleRoot(turn, role) {
     try {
-      const selector = `[data-message-author-role="${role}"]`;
+      const selector = `[data-message-author-role="${role}"], [data-turn="${role}"]`;
       return turn?.matches?.(selector) ? turn : turn?.querySelector?.(selector);
     } catch { return null; }
   }
@@ -102,10 +102,6 @@
     const finalMatch = lines[lines.length - 1].match(/^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/);
     if (!finalMatch || !api.isStatusCode(finalMatch[1])) return '';
 
-    // ChatGPT can retain more than one rendered copy of the same assistant
-    // footer in one turn (for example a stale/hidden render plus the live one).
-    // Treat identical duplicate footer lines as one semantic footer, but still
-    // reject conflicting terminal codes in the same rendered response.
     const validCodes = [];
     for (const line of lines) {
       const match = line.match(/^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/);
@@ -148,9 +144,6 @@
         const direct = terminalStatusCodeFromRenderedText(renderedText);
         if (direct) return direct;
 
-        // The ChatGPT turn wrapper can place response text outside the node that
-        // carries data-message-author-role="assistant", and can append UI metadata
-        // after the footer. Scan the full assistant turn only as a final fallback.
         if (source === turn) {
           const turnScoped = terminalStatusCodeAnywhereInRenderedText(renderedText);
           if (turnScoped) return turnScoped;
@@ -427,7 +420,6 @@
     }
     return { ok: true, clicked: true, reason: 'continuation-user-turn-confirmed', documentId, continuationUserKey: observed.userTurn.key };
   }
-
 
   async function performWatchdogContinuation(expectedConversationId = '', expectedPromptKey = '') {
     const expectedId = String(expectedConversationId || '');

@@ -6,7 +6,7 @@ const root = new URL('../../', import.meta.url);
 const monitorSource = readFileSync(new URL('extension/monitor-script.js', root), 'utf8');
 
 test('a fresh request fails open by rearming a stopped green watchdog before publishing', () => {
-  assert.match(monitorSource, /const RUNTIME_VERSION = 12/);
+  assert.match(monitorSource, /const RUNTIME_VERSION = 13/);
   assert.match(monitorSource, /async function rearmStoppedWatchdogForNewRequest\(\)/);
   assert.match(monitorSource, /GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER/);
   assert.match(monitorSource, /overview\?\.automationEnabled !== true/);

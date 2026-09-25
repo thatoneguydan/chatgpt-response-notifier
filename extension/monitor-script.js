@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 12;
+  const RUNTIME_VERSION = 13;
   try { globalThis.__chatgptNotifierMonitorRuntime?.dispose?.(); } catch {}
 
   const abortController = new AbortController();
@@ -70,19 +70,19 @@
     try {
       const direct = normalize(turn?.getAttribute?.('data-turn') || turn?.getAttribute?.('data-message-author-role') || '').toLowerCase();
       if (direct === 'user' || direct === 'assistant') return direct;
-      if (turn?.querySelector?.('[data-message-author-role="user"]')) return 'user';
-      if (turn?.querySelector?.('[data-message-author-role="assistant"]')) return 'assistant';
+      if (turn?.querySelector?.('[data-message-author-role="user"], [data-turn="user"]')) return 'user';
+      if (turn?.querySelector?.('[data-message-author-role="assistant"], [data-turn="assistant"]')) return 'assistant';
     } catch {}
     return '';
   }
 
   function turnId(turn, role, index) {
-    return String(turn?.getAttribute?.('data-testid') || turn?.id || `${role}-${index}`).trim();
+    return String(turn?.getAttribute?.('data-testid') || turn?.getAttribute?.('data-message-id') || turn?.getAttribute?.('data-turn-id') || turn?.id || `${role}-${index}`).trim();
   }
 
   function roleRoot(turn, role) {
     try {
-      const selector = `[data-message-author-role="${role}"]`;
+      const selector = `[data-message-author-role="${role}"], [data-turn="${role}"]`;
       return turn?.matches?.(selector) ? turn : turn?.querySelector?.(selector);
     } catch { return null; }
   }
