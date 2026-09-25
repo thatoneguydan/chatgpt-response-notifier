@@ -1,13 +1,18 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 7;
+  const RUNTIME_VERSION = 8;
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
-  const STATUS_ID = 'chatgpt-notifier-countdown-fallback-v7';
-  const STYLE_ID = 'chatgpt-notifier-countdown-style-v7';
+  const STATUS_OWNER_ATTR = 'data-chatgpt-notifier-watchdog-status-owner';
+  const UI_OWNER_ATTR = 'data-chatgpt-notifier-watchdog-ui-owner';
+  const STYLE_ID = 'chatgpt-notifier-watchdog-status-style-v8';
   const OVERVIEW_REFRESH_MS = 2000;
   const WATCHDOG_DELAY_MS = 30 * 60_000;
   const DUE_KICK_MIN_INTERVAL_MS = 750;
+  const ownerToken = (() => {
+    try { return crypto.randomUUID(); } catch { return `${Date.now()}-${Math.random()}`; }
+  })();
+  const STATUS_ID = `chatgpt-notifier-watchdog-status-v8-${ownerToken}`;
 
   const previous = globalThis.__chatgptNotifierQuickContinueStatusFallback;
   if (Number(previous?.version || 0) === RUNTIME_VERSION) {
@@ -29,6 +34,44 @@
   let row = null;
   let resetButton = null;
   let stopButton = null;
+
+  function ownsUi() {
+    try {
+      return document.documentElement?.getAttribute?.(UI_OWNER_ATTR) === ownerToken;
+    } catch {
+      return false;
+    }
+  }
+
+  function claimUi() {
+    try { document.documentElement?.setAttribute?.(UI_OWNER_ATTR, ownerToken); } catch {}
+    return ownsUi();
+  }
+
+  function removeSupersededOwnedRows() {
+    let nodes = [];
+    try { nodes = Array.from(document.querySelectorAll(`[${STATUS_OWNER_ATTR}]`)); } catch {}
+    for (const node of nodes) {
+      if (node.getAttribute?.(STATUS_OWNER_ATTR) === ownerToken) continue;
+      try { node.remove(); } catch {}
+    }
+  }
+
+  function relinquishUi() {
+    if (disposed) return;
+    disposed = true;
+    if (refreshTimer !== null) clearInterval(refreshTimer);
+    if (tickTimer !== null) clearInterval(tickTimer);
+    refreshTimer = null;
+    tickTimer = null;
+    try { chrome.runtime.onMessage.removeListener(handleRuntimeMessage); } catch {}
+    try { window.removeEventListener('resize', render); } catch {}
+    try { row?.remove(); } catch {}
+    row = resetButton = stopButton = null;
+    try {
+      if (ownsUi()) document.documentElement?.removeAttribute?.(UI_OWNER_ATTR);
+    } catch {}
+  }
 
   function formatCountdown(milliseconds) {
     const seconds = Math.max(0, Math.ceil(Number(milliseconds || 0) / 1000));
@@ -126,11 +169,20 @@
   }
 
   function ensureStyle() {
-    if (document.getElementById(STYLE_ID)) return;
-    const style = document.createElement('style');
-    style.id = STYLE_ID;
-    style.textContent = `
-      #${TOOLBAR_ID} #${STATUS_ID}:not([hidden]) {
+    let style = document.getElementById(STYLE_ID);
+    if (!style) {
+      style = document.createElement('style');
+      style.id = STYLE_ID;
+      (document.head || document.documentElement).append(style);
+    }
+    const css = `
+      #${TOOLBAR_ID} [id^="chatgpt-notifier-countdown-v"],
+      #${TOOLBAR_ID} #chatgpt-notifier-automation-status,
+      #${TOOLBAR_ID} #chatgpt-notifier-countdown-fallback,
+      #${TOOLBAR_ID} [id^="chatgpt-notifier-countdown-fallback-v"] {
+        display: none !important;
+      }
+      #${TOOLBAR_ID} [${STATUS_OWNER_ATTR}] {
         display: flex;
         position: absolute;
         box-sizing: border-box;
@@ -152,7 +204,8 @@
         text-align: right;
         font-variant-numeric: tabular-nums;
       }
-      #${STATUS_ID} button {
+      #${TOOLBAR_ID} [${STATUS_OWNER_ATTR}][hidden] { display: none !important; }
+      #${TOOLBAR_ID} [${STATUS_OWNER_ATTR}] button {
         color: inherit;
         font: inherit;
         line-height: inherit;
@@ -162,9 +215,9 @@
         padding: 0 2px;
         cursor: pointer;
       }
-      #${STATUS_ID} button:disabled { cursor: default; }
-      #${STATUS_ID} button:focus-visible { outline: 1px solid currentColor; }
-      #${STATUS_ID} .chatgpt-notifier-timer-text {
+      #${TOOLBAR_ID} [${STATUS_OWNER_ATTR}] button:disabled { cursor: default; }
+      #${TOOLBAR_ID} [${STATUS_OWNER_ATTR}] button:focus-visible { outline: 1px solid currentColor; }
+      #${TOOLBAR_ID} [${STATUS_OWNER_ATTR}] .chatgpt-notifier-timer-text {
         flex: 1 1 auto;
         min-width: 0;
         max-width: 100%;
@@ -172,7 +225,7 @@
         white-space: normal;
         text-align: right;
       }
-      #${STATUS_ID} .chatgpt-notifier-timer-stop {
+      #${TOOLBAR_ID} [${STATUS_OWNER_ATTR}] .chatgpt-notifier-timer-stop {
         flex: 0 0 18px;
         padding: 0;
         width: 18px;
@@ -180,26 +233,23 @@
         border: 1px solid currentColor;
         text-align: center;
       }
-      #${STATUS_ID} .chatgpt-notifier-timer-stop[hidden] { display: none; }
+      #${TOOLBAR_ID} [${STATUS_OWNER_ATTR}] .chatgpt-notifier-timer-stop[hidden] { display: none; }
     `;
-    (document.head || document.documentElement).append(style);
-  }
-
-  function removeLegacyStatusNodes(toolbar) {
-    for (const node of toolbar.querySelectorAll(
-      '[id^="chatgpt-notifier-countdown-v"], #chatgpt-notifier-automation-status, '
-      + '#chatgpt-notifier-countdown-fallback, [id^="chatgpt-notifier-countdown-fallback-v"]'
-    )) {
-      if (node.id !== STATUS_ID) node.remove();
-    }
+    if (style.textContent !== css) style.textContent = css;
+    return style;
   }
 
   function ensureRow(toolbar) {
+    if (!ownsUi()) {
+      relinquishUi();
+      return null;
+    }
     if (row?.isConnected && row.parentElement === toolbar) return row;
-    removeLegacyStatusNodes(toolbar);
+    removeSupersededOwnedRows();
     row = document.createElement('div');
     row.id = STATUS_ID;
     row.hidden = true;
+    row.setAttribute(STATUS_OWNER_ATTR, ownerToken);
     row.setAttribute('role', 'group');
     row.setAttribute('aria-label', 'Auto-continue timer');
     resetButton = document.createElement('button');
@@ -219,7 +269,7 @@
   }
 
   async function refreshOverview() {
-    if (disposed) return null;
+    if (disposed || !ownsUi()) return null;
     try {
       const result = await chrome.runtime.sendMessage({ type: 'GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER' });
       if (result?.ok === true) acceptOverview(result);
@@ -229,7 +279,7 @@
   }
 
   async function kickDueWatchdog() {
-    if (disposed || busy || dueKickInFlight || overview?.automationEnabled !== true || !overview?.activeConversationId) return false;
+    if (disposed || !ownsUi() || busy || dueKickInFlight || overview?.automationEnabled !== true || !overview?.activeConversationId) return false;
     const now = Date.now();
     if (now - lastDueKickAt < DUE_KICK_MIN_INTERVAL_MS) return false;
     lastDueKickAt = now;
@@ -252,10 +302,14 @@
 
   function render() {
     if (disposed) return;
+    if (!ownsUi()) {
+      relinquishUi();
+      return;
+    }
     const toolbar = document.getElementById(TOOLBAR_ID);
     if (!toolbar) return;
     ensureStyle();
-    ensureRow(toolbar);
+    if (!ensureRow(toolbar) || !resetButton || !stopButton) return;
     const state = presentation();
     if (resetButton.textContent !== state.text) resetButton.textContent = state.text;
     if (row.hidden !== !state.text) row.hidden = !state.text;
@@ -268,7 +322,7 @@
   async function resetBudget(event) {
     event?.preventDefault?.();
     event?.stopPropagation?.();
-    if (busy || overview?.automationEnabled !== true || !overview?.activeConversationId || !overview?.codeWatchdog) return;
+    if (!ownsUi() || busy || overview?.automationEnabled !== true || !overview?.activeConversationId || !overview?.codeWatchdog) return;
     busy = true;
     render();
     try {
@@ -286,7 +340,7 @@
   async function stopTimer(event) {
     event?.preventDefault?.();
     event?.stopPropagation?.();
-    if (busy || overview?.automationEnabled !== true || !overview?.activeConversationId || !presentation().active) return;
+    if (!ownsUi() || busy || overview?.automationEnabled !== true || !overview?.activeConversationId || !presentation().active) return;
     busy = true;
     render();
     try {
@@ -303,6 +357,10 @@
   }
 
   function handleRuntimeMessage(message, _sender, sendResponse) {
+    if (!ownsUi()) {
+      relinquishUi();
+      return false;
+    }
     if (message?.type === 'CHATGPT_NOTIFIER_QUICK_STATUS_PING') {
       sendResponse?.({ ok: true, runtimeVersion: RUNTIME_VERSION });
       return false;
@@ -314,6 +372,9 @@
     return false;
   }
 
+  claimUi();
+  ensureStyle();
+  removeSupersededOwnedRows();
   try { chrome.runtime.onMessage.addListener(handleRuntimeMessage); } catch {}
   try { window.addEventListener('resize', render); } catch {}
   refreshTimer = setInterval(() => { refreshOverview().catch(() => null); }, OVERVIEW_REFRESH_MS);
@@ -321,16 +382,10 @@
 
   const runtime = Object.freeze({
     version: RUNTIME_VERSION,
+    ownerToken,
     refresh() { refreshOverview().catch(() => null); render(); },
     dispose() {
-      disposed = true;
-      if (refreshTimer !== null) clearInterval(refreshTimer);
-      if (tickTimer !== null) clearInterval(tickTimer);
-      try { chrome.runtime.onMessage.removeListener(handleRuntimeMessage); } catch {}
-      try { window.removeEventListener('resize', render); } catch {}
-      try { row?.remove(); } catch {}
-      try { document.getElementById(STYLE_ID)?.remove(); } catch {}
-      row = resetButton = stopButton = null;
+      relinquishUi();
       if (globalThis.__chatgptNotifierQuickContinueStatusFallback === runtime) {
         delete globalThis.__chatgptNotifierQuickContinueStatusFallback;
       }
