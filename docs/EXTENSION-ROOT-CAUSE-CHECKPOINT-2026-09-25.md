@@ -1,0 +1,21 @@
+# Extension bug checkpoint — 2026-09-25
+
+Canonical baseline: `main` at `36f1a4fd64600fa92cb2cba3ff4ee1b627d3fb72` (notifier 0.9.81, Quick Continue 1.2.18). Work branch: `fix/extension-ui-notify-timer-20260925`. This document records source findings and separates verified behavior from live-machine hypotheses.
+
+## Findings from source
+
+1. The notifier's `attachment-script.js` creates a canonical countdown button and updates it every second. A second runtime (`quick-continue-status-owner-v6.js`) creates another countdown button and hides the first every second; `quick-continue-status-stabilizer.js` also hides the first, and `quick-continue-monitor-bridge.js` mirrors the toolbar and may restore its display. These independent DOM owners and document-wide mutation observers form a rendering feedback loop. Source explains repeated geometry changes; the exact visual cadence still needs a browser reproduction.
+2. Quick Continue's `writeContentEditable()` and manual timestamp `replaceContentEditable()` construct a `<br>` for every `\n`, then dispatch a synthetic `input` event with the entire string. `composerText()` collapses all whitespace before it verifies the write. Thus a structurally different multiline composer can pass verification and be sent. Fix requires reading and comparing exact paragraph/newline structure and one input path, tested against the current contenteditable editor and text controls.
+3. Three separate scripts arm the watchdog on a trusted Quick Continue action (`attachment-script.js`, `quick-continue-monitor-bridge.js`, `watchdog-page-authority-v3.js`), in addition to network request observation. This can re-arm after a definitive status is parked. `watchdog-request-lifecycle-fix-background.js` has an in-memory terminal latch, but it does not make all subsequent arming paths conditional on the same prompt/request identity.
+4. The stop button can use the persisted watchdog record's stopped state with an `operator-timer-stop` reason while retaining enrollment. A subsequent real request must rearm with a fresh request identity. Pausing Monitor would violate the requested behavior.
+5. A Windows notification and chime are coupled at `ToastManager.Show()`; the chime plays only when a toast is newly presented. The helper may accept a request without presenting (`response-already-accepted`, `response-already-open`, `dismissed-tombstone`). The extension outbox currently acknowledges `toast.accepted` without checking `presented`; this can remove a queued notification even if it was not visible. The exact reason for the user's current total silence requires helper diagnostics from Glass or a reproducible source regression. Avoid resetting dedupe stores or replaying old toasts blindly.
+
+## Work sequence
+
+- Collapse timer presentation to one notifier-owned renderer and remove redundant DOM mirroring/hiding. Preserve one control for Monitor and one countdown row with separate Reset and Stop actions.
+- Preserve exact newline semantics through composer insertion and verification. Test `\n`, adjacent breaks, blank lines and trailing breaks for both toolbar and manual timestamps.
+- Make watchdog definitive stop authoritative for `PLANNING_ACTIVE`, `COMPLETE_APPLIED`, `COMPLETE_NO_CHANGES` and `BLOCKED_HUMAN`; prevent late same-turn arms and ensure next real request re-arms after an operator timer stop.
+- Trace notification queue/host acknowledgment, add a regression for an accepted-but-unpresented notification and a bounded diagnostic for a live failure; verify helper behavior before claiming Windows notifications fixed.
+- Run the complete repository suite and a focused browser DOM exercise; audit adjacent races and package/release only after gates pass.
+
+No live Glass Chrome or Windows helper process is accessible from this execution environment. Source tests cannot establish actual Windows presentation or sound playback.
