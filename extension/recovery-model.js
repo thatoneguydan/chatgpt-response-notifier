@@ -1,16 +1,16 @@
 'use strict';
 
 (() => {
-  if (globalThis.ChatGPTNotifierRecoveryModel?.version === 4) return;
+  if (globalThis.ChatGPTNotifierRecoveryModel?.version === 5) return;
 
-  const VERSION = 4;
-  const ACTION_KINDS = Object.freeze(['reload', 'continue', 'normal-continue']);
+  const VERSION = 5;
+  const ACTION_KINDS = Object.freeze(['reload', 'normal-continue']);
   const ACTION_KIND_SET = new Set(ACTION_KINDS);
   const FIRST_INCIDENT_BACKOFF_MS = 30_000;
   const LATER_INCIDENT_BACKOFF_MS = 120_000;
   const PROFILE_ACTION_SPACING_MS = 30_000;
   const RUN_GENERATION_ACTION_CAP = 12;
-  const SILENT_STOP_RELOAD_CAP = 3;
+  const SILENT_STOP_RELOAD_CAP = 1;
   const EXPLICIT_INTERRUPTION_RELOAD_CAP = 5;
   const EXPLICIT_INTERRUPTION_RETRY_MS = 5 * 60_000;
   const EXPLICIT_RELOAD_REASONS = new Set([
@@ -18,6 +18,7 @@
     'connection-lost', 'systems-taking-longer', 'generation-error'
   ]);
   const POST_RELOAD_EXPLICIT_REASON = 'post-reload-explicit-interruption';
+  const WATCHDOG_WAIT_REASON = 'watchdog-wait-after-refresh';
 
   const number = (value) => Math.max(0, Number(value || 0));
   const policyThreshold = (name, fallback) => Math.max(0, Number(globalThis.ChatGPTNotifierContinuationPolicy?.thresholds?.[name] ?? fallback));
@@ -92,30 +93,22 @@
     }
     if (reason === POST_RELOAD_EXPLICIT_REASON) {
       if (incident.budget.reloads < explicitReloadCap) return { kind: 'reload', reason };
-      return incident.budget.continuations >= 1
-        ? { kind: '', reason: 'continuation-spent' }
-        : { kind: 'continue', reason };
+      return { kind: '', reason: WATCHDOG_WAIT_REASON };
     }
     if (reason === 'post-reload-silent-stop') {
       if (incident.budget.reloads < silentReloadCap) return { kind: 'reload', reason };
-      return incident.budget.continuations >= 1
-        ? { kind: '', reason: 'continuation-spent' }
-        : { kind: 'continue', reason };
+      return { kind: '', reason: WATCHDOG_WAIT_REASON };
     }
 
     if (EXPLICIT_RELOAD_REASONS.has(reason)) {
       if (incident.budget.reloads < explicitReloadCap) return { kind: 'reload', reason };
-      return incident.budget.continuations >= 1
-        ? { kind: '', reason: 'continuation-spent' }
-        : { kind: 'continue', reason: POST_RELOAD_EXPLICIT_REASON };
+      return { kind: '', reason: WATCHDOG_WAIT_REASON };
     }
 
     if (reason === 'silent-stop-confirmed') {
       if (incident.budget.reloads < silentReloadCap) return { kind: 'reload', reason };
       if (!observation.assistantKey && Number(observation.silentIdleConfirmations || 0) >= 2) {
-        return incident.budget.continuations >= 1
-          ? { kind: '', reason: 'continuation-spent' }
-          : { kind: 'continue', reason: 'post-reload-silent-stop' };
+        return { kind: '', reason: WATCHDOG_WAIT_REASON };
       }
       return { kind: '', reason: 'post-reload-outcome-ambiguous' };
     }
@@ -272,7 +265,7 @@
     }
     if (observation.assistantKey && observation.stableTerminal) return { kind: '', state: 'resolved', reason: 'status-missing-passive' };
     if (observation.assistantKey) return { kind: '', state: 'observing', reason: 'response-present-after-reload' };
-    if (!observation.assistantKey && Number(observation.silentIdleConfirmations || 0) >= 2) return { kind: 'continue', state: 'scheduled', reason: 'post-reload-silent-stop' };
+    if (!observation.assistantKey && Number(observation.silentIdleConfirmations || 0) >= 2) return { kind: '', state: 'waiting', reason: WATCHDOG_WAIT_REASON };
     return { kind: '', state: 'attention', reason: 'post-reload-outcome-ambiguous' };
   }
 
@@ -281,6 +274,7 @@
     actionKinds: ACTION_KINDS,
     explicitReloadReasons: Object.freeze(Array.from(EXPLICIT_RELOAD_REASONS)),
     postReloadExplicitReason: POST_RELOAD_EXPLICIT_REASON,
+    watchdogWaitReason: WATCHDOG_WAIT_REASON,
     thresholds: Object.freeze({
       firstIncidentBackoffMs: FIRST_INCIDENT_BACKOFF_MS,
       laterIncidentBackoffMs: LATER_INCIDENT_BACKOFF_MS,
