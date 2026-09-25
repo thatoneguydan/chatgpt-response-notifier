@@ -3,9 +3,9 @@
 (() => {
   if (globalThis.__chatgptNotifierQuickContinueBridgeBackground) return;
 
-  const RUNTIME_VERSION = 4;
+  const RUNTIME_VERSION = 5;
   const BRIDGE_RUNTIME_VERSION = 2;
-  const STATUS_RUNTIME_VERSION = 3;
+  const STATUS_RUNTIME_VERSION = 4;
   const BRIDGE_FILE = 'quick-continue-monitor-bridge.js';
   const STATUS_FALLBACK_FILE = 'quick-continue-status-fallback.js';
 

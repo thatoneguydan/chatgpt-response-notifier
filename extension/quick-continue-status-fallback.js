@@ -1,10 +1,10 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 3;
+  const RUNTIME_VERSION = 4;
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const FALLBACK_ID = 'chatgpt-notifier-countdown-fallback';
-  const STYLE_ID = 'chatgpt-notifier-countdown-readability-v3';
+  const STYLE_ID = 'chatgpt-notifier-countdown-readability-v4';
   const CANONICAL_STATUS_SELECTOR = '[id^="chatgpt-notifier-countdown-v"], #chatgpt-notifier-automation-status';
   const OVERVIEW_REFRESH_MS = 2000;
   const VIEWPORT_MARGIN_PX = 8;
@@ -20,6 +20,7 @@
 
   let disposed = false;
   let overview = null;
+  let highestStateRevision = -1;
   let refreshTimer = null;
   let tickTimer = null;
   let busy = false;
@@ -46,6 +47,15 @@
       'watchdog-runtime-unavailable': 'watchdog runtime'
     };
     return labels[String(reason || '')] || '';
+  }
+
+  function acceptOverview(candidate) {
+    if (!candidate || typeof candidate !== 'object') return false;
+    const revision = Math.max(0, Number(candidate.stateRevision || 0));
+    if (highestStateRevision >= 0 && revision < highestStateRevision) return false;
+    if (revision > highestStateRevision) highestStateRevision = revision;
+    overview = candidate;
+    return true;
   }
 
   function statusText(state = overview, now = Date.now()) {
@@ -221,7 +231,7 @@
     if (disposed) return null;
     try {
       const result = await chrome.runtime.sendMessage({ type: 'GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER' });
-      if (result?.ok === true) overview = result;
+      if (result?.ok === true) acceptOverview(result);
     } catch {}
     render();
     return overview;
@@ -240,7 +250,7 @@
         conversationId: overview.activeConversationId,
         requestId
       });
-      if (result?.ok === true && String(result.requestId || '') === requestId) overview = result;
+      if (result?.ok === true && String(result.requestId || '') === requestId) acceptOverview(result);
       else await refreshOverview();
     } catch {}
     finally {
@@ -255,7 +265,7 @@
       return false;
     }
     if (message?.type === 'BUILD_AUTOMATION_STATE_CHANGED' && message.overview) {
-      overview = message.overview;
+      acceptOverview(message.overview);
       render();
     }
     return false;
