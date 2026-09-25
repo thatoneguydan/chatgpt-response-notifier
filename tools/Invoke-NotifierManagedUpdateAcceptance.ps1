@@ -12,16 +12,21 @@ $BridgeUri = [Uri]'ws://127.0.0.1:38473/bridge'
 $BridgeOrigin = 'chrome-extension://lciedmoiiapbgemklkpoadimhffaaaah'
 $Utf8 = [Text.Encoding]::UTF8
 
-function New-BridgeSocket {
-    $socket = [Net.WebSockets.ClientWebSocket]::new()
-    [void]$socket.Options.SetRequestHeader('Origin', $BridgeOrigin)
+function Open-BridgeSocket {
+    param(
+        [Parameter(Mandatory = $true)]
+        [ref]$Socket
+    )
+
+    $client = [Net.WebSockets.ClientWebSocket]::new()
+    [void]$client.Options.SetRequestHeader('Origin', $BridgeOrigin)
     $connectTimeout = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(10))
     try {
-        [void]$socket.ConnectAsync($BridgeUri, $connectTimeout.Token).GetAwaiter().GetResult()
-        Write-Output -NoEnumerate $socket
+        [void]$client.ConnectAsync($BridgeUri, $connectTimeout.Token).GetAwaiter().GetResult()
+        $Socket.Value = $client
     }
     catch {
-        [void]$socket.Dispose()
+        [void]$client.Dispose()
         throw
     }
     finally {
@@ -85,7 +90,8 @@ function Send-BridgeJson {
 }
 
 function Invoke-ManagedUpdateCheck {
-    $socket = New-BridgeSocket
+    $socket = $null
+    Open-BridgeSocket -Socket ([ref]$socket)
     try {
         # The helper sends host.ready immediately after the WebSocket handshake.
         $ready = Receive-BridgeJson -Socket $socket -TimeoutSeconds 20
@@ -114,7 +120,8 @@ function Invoke-ManagedUpdateCheck {
 }
 
 function Read-InstalledBridgeVersion {
-    $socket = New-BridgeSocket
+    $socket = $null
+    Open-BridgeSocket -Socket ([ref]$socket)
     try {
         $ready = Receive-BridgeJson -Socket $socket -TimeoutSeconds 20
         if ([string]$ready.type -ne 'host.ready') { return '' }
