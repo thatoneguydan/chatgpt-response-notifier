@@ -3,13 +3,27 @@
 (() => {
   if (globalThis.__chatgptNotifierTerminalStopPostUpdateRecovery) return;
 
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   const REFRESH_DELAYS_MS = Object.freeze([0, 250, 1000, 3000]);
-  const STATUS_FILES = Object.freeze([
+  const HOT_RUNTIME_FILES = Object.freeze([
+    'page-runtime-rebind.js',
+    'page-dom-compat.js',
+    'attachment-script.js',
+    'content-script.js',
+    'persistence-script.js',
     'status-code.js',
     'status-policy.js',
+    'monitor-script.js',
+    'bounded-recovery-script.js',
     'status-script.js',
-    'watchdog-page-authority-v3.js'
+    'recovery-script.js',
+    'watchdog-page-authority-v3.js',
+    'automation-route-refresh.js',
+    'observation-relay.js',
+    'response-stream-status-bridge.js',
+    'hidden-window-diagnostics-page.js',
+    'quick-continue-monitor-bridge.js',
+    'quick-continue-status-owner-v6.js'
   ]);
   const scheduledByTab = new Map();
 
@@ -31,15 +45,27 @@
     try {
       await chrome.scripting.executeScript({
         target: { tabId },
-        files: [...STATUS_FILES]
+        files: [...HOT_RUNTIME_FILES]
       });
     } catch {
       return false;
     }
 
     try {
-      const result = await chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_NOTIFIER_WATCHDOG_PAGE_AUTHORITY_PING' });
-      return result?.ok === true;
+      const [authority, attachment, monitor, status, quickBridge, quickStatus] = await Promise.all([
+        chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_NOTIFIER_WATCHDOG_PAGE_AUTHORITY_PING' }).catch(() => null),
+        chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_NOTIFIER_ATTACHMENT_PING' }).catch(() => null),
+        chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_MONITOR_QUERY' }).catch(() => null),
+        chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_STATUS_RUNTIME_PING' }).catch(() => null),
+        chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_NOTIFIER_QUICK_BRIDGE_PING' }).catch(() => null),
+        chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_NOTIFIER_QUICK_STATUS_PING' }).catch(() => null)
+      ]);
+      return authority?.ok === true
+        && attachment?.ok === true
+        && Boolean(monitor?.snapshot || monitor?.conversationId)
+        && status?.ok === true
+        && quickBridge?.ok === true
+        && quickStatus?.ok === true;
     } catch {
       return false;
     }
@@ -92,7 +118,8 @@
     version: RUNTIME_VERSION,
     refreshTerminalAuthority,
     scheduleTerminalRefresh,
-    ensureExistingTabs
+    ensureExistingTabs,
+    hotRuntimeFiles: HOT_RUNTIME_FILES
   });
 
   ensureExistingTabs().catch(() => {});
