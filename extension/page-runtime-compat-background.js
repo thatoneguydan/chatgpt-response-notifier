@@ -8,6 +8,7 @@
     'monitor-script.js',
     'bounded-recovery-script.js',
     'status-script.js',
+    'terminal-status-live-observer.js',
     'recovery-script.js',
     'recovery-live-fix-content.js',
     'quick-continue-monitor-bridge.js',
