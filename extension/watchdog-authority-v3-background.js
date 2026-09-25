@@ -5,7 +5,7 @@
 
   const RUNTIME_VERSION = 3;
   const PAGE_RUNTIME_VERSION = 3;
-  const STATUS_RUNTIME_VERSION = 7;
+  const STATUS_RUNTIME_VERSION = 8;
   const PAGE_FILE = 'watchdog-page-authority-v3.js';
   const STATUS_FILE = 'quick-continue-status-owner-v6.js';
 
