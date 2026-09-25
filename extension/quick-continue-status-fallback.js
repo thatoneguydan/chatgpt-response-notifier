@@ -1,10 +1,10 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 4;
+  const RUNTIME_VERSION = 5;
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const FALLBACK_ID = 'chatgpt-notifier-countdown-fallback';
-  const STYLE_ID = 'chatgpt-notifier-countdown-readability-v4';
+  const STYLE_ID = 'chatgpt-notifier-countdown-readability-v5';
   const CANONICAL_STATUS_SELECTOR = '[id^="chatgpt-notifier-countdown-v"], #chatgpt-notifier-automation-status';
   const OVERVIEW_REFRESH_MS = 2000;
   const VIEWPORT_MARGIN_PX = 8;
@@ -20,7 +20,9 @@
 
   let disposed = false;
   let overview = null;
+  let overviewIdentity = '';
   let highestStateRevision = -1;
+  let highestWatchdogRevision = -1;
   let refreshTimer = null;
   let tickTimer = null;
   let busy = false;
@@ -49,11 +51,38 @@
     return labels[String(reason || '')] || '';
   }
 
+  function candidateIdentity(candidate) {
+    const conversationId = String(candidate?.activeConversationId || '');
+    if (conversationId) return `conversation:${conversationId}`;
+    const tabId = Number.isInteger(candidate?.activeTabId) ? candidate.activeTabId : 'none';
+    return `tab:${tabId}`;
+  }
+
   function acceptOverview(candidate) {
     if (!candidate || typeof candidate !== 'object') return false;
-    const revision = Math.max(0, Number(candidate.stateRevision || 0));
-    if (highestStateRevision >= 0 && revision < highestStateRevision) return false;
-    if (revision > highestStateRevision) highestStateRevision = revision;
+    const identity = candidateIdentity(candidate);
+    const stateRevision = Math.max(0, Number(candidate.stateRevision || 0));
+    const watchdogRevision = Math.max(0, Number(candidate?.codeWatchdog?.watchdogRevision || 0));
+
+    if (identity !== overviewIdentity) {
+      overviewIdentity = identity;
+      highestStateRevision = -1;
+      highestWatchdogRevision = -1;
+    }
+
+    if (highestStateRevision >= 0 && stateRevision < highestStateRevision) return false;
+    if (
+      stateRevision === highestStateRevision
+      && highestWatchdogRevision >= 0
+      && watchdogRevision < highestWatchdogRevision
+    ) return false;
+
+    if (stateRevision > highestStateRevision) {
+      highestStateRevision = stateRevision;
+      highestWatchdogRevision = watchdogRevision;
+    } else {
+      highestWatchdogRevision = Math.max(highestWatchdogRevision, watchdogRevision);
+    }
     overview = candidate;
     return true;
   }
