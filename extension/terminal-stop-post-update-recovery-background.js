@@ -3,7 +3,7 @@
 (() => {
   if (globalThis.__chatgptNotifierTerminalStopPostUpdateRecovery) return;
 
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
   const REFRESH_DELAYS_MS = Object.freeze([0, 250, 1000, 3000]);
   const HOT_RUNTIME_FILES = Object.freeze([
     'page-runtime-rebind.js',
@@ -13,9 +13,11 @@
     'persistence-script.js',
     'status-code.js',
     'status-policy.js',
+    'rendered-terminal-status.js',
     'monitor-script.js',
     'bounded-recovery-script.js',
     'status-script.js',
+    'terminal-status-live-observer.js',
     'recovery-script.js',
     'watchdog-page-authority-v3.js',
     'automation-route-refresh.js',
@@ -52,11 +54,12 @@
     }
 
     try {
-      const [authority, attachment, monitor, status, quickBridge, quickStatus] = await Promise.all([
+      const [authority, attachment, monitor, status, renderedObserver, quickBridge, quickStatus] = await Promise.all([
         chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_NOTIFIER_WATCHDOG_PAGE_AUTHORITY_PING' }).catch(() => null),
         chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_NOTIFIER_ATTACHMENT_PING' }).catch(() => null),
         chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_MONITOR_QUERY' }).catch(() => null),
         chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_STATUS_RUNTIME_PING' }).catch(() => null),
+        chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_RENDERED_TERMINAL_OBSERVER_PING' }).catch(() => null),
         chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_NOTIFIER_QUICK_BRIDGE_PING' }).catch(() => null),
         chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_NOTIFIER_QUICK_STATUS_PING' }).catch(() => null)
       ]);
@@ -64,6 +67,7 @@
         && attachment?.ok === true
         && Boolean(monitor?.snapshot || monitor?.conversationId)
         && status?.ok === true
+        && renderedObserver?.ok === true
         && quickBridge?.ok === true
         && quickStatus?.ok === true;
     } catch {
