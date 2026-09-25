@@ -6,16 +6,18 @@ import test from 'node:test';
 const root = new URL('../../', import.meta.url);
 const readText = (relative) => readFileSync(new URL(relative, root), 'utf8');
 
-test('Quick Continue monitoring bridge is shipped in page and hot-tab bootstrap paths', () => {
+test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap path', () => {
   const manifest = JSON.parse(readText('extension/manifest.json'));
   const bootstrap = readText('extension/diagnostics-bootstrap.js');
   const background = readText('extension/quick-continue-monitor-bridge-background.js');
   const bridge = readText('extension/quick-continue-monitor-bridge.js');
 
   assert.equal(manifest.version, '0.9.71');
-  assert.ok(manifest.content_scripts[0].js.includes('quick-continue-monitor-bridge.js'));
+  assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-monitor-bridge.js')));
   assert.match(bootstrap, /importScripts\('quick-continue-monitor-bridge-background\.js'\)/);
   assert.match(background, /files:\s*\[BRIDGE_FILE\]/);
+  assert.match(background, /ensureExistingTabs/);
+  assert.match(background, /chrome\.tabs\.onUpdated\.addListener/);
   assert.match(background, /CHATGPT_NOTIFIER_QUICK_BRIDGE_PING/);
 
   assert.doesNotThrow(() => new vm.Script(background));
