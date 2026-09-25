@@ -85,6 +85,12 @@
       }
       scanText(state, decoder.decode());
     } catch {
+      // Chrome can throw while releasing/finishing a cloned SSE body even after
+      // the terminal footer has already crossed the clone. Preserve that
+      // already-observed status instead of discarding it with the read error.
+      if (state.lastStatusCode) {
+        publish('terminal-status', { transport: 'fetch', statusCode: state.lastStatusCode });
+      }
       publish('stream-read-error', { transport: 'fetch' });
       return;
     } finally {
