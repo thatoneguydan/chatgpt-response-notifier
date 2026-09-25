@@ -10,6 +10,7 @@ const repoRoot = path.resolve(import.meta.dirname, '..');
 const extensionRoot = path.join(repoRoot, 'standalone-quick-continue');
 const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.json'), 'utf8'));
 const bundledConfig = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'config.json'), 'utf8'));
+const domCompatSource = fs.readFileSync(path.join(extensionRoot, 'dom-compat.js'), 'utf8');
 const backgroundSource = fs.readFileSync(path.join(extensionRoot, 'background.js'), 'utf8');
 const promptSource = fs.readFileSync(path.join(extensionRoot, 'prompt-format.js'), 'utf8');
 const configSource = fs.readFileSync(path.join(extensionRoot, 'config.js'), 'utf8');
@@ -26,8 +27,8 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.permissions].sort(), ['alarms', 'scripting', 'storage', 'tabs'].sort());
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
-  assert.deepEqual(manifest.content_scripts[0].js, ['prompt-format.js', 'config.js', 'runtime-reset.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.16');
+  assert.deepEqual(manifest.content_scripts[0].js, ['dom-compat.js', 'prompt-format.js', 'config.js', 'runtime-reset.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
+  assert.equal(manifest.version, '1.2.17');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -39,9 +40,25 @@ test('managed updater talks only to loopback, reloads itself, and reinjects curr
   assert.match(backgroundSource, /chrome\.runtime\.reload\(\)/);
   assert.match(backgroundSource, /chrome\.tabs\.query\(\{ url: \['https:\/\/chatgpt\.com\/\*'\] \}\)/);
   assert.match(backgroundSource, /chrome\.scripting\.executeScript/);
+  assert.match(backgroundSource, /'dom-compat\.js'/);
   assert.match(backgroundSource, /'runtime-reset\.js'/);
   assert.match(backgroundSource, /'conversation-state\.js'/);
   assert.doesNotMatch(backgroundSource, /github\.com|raw\.githubusercontent\.com|backend-api|XMLHttpRequest|WebSocket/);
+});
+
+test('current ChatGPT UI compatibility loads first and covers semantic composer and send controls', () => {
+  assert.doesNotThrow(() => new vm.Script(domCompatSource));
+  assert.equal(manifest.content_scripts[0].js[0], 'dom-compat.js');
+  assert.match(domCompatSource, /data-message-author-role/);
+  assert.match(domCompatSource, /data-lexical-editor/);
+  assert.match(domCompatSource, /role="textbox"/);
+  assert.match(domCompatSource, /data-placeholder/);
+  assert.match(domCompatSource, /textarea\[placeholder\]/);
+  assert.match(domCompatSource, /function fallbackComposer\(root\)/);
+  assert.match(domCompatSource, /function fallbackSend\(root\)/);
+  assert.match(domCompatSource, /composer\[-_ \]\?send/);
+  assert.match(domCompatSource, /nativeClosest\.call\(this, 'button'\)/);
+  assert.doesNotMatch(domCompatSource, /\bfetch\s*\(|XMLHttpRequest|WebSocket|backend-api|\/conversation\b/);
 });
 
 test('runtime reset disposes stale page runtimes before current scripts rebind to the config API', () => {
@@ -328,6 +345,7 @@ test('config storage contains no external network endpoint or background transpo
 test('installer copies managed worker/config files and removes the legacy projects JSON', () => {
   assert.match(installerSource, /LOCALAPPDATA/);
   assert.match(installerSource, /ChatGPTQuickContinue\\Extension/);
+  assert.match(installerSource, /'dom-compat\.js'/);
   assert.match(installerSource, /'background\.js'/);
   assert.match(installerSource, /'config\.js'/);
   assert.match(installerSource, /'config\.json'/);
