@@ -50,11 +50,14 @@
     }
   }
 
-  async function probeTerminalStatusAtRequestCompletion(details) {
-    if (!conversationRequest(details) || details.statusCode < 200 || details.statusCode >= 300) return;
+  async function probeTerminalStatusAtRequestSettlement(details, settlement = 'completion') {
+    if (!conversationRequest(details)) return;
+    const isErrorSettlement = settlement === 'error';
+    if (!isErrorSettlement && (details.statusCode < 200 || details.statusCode >= 300)) return;
+    const probePrefix = isErrorSettlement ? 'request-error-status-probe' : 'request-completion-status-probe';
     const chromeDocumentId = String(details.documentId || '');
     if (!chromeDocumentId) {
-      record('request-completion-status-probe-unroutable', details.tabId, null, 'chrome-document-id-missing');
+      record(`${probePrefix}-unroutable`, details.tabId, null, 'chrome-document-id-missing');
       return;
     }
 
@@ -66,23 +69,26 @@
       try { tab = await chrome.tabs.get(details.tabId); } catch {}
       if (!tab || !chatgptConversationUrl(tab.url)) return;
       if (tab.frozen === true || tab.discarded === true) {
-        record('request-completion-status-probe-deferred', details.tabId, tab, 'tab-temporarily-unavailable');
+        record(`${probePrefix}-deferred`, details.tabId, tab, 'tab-temporarily-unavailable');
         return;
       }
 
       const deliveryHook = globalThis.__chatgptNotifierNormalContinuationBudgetHook;
       if (typeof deliveryHook?.scheduleObservedStatusDelivery !== 'function' || typeof queryTerminalStatus !== 'function') {
-        record('request-completion-status-probe-unavailable', details.tabId, tab, 'status-probe-runtime-unavailable');
+        record(`${probePrefix}-unavailable`, details.tabId, tab, 'status-probe-runtime-unavailable');
         return;
       }
 
-      // The status runtime waits on MutationObserver, so this wake does not
-      // depend on page timers or animation frames. That matters when Chrome
-      // occludes a window on another Windows virtual desktop.
+      // A ChatGPT streaming request can terminate through webRequest.onErrorOccurred
+      // even after the assistant response and terminal status footer have rendered.
+      // Probe the rendered DOM for either settlement path so transport teardown or
+      // an extension/runtime replacement cannot silently skip notification delivery.
+      // queryTerminalStatus is local MutationObserver-driven observation only; this
+      // does not poll ChatGPT or create another conversation request.
       const status = await queryTerminalStatus(details.tabId, chromeDocumentId, 30_000);
       const statusCode = String(status?.statusCode || '');
       if (!globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode)) {
-        record('request-completion-status-probe-no-terminal-code', details.tabId, tab, 'terminal-code-not-observed');
+        record(`${probePrefix}-no-terminal-code`, details.tabId, tab, 'terminal-code-not-observed');
         return;
       }
 
@@ -100,26 +106,36 @@
         statusCode
       };
       if (!snapshot.conversationId || !snapshot.promptKey || !snapshot.assistantKey || !snapshot.assistantRevision) {
-        record('request-completion-status-probe-unroutable', details.tabId, tab, 'terminal-identity-incomplete');
+        record(`${probePrefix}-unroutable`, details.tabId, tab, 'terminal-identity-incomplete');
         return;
       }
 
-      record('request-completion-status-probe-observed', details.tabId, tab, `status=${statusCode}`);
+      record(`${probePrefix}-observed`, details.tabId, tab, `status=${statusCode}`);
       await deliveryHook.scheduleObservedStatusDelivery(
         { type: 'CHATGPT_MONITOR_STATE', snapshot },
         { tab, documentId: chromeDocumentId }
       );
     } catch {
-      record('request-completion-status-probe-error', details.tabId, null, 'status-probe-failed');
+      record(`${probePrefix}-error`, details.tabId, null, 'status-probe-failed');
     } finally {
       activeCompletionProbes.delete(probeKey);
     }
   }
 
+  function probeTerminalStatusAtRequestCompletion(details) {
+    return probeTerminalStatusAtRequestSettlement(details, 'completion');
+  }
+
   chrome.webRequest.onCompleted.addListener((details) => {
     if (!conversationRequest(details)) return;
     recordCurrent('request-completed-tab-lifecycle', details.tabId).catch(() => {});
-    probeTerminalStatusAtRequestCompletion(details).catch(() => {});
+    probeTerminalStatusAtRequestSettlement(details, 'completion').catch(() => {});
+  }, REQUEST_FILTER);
+
+  chrome.webRequest.onErrorOccurred.addListener((details) => {
+    if (!conversationRequest(details)) return;
+    recordCurrent('request-error-tab-lifecycle', details.tabId).catch(() => {});
+    probeTerminalStatusAtRequestSettlement(details, 'error').catch(() => {});
   }, REQUEST_FILTER);
 
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -130,7 +146,8 @@
   });
 
   globalThis.__chatgptNotifierTabLifecycleDiagnostics = Object.freeze({
-    version: 2,
-    probeTerminalStatusAtRequestCompletion
+    version: 3,
+    probeTerminalStatusAtRequestCompletion,
+    probeTerminalStatusAtRequestSettlement
   });
 })();
