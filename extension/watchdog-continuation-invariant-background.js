@@ -3,7 +3,7 @@
 (() => {
   if (globalThis.__chatgptNotifierWatchdogContinuationInvariant) return;
 
-  const VERSION = 1;
+  const VERSION = 2;
   const PROFILE_STORE = 'profile';
   const RECORD_PREFIX = 'code-watchdog:';
   const ALARM_PREFIX = 'chatgpt-notifier-code-watchdog:';
@@ -28,6 +28,73 @@
     return number(next?.budgetResetAt) > number(previous?.budgetResetAt)
       || number(next?.operatorPromptArmedAt) > number(previous?.operatorPromptArmedAt)
       || number(next?.manualActivatedAt) > number(previous?.manualActivatedAt);
+  }
+
+  function terminalStatusCode(record) {
+    if (record?.stopped !== true) return '';
+    const reason = String(record?.stopReason || '');
+    if (!reason.startsWith('status:')) return '';
+    return reason.slice('status:'.length);
+  }
+
+  function terminalStoppedAt(record) {
+    return number(record?.terminalStoppedAt) || number(record?.updatedAt);
+  }
+
+  function clearAlarmFor(record) {
+    const conversationId = String(record?.conversationId || conversationIdFromKey(recordKey(record)));
+    if (!conversationId) return;
+    try {
+      const result = chrome.alarms.clear(alarmName(conversationId));
+      result?.catch?.(() => {});
+    } catch {}
+  }
+
+  function applyTerminalInvariant(previous, next) {
+    if (!next) return next;
+
+    const nextCode = terminalStatusCode(next);
+    if (nextCode) {
+      const previousCode = terminalStatusCode(previous);
+      const inheritedStopAt = previousCode === nextCode ? terminalStoppedAt(previous) : 0;
+      next.terminalStoppedAt = number(next.terminalStoppedAt) || inheritedStopAt || Date.now();
+      next.sendCount = 0;
+      next.waitingForRequestStart = false;
+      next.lastAutomaticSentAt = 0;
+      next.lastAutomaticPromptKey = '';
+      next.lastAutomaticParentPromptKey = '';
+      next.deadlineAt = 0;
+      next.retryAt = 0;
+      next.retryReason = '';
+      clearAlarmFor(next);
+      return next;
+    }
+
+    const previousCode = terminalStatusCode(previous);
+    if (!previousCode || explicitOperatorReset(previous, next)) return next;
+
+    const stoppedAt = terminalStoppedAt(previous);
+    const nextRequestStartedAt = number(next.lastRequestStartedAt);
+    const genuinelyNewRequest = stoppedAt > 0 && nextRequestStartedAt > stoppedAt;
+    if (genuinelyNewRequest) {
+      next.terminalStoppedAt = 0;
+      return next;
+    }
+
+    next.stopped = true;
+    next.stopReason = String(previous.stopReason || `status:${previousCode}`);
+    next.lastStatusCode = String(previous.lastStatusCode || previousCode);
+    next.terminalStoppedAt = stoppedAt || Date.now();
+    next.sendCount = 0;
+    next.waitingForRequestStart = false;
+    next.lastAutomaticSentAt = 0;
+    next.lastAutomaticPromptKey = '';
+    next.lastAutomaticParentPromptKey = '';
+    next.deadlineAt = 0;
+    next.retryAt = 0;
+    next.retryReason = '';
+    clearAlarmFor(next);
+    return next;
   }
 
   function shouldPreserve(previous, next) {
@@ -92,6 +159,7 @@
     const next = clone(value);
     const storageKey = recordKey(next);
     const previous = shadow.get(storageKey) || null;
+    applyTerminalInvariant(previous, next);
     preserveContinuationState(previous, next);
     shadow.set(storageKey, clone(next));
     return arguments.length > 1 ? originalPut.call(this, next, key) : originalPut.call(this, next);
@@ -99,7 +167,9 @@
 
   globalThis.__chatgptNotifierWatchdogContinuationInvariant = Object.freeze({
     version: VERSION,
+    applyTerminalInvariant,
     preserveContinuationState,
-    shouldPreserve
+    shouldPreserve,
+    terminalStatusCode
   });
 })();
