@@ -22,11 +22,15 @@ test('live acceptance uses only the pinned localhost bridge and explicit update 
   assert.doesNotMatch(script, /https?:\/\/(?!127\.0\.0\.1)/);
 });
 
-test('WebSocket factory emits exactly the connected socket instead of PowerShell method output', () => {
-  assert.match(script, /\[void\]\$socket\.Options\.SetRequestHeader\('Origin', \$BridgeOrigin\)/);
-  assert.match(script, /\[void\]\$socket\.ConnectAsync\([\s\S]*?\.GetResult\(\)/);
-  assert.match(script, /Write-Output -NoEnumerate \$socket/);
-  assert.match(script, /\[void\]\$connectTimeout\.Dispose\(\)/);
+test('WebSocket factory bypasses the PowerShell output pipeline with a ref result', () => {
+  assert.match(script, /function Open-BridgeSocket/);
+  assert.match(script, /\[ref\]\$Socket/);
+  assert.match(script, /\[void\]\$client\.Options\.SetRequestHeader\('Origin', \$BridgeOrigin\)/);
+  assert.match(script, /\[void\]\$client\.ConnectAsync\([\s\S]*?\.GetResult\(\)/);
+  assert.match(script, /\$Socket\.Value = \$client/);
+  assert.match(script, /\$socket = \$null\s+Open-BridgeSocket -Socket \(\[ref\]\$socket\)/);
+  assert.doesNotMatch(script, /Write-Output -NoEnumerate/);
+  assert.doesNotMatch(script, /\$socket\s*=\s*New-BridgeSocket/);
 });
 
 test('live acceptance retries stale feed observations without replacing an already-current helper', () => {
