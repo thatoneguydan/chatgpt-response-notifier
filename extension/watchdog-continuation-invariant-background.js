@@ -71,12 +71,8 @@
     }
 
     const previousCode = terminalStatusCode(previous);
-    if (!previousCode || explicitOperatorReset(previous, next)) return next;
-
-    const stoppedAt = terminalStoppedAt(previous);
-    const nextRequestStartedAt = number(next.lastRequestStartedAt);
-    const genuinelyNewRequest = stoppedAt > 0 && nextRequestStartedAt > stoppedAt;
-    if (genuinelyNewRequest) {
+    if (!previousCode) return next;
+    if (explicitOperatorReset(previous, next)) {
       next.terminalStoppedAt = 0;
       return next;
     }
@@ -84,7 +80,7 @@
     next.stopped = true;
     next.stopReason = String(previous.stopReason || `status:${previousCode}`);
     next.lastStatusCode = String(previous.lastStatusCode || previousCode);
-    next.terminalStoppedAt = stoppedAt || Date.now();
+    next.terminalStoppedAt = terminalStoppedAt(previous) || Date.now();
     next.sendCount = 0;
     next.waitingForRequestStart = false;
     next.lastAutomaticSentAt = 0;
