@@ -1,6 +1,7 @@
-# ChatGPT Response Notifier 0.9.78
+# ChatGPT Response Notifier 0.9.79
 
-- Retains the 0.9.77 fixes for paused-timer flicker, definitive `COMPLETE_APPLIED` / `BLOCKED_HUMAN` watchdog stops, attempt reset, and compact timer presentation.
-- Fixes the local Quick Continue updater so an explicit update request waits for any already-running check instead of returning an older cached `current` snapshot.
-- After the active check finishes, the waiting request performs its own fresh cache-busted feed read, allowing a newly published Quick Continue release to install immediately.
-- Ships alongside ChatGPT Quick Continue 1.2.18, which preserves each `\n` in manual-message templates as exactly one composer line break.
+- Makes definitive `COMPLETE_APPLIED`, `COMPLETE_NO_CHANGES`, `BLOCKED_HUMAN`, and `PLANNING_ACTIVE` watchdog stops serialize through the canonical watchdog mutation queue instead of racing normal page snapshots.
+- Latches a definitive terminal stop against late stale monitor snapshots and clears that latch only when a genuinely newer ChatGPT request begins.
+- Resets auto-continue attempts and clears watchdog alarms/timers as part of the definitive stop path.
+- Rejects stale timer overviews by watchdog revision as well as monitor-state revision, preventing an older countdown from replacing a newer terminal-stop state.
+- Forces the updated countdown/status runtime into already-open ChatGPT tabs after the extension update.
