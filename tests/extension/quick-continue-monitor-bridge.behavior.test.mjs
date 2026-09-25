@@ -14,7 +14,7 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   const fallback = readText('extension/quick-continue-status-fallback.js');
   const stabilizer = readText('extension/quick-continue-status-stabilizer.js');
 
-  assert.equal(manifest.version, '0.9.77');
+  assert.equal(manifest.version, '0.9.78');
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-monitor-bridge.js')));
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-fallback.js')));
   const stabilizerEntry = manifest.content_scripts.find((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-stabilizer.js'));
