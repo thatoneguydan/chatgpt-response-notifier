@@ -9,6 +9,7 @@
   const ARM_RETRY_DELAY_MS = 250;
   const ARM_RETRY_COUNT = 12;
   const TERMINAL_DEBOUNCE_MS = 120;
+  const LEGACY_MASKED_ARIA_LABEL = 'Quick Continue sending';
   const DEFINITIVE_STOP_CODES = new Set([
     'PLANNING_ACTIVE',
     'COMPLETE_APPLIED',
@@ -83,13 +84,25 @@
     return '';
   }
 
-  function quickActionFromEvent(event) {
-    if (event?.isTrusted !== true) return '';
+  function quickActionControlFromEvent(event) {
+    if (event?.isTrusted !== true) return null;
     const target = event?.target;
     let control = null;
     try { control = target?.closest?.(`#${TOOLBAR_ID} button`); } catch {}
-    if (!control || control.disabled === true || control.getAttribute?.('aria-disabled') === 'true') return '';
-    return quickActionFromLabel(control.getAttribute?.('aria-label'));
+    if (!control || control.disabled === true || control.getAttribute?.('aria-disabled') === 'true') return null;
+    return control;
+  }
+
+  function maskLegacyQuickAction(control, originalLabel) {
+    if (!control || !originalLabel) return;
+    try { control.setAttribute('aria-label', LEGACY_MASKED_ARIA_LABEL); } catch { return; }
+    setTimeout(() => {
+      try {
+        if (control.getAttribute('aria-label') === LEGACY_MASKED_ARIA_LABEL) {
+          control.setAttribute('aria-label', originalLabel);
+        }
+      } catch {}
+    }, 0);
   }
 
   function isDefinitiveStopStatus(codeValue) {
@@ -296,8 +309,18 @@
   }
 
   function handleQuickAction(event) {
-    const action = quickActionFromEvent(event);
+    const control = quickActionControlFromEvent(event);
+    if (!control) return;
+    const originalLabel = String(control.getAttribute?.('aria-label') || '');
+    const action = quickActionFromLabel(originalLabel);
     if (!action) return;
+
+    // This listener runs on window capture, before the legacy attachment's
+    // document-capture listener. Mask the one semantic label that legacy code
+    // uses as an immediate-arm signal, then restore it after this click has
+    // propagated. The responder's own click handler does not depend on aria-label.
+    maskLegacyQuickAction(control, originalLabel);
+
     const previousUserKey = latestUserKey();
     const generation = ++actionGeneration;
     armFreshQuickAction(action, previousUserKey, generation).catch(() => false);
@@ -443,7 +466,7 @@
   }
 
   try { chrome.runtime.onMessage.addListener(handleRuntimeMessage); } catch {}
-  try { document.addEventListener('click', handleQuickAction, { capture: true, signal: abortController.signal }); } catch {}
+  try { window.addEventListener('click', handleQuickAction, { capture: true, signal: abortController.signal }); } catch {}
   try { document.addEventListener('visibilitychange', scheduleTerminalInspection, { signal: abortController.signal }); } catch {}
   try { window.addEventListener('focus', scheduleTerminalInspection, { signal: abortController.signal }); } catch {}
 
