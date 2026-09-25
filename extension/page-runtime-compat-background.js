@@ -9,7 +9,9 @@
     'bounded-recovery-script.js',
     'status-script.js',
     'recovery-script.js',
-    'recovery-live-fix-content.js'
+    'recovery-live-fix-content.js',
+    'quick-continue-monitor-bridge.js',
+    'watchdog-page-authority-v3.js'
   ]);
   const PAGE_COMPAT_FILE = 'page-dom-compat.js';
 
@@ -47,7 +49,7 @@
   }
 
   globalThis.__chatgptNotifierPageRuntimeCompatBackground = Object.freeze({
-    version: 1,
+    version: 2,
     pageCompatFile: PAGE_COMPAT_FILE,
     hardReloads: true
   });
