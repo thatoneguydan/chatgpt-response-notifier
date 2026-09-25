@@ -152,7 +152,7 @@ test('late stale active writes cannot reopen a definitive stop', () => {
   assert.equal(store.lastPut.terminalStoppedAt, 995_000);
 });
 
-test('a genuinely newer user request may rearm a terminal-stopped watchdog', () => {
+test('a newer request timestamp alone cannot reopen a terminal-stopped watchdog', () => {
   const { Store } = loadInvariant(1_000_000);
   const store = new Store();
   const key = 'code-watchdog:conversation-1';
@@ -181,8 +181,47 @@ test('a genuinely newer user request may rearm a terminal-stopped watchdog', () 
     retryAt: 0
   });
 
+  assert.equal(store.lastPut.stopped, true);
+  assert.equal(store.lastPut.stopReason, 'status:COMPLETE_APPLIED');
+  assert.equal(store.lastPut.deadlineAt, 0);
+  assert.equal(store.lastPut.terminalStoppedAt, 995_000);
+});
+
+test('an explicit trusted user arm may reset a terminal stop to a fresh 30-minute timer', () => {
+  const now = 1_000_000;
+  const { Store } = loadInvariant(now);
+  const store = new Store();
+  const key = 'code-watchdog:conversation-1';
+  prime(store, {
+    key,
+    conversationId: 'conversation-1',
+    sendCount: 0,
+    lastRequestStartedAt: 900_000,
+    stopped: true,
+    stopReason: 'status:COMPLETE_APPLIED',
+    lastStatusCode: 'COMPLETE_APPLIED',
+    terminalStoppedAt: 995_000,
+    operatorPromptArmedAt: 0,
+    deadlineAt: 0,
+    retryAt: 0
+  });
+
+  store.put({
+    key,
+    conversationId: 'conversation-1',
+    sendCount: 0,
+    lastRequestStartedAt: 1_010_000,
+    stopped: false,
+    stopReason: '',
+    lastStatusCode: '',
+    operatorPromptArmedAt: now,
+    deadlineAt: now + (30 * 60_000),
+    retryAt: 0
+  });
+
   assert.equal(store.lastPut.stopped, false);
   assert.equal(store.lastPut.stopReason, '');
-  assert.equal(store.lastPut.deadlineAt, 2_810_000);
+  assert.equal(store.lastPut.sendCount, 0);
+  assert.equal(store.lastPut.deadlineAt, now + (30 * 60_000));
   assert.equal(store.lastPut.terminalStoppedAt, 0);
 });
