@@ -14,7 +14,7 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   const fallback = readText('extension/quick-continue-status-fallback.js');
   const stabilizer = readText('extension/quick-continue-status-stabilizer.js');
 
-  assert.equal(manifest.version, '0.9.76');
+  assert.equal(manifest.version, '0.9.77');
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-monitor-bridge.js')));
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-fallback.js')));
   const stabilizerEntry = manifest.content_scripts.find((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-stabilizer.js'));
@@ -24,7 +24,7 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   assert.match(background, /BRIDGE_FILE = 'quick-continue-monitor-bridge\.js'/);
   assert.match(background, /STATUS_FALLBACK_FILE = 'quick-continue-status-fallback\.js'/);
   assert.match(background, /BRIDGE_RUNTIME_VERSION = 2/);
-  assert.match(background, /STATUS_RUNTIME_VERSION = 3/);
+  assert.match(background, /STATUS_RUNTIME_VERSION = 4/);
   assert.match(background, /runtimeCurrent\(tabId, 'CHATGPT_NOTIFIER_QUICK_STATUS_PING', STATUS_RUNTIME_VERSION\)/);
   assert.match(background, /files:\s*\[BRIDGE_FILE\]/);
   assert.match(background, /files:\s*\[STATUS_FALLBACK_FILE\]/);
@@ -79,14 +79,14 @@ test('definitive rendered statuses directly park the watchdog', () => {
   assert.doesNotMatch(bridge, /type:\s*'CHATGPT_MONITOR_STATE'/);
 });
 
-test('status presentation has one compact fixed owner and no competing pseudo status', () => {
+test('status presentation has one compact fixed owner and rejects stale monitor state', () => {
   const bridge = readText('extension/quick-continue-monitor-bridge.js');
   const fallback = readText('extension/quick-continue-status-fallback.js');
 
   assert.match(bridge, /RUNTIME_VERSION = 2/);
   assert.match(bridge, /display:\s*none !important/);
   assert.match(bridge, /content:\s*none !important/);
-  assert.match(fallback, /RUNTIME_VERSION = 3/);
+  assert.match(fallback, /RUNTIME_VERSION = 4/);
   assert.match(fallback, /STATUS_WIDTH_PX = 200/);
   assert.match(fallback, /font-size:\s*10px !important/);
   assert.match(fallback, /background:\s*var\(--main-surface-primary, #fff\) !important/);
@@ -96,6 +96,9 @@ test('status presentation has one compact fixed owner and no competing pseudo st
   assert.match(fallback, /waitingForRequestStart === true/);
   assert.match(fallback, /if \(!watchdog\) return ''/);
   assert.match(fallback, /overview\?\.codeWatchdog/);
+  assert.match(fallback, /highestStateRevision/);
+  assert.match(fallback, /revision < highestStateRevision/);
+  assert.match(fallback, /acceptOverview\(message\.overview\)/);
   assert.doesNotMatch(fallback, /MutationObserver/);
   assert.doesNotMatch(fallback, /STATUS_WIDTH_PX = 280/);
   assert.doesNotMatch(fallback, /fetch\(/);
