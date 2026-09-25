@@ -25,8 +25,13 @@ internal sealed class QuickContinueUpdateService : IDisposable
 
     public async Task<UpdateCheckResult> CheckAndInstallAsync(CancellationToken cancellationToken)
     {
-        if (!await _gate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
-            return new UpdateCheckResult(_status);
+        // Explicit localhost update requests are release-acceptance authority. If a
+        // periodic/background check is already in flight, returning the previous
+        // snapshot can falsely report an old version as "current" even after the
+        // public feed has advanced. Serialize callers instead: once the active
+        // check completes, every waiting caller performs its own fresh cache-busted
+        // feed read before reporting a result.
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         string? archivePath = null;
         try
