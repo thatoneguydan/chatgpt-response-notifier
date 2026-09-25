@@ -13,7 +13,7 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   const bridge = readText('extension/quick-continue-monitor-bridge.js');
   const fallback = readText('extension/quick-continue-status-fallback.js');
 
-  assert.equal(manifest.version, '0.9.72');
+  assert.equal(manifest.version, '0.9.73');
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-monitor-bridge.js')));
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-fallback.js')));
   assert.match(bootstrap, /importScripts\('quick-continue-monitor-bridge-background\.js'\)/);
