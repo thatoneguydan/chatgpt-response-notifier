@@ -50,7 +50,7 @@
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error || new Error('Could not open bounded recovery database.'));
-      request.onblocked = () => reject(new Error('Monitored-build database upgrade was blocked.'));
+      request.onblocked = () => reject(new Error('Bounded recovery database upgrade was blocked.'));
     });
     databasePromise.catch(() => { databasePromise = null; });
     return databasePromise;
@@ -250,7 +250,22 @@
   }
 
   async function stopForAttention(generation, reason) {
-    try { await monitor()?.parkCodeWatchdogForAttention?.(generation.conversationId, String(reason || 'automation-stopped')); } catch {}
+    const owner = monitor();
+    try {
+      const watchdog = await owner?.readCodeWatchdog?.(generation.conversationId);
+      if (watchdog) {
+        await owner?.parkCodeWatchdogForTerminalStatus?.(
+          {
+            conversationId: generation.conversationId,
+            conversationUrl: generation.conversationUrl,
+            promptKey: generation.promptKey,
+            statusCode: `attention:${String(reason || 'automation-stopped')}`
+          },
+          { tab: { id: generation.ownerTabId } },
+          watchdog
+        );
+      }
+    } catch {}
     await raiseAttention(generation, reason);
   }
 
@@ -426,6 +441,12 @@
       return;
     }
     if (decision.state === 'waiting') {
+      const watchdog = await monitor()?.readCodeWatchdog?.(generation.conversationId);
+      if (watchdog?.stopped === true && String(watchdog.stopReason || '') === 'retry-cap-reached') {
+        await finishClaim(claim, incident, { state: 'attention', resolution: 'stale-after-watchdog-retries' });
+        await stopForAttention(generation, 'stale-after-watchdog-retries');
+        return;
+      }
       await finishClaim(claim, incident, { state: 'waiting-watchdog', resolution: decision.reason });
       return;
     }
@@ -547,14 +568,6 @@
 
     const provisional = model().recoveryCandidate(classification, snapshot, { budget: existingIncident?.budget || {} });
     if (!provisional.kind) return;
-
-    if (updated.automatic === true) {
-      const incident = existingIncident || await ensureIncident(updated, classification);
-      await putRecord(INCIDENT_STORE, { ...incident, state: 'attention', resolution: 'stale-after-automatic-continue', nextEligibleAt: 0, updatedAt: Date.now() });
-      await stopForAttention(updated, 'stale-after-automatic-continue');
-      return;
-    }
-
     const incident = existingIncident || await ensureIncident(updated, classification);
     if (incident.state === 'waiting-watchdog') return;
     if (Number(incident.nextEligibleAt || 0) <= Date.now()) processIncident(incident.incidentId).catch(() => {});
