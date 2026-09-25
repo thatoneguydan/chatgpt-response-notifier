@@ -12,7 +12,7 @@ const refreshPolicy = read('extension/recovery-refresh-policy-background.js');
 const bootstrap = read('extension/diagnostics-bootstrap.js');
 
 test('current ChatGPT UI compatibility loads before page readers and stays page-local', () => {
-  assert.equal(manifest.version, '0.9.84');
+  assert.equal(manifest.version, '0.9.85');
   assert.equal(manifest.content_scripts[0].js[0], 'page-dom-compat.js');
   assert.match(domCompat, /data-message-author-role=\\?"user\\?"/);
   assert.match(domCompat, /data-message-author-role=\\?"assistant\\?"/);
