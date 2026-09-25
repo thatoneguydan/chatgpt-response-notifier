@@ -13,12 +13,14 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   const bridge = readText('extension/quick-continue-monitor-bridge.js');
   const fallback = readText('extension/quick-continue-status-fallback.js');
 
-  assert.equal(manifest.version, '0.9.73');
+  assert.equal(manifest.version, '0.9.74');
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-monitor-bridge.js')));
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-fallback.js')));
   assert.match(bootstrap, /importScripts\('quick-continue-monitor-bridge-background\.js'\)/);
   assert.match(background, /BRIDGE_FILE = 'quick-continue-monitor-bridge\.js'/);
   assert.match(background, /STATUS_FALLBACK_FILE = 'quick-continue-status-fallback\.js'/);
+  assert.match(background, /STATUS_RUNTIME_VERSION = 2/);
+  assert.match(background, /runtimeCurrent\(tabId, 'CHATGPT_NOTIFIER_QUICK_STATUS_PING', STATUS_RUNTIME_VERSION\)/);
   assert.match(background, /files:\s*\[BRIDGE_FILE\]/);
   assert.match(background, /files:\s*\[STATUS_FALLBACK_FILE\]/);
   assert.match(background, /ensureExistingTabs/);
@@ -72,28 +74,36 @@ test('definitive status fallback stops the current prompt without inheriting an 
   assert.match(bridge, /hasStatusEvidence:\s*true/);
 });
 
-test('automation status is left aligned above the toolbar and reinjection preserves visual geometry', () => {
+test('automation status remains left aligned above the toolbar while reinjection preserves visual geometry', () => {
   const bridge = readText('extension/quick-continue-monitor-bridge.js');
 
   assert.match(bridge, /left:\s*0 !important/);
   assert.match(bridge, /bottom:\s*calc\(100% \+ 4px\) !important/);
   assert.match(bridge, /text-align:\s*left !important/);
-  assert.match(bridge, /background:\s*transparent !important/);
   assert.match(bridge, /data-chatgpt-notifier-last-state/);
   assert.match(bridge, /data-chatgpt-notifier-last-status/);
   assert.match(bridge, /:not\(:has\(\[id\^="chatgpt-notifier-control-v"\]\)\)::before/);
-  assert.match(bridge, /:not\(:has\(\[id\^="chatgpt-notifier-countdown-v"\]\)\)::after/);
 });
 
-test('timer fallback keeps countdown and attempts visible when canonical status is hidden', () => {
+test('timer fallback keeps countdown and attempts in a readable fixed-width viewport-bounded chip', () => {
   const fallback = readText('extension/quick-continue-status-fallback.js');
 
+  assert.match(fallback, /RUNTIME_VERSION = 2/);
+  assert.match(fallback, /STATUS_WIDTH_PX = 280/);
   assert.match(fallback, /CANONICAL_STATUS_SELECTOR/);
   assert.match(fallback, /status\.hidden === true/);
   assert.match(fallback, /Next auto-continue \$\{formatCountdown/);
   assert.match(fallback, /const remainingText = `\$\{remaining\} left`/);
   assert.match(fallback, /GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER/);
   assert.match(fallback, /RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER/);
+  assert.match(fallback, /background:\s*var\(--main-surface-primary, #fff\) !important/);
+  assert.match(fallback, /font-size:\s*11px !important/);
+  assert.match(fallback, /white-space:\s*normal !important/);
+  assert.match(fallback, /overflow-wrap:\s*anywhere !important/);
+  assert.match(fallback, /content:\s*none !important/);
+  assert.match(fallback, /node\.style\.setProperty\('width', `\$\{statusWidth\}px`, 'important'\)/);
+  assert.match(fallback, /const maxViewportLeft = Math\.max\(margin, viewportWidth - statusWidth - margin\)/);
+  assert.match(fallback, /window\.addEventListener\('resize', render\)/);
   assert.match(fallback, /refreshTimer = setInterval/);
   assert.match(fallback, /tickTimer = setInterval\(render, 1000\)/);
   assert.match(fallback, /if \(canonicalStatusVisible\(toolbar\)\) \{\s*fallback\.hidden = true/);
