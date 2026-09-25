@@ -200,9 +200,20 @@
     return false;
   }
 
+  function handleMutations(records) {
+    const fallback = document.getElementById(FALLBACK_ID);
+    const meaningful = Array.from(records || []).some((record) => {
+      const target = record?.target;
+      if (!target) return false;
+      if (target === fallback || fallback?.contains?.(target)) return false;
+      return true;
+    });
+    if (meaningful) render();
+  }
+
   try { chrome.runtime.onMessage.addListener(handleRuntimeMessage); } catch {}
   if (typeof MutationObserver === 'function') {
-    observer = new MutationObserver(render);
+    observer = new MutationObserver(handleMutations);
     try { observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'style'] }); } catch {}
   }
   refreshTimer = setInterval(() => { refreshOverview().catch(() => null); }, OVERVIEW_REFRESH_MS);
