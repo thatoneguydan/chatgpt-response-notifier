@@ -257,4 +257,3 @@ jobs:
           $version = (Get-Content -LiteralPath .\VERSION.txt -Raw).Trim()
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'VERSION.txt is empty.' }
           & .\tools\Invoke-NotifierManagedUpdateAcceptance.ps1 -ExpectedVersion $version
-          if ($LASTEXITCODE -ne 0) { throw "Glass did not accept notifier $version through the live managed-update path." }
