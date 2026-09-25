@@ -214,7 +214,7 @@
   try { chrome.runtime.onMessage.addListener(handleRuntimeMessage); } catch {}
   if (typeof MutationObserver === 'function') {
     observer = new MutationObserver(handleMutations);
-    try { observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['hidden', 'style'] }); } catch {}
+    try { observer.observe(document.documentElement, { childList: true, subtree: true }); } catch {}
   }
   refreshTimer = setInterval(() => { refreshOverview().catch(() => null); }, OVERVIEW_REFRESH_MS);
   tickTimer = setInterval(render, 1000);
