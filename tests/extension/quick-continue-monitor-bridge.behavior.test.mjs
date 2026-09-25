@@ -15,7 +15,7 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   const pageAuthority = readText('extension/watchdog-page-authority-v3.js');
   const backgroundAuthority = readText('extension/watchdog-authority-v3-background.js');
 
-  assert.equal(manifest.version, '0.9.84');
+  assert.equal(manifest.version, '0.9.85');
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-monitor-bridge.js')));
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-fallback.js')));
   assert.ok(!manifest.content_scripts.some((entry) => entry.js?.includes('quick-continue-status-stabilizer.js')));
@@ -29,7 +29,7 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   assert.match(background, /BRIDGE_FILE = 'quick-continue-monitor-bridge\.js'/);
   assert.match(background, /STATUS_FILE = 'quick-continue-status-owner-v6\.js'/);
   assert.match(background, /BRIDGE_RUNTIME_VERSION = 3/);
-  assert.match(background, /STATUS_RUNTIME_VERSION = 7/);
+  assert.match(background, /STATUS_RUNTIME_VERSION = 8/);
   assert.match(background, /runtimeCurrent\(tabId, 'CHATGPT_NOTIFIER_QUICK_STATUS_PING', STATUS_RUNTIME_VERSION\)/);
   assert.match(background, /files:\s*\[BRIDGE_FILE\]/);
   assert.match(background, /files:\s*\[STATUS_FILE\]/);
@@ -37,7 +37,8 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   assert.match(background, /chrome\.tabs\.onUpdated\.addListener/);
   assert.match(background, /CHATGPT_NOTIFIER_QUICK_BRIDGE_PING/);
   assert.match(background, /CHATGPT_NOTIFIER_QUICK_STATUS_PING/);
-  assert.match(statusOwner, /RUNTIME_VERSION = 7/);
+  assert.match(statusOwner, /RUNTIME_VERSION = 8/);
+  assert.match(backgroundAuthority, /STATUS_RUNTIME_VERSION = 8/);
 
   assert.doesNotThrow(() => new vm.Script(background));
   assert.doesNotThrow(() => new vm.Script(bridge));
@@ -102,11 +103,20 @@ test('definitive rendered statuses have both legacy and v3 authoritative stop ro
   assert.match(backgroundAuthority, /terminal-stop-not-persisted/);
 });
 
-test('status presentation has one versioned visible owner and never parks at a due label', () => {
+test('status presentation has one durable DOM owner and quarantines stale pre-v8 timer surfaces', () => {
   const owner = readText('extension/quick-continue-status-owner-v6.js');
 
-  assert.match(owner, /RUNTIME_VERSION = 7/);
-  assert.match(owner, /STATUS_ID = 'chatgpt-notifier-countdown-fallback-v7'/);
+  assert.match(owner, /RUNTIME_VERSION = 8/);
+  assert.match(owner, /STATUS_OWNER_ATTR = 'data-chatgpt-notifier-watchdog-status-owner'/);
+  assert.match(owner, /UI_OWNER_ATTR = 'data-chatgpt-notifier-watchdog-ui-owner'/);
+  assert.match(owner, /STATUS_ID = `chatgpt-notifier-watchdog-status-v8-\$\{ownerToken\}`/);
+  assert.match(owner, /function ownsUi\(\)/);
+  assert.match(owner, /function claimUi\(\)/);
+  assert.match(owner, /function relinquishUi\(\)/);
+  assert.match(owner, /removeSupersededOwnedRows/);
+  assert.match(owner, /\[id\^="chatgpt-notifier-countdown-v"\]/);
+  assert.match(owner, /\[id\^="chatgpt-notifier-countdown-fallback-v"\]/);
+  assert.match(owner, /display: none !important/);
   assert.match(owner, /width: calc\(100% \+ 2px\)/);
   assert.match(owner, /color: #111/);
   assert.match(owner, /text-align: right/);
@@ -122,7 +132,7 @@ test('status presentation has one versioned visible owner and never parks at a d
   assert.match(owner, /RUN_CODE_WATCHDOG_NOW_V3/);
   assert.match(owner, /Sending auto-continue…/);
   assert.doesNotMatch(owner, /Auto-continue due/);
-  assert.match(owner, /\[id\^="chatgpt-notifier-countdown-fallback-v"\]/);
+  assert.match(owner, /if \(!ownsUi\(\)\) \{\s*relinquishUi\(\);/);
   assert.doesNotMatch(owner, /MutationObserver/);
   assert.doesNotMatch(owner, /fetch\(/);
   assert.doesNotMatch(owner, /XMLHttpRequest/);
