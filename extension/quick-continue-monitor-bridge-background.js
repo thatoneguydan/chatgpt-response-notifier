@@ -5,7 +5,7 @@
 
   const RUNTIME_VERSION = 5;
   const BRIDGE_RUNTIME_VERSION = 3;
-  const STATUS_RUNTIME_VERSION = 7;
+  const STATUS_RUNTIME_VERSION = 8;
   const BRIDGE_FILE = 'quick-continue-monitor-bridge.js';
   const STATUS_FILE = 'quick-continue-status-owner-v6.js';
 
