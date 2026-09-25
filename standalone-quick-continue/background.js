@@ -3,6 +3,7 @@
 const UPDATE_ALARM = 'quick-continue-managed-update';
 const UPDATE_URL = 'http://127.0.0.1:38473/quick-continue/update';
 const CONTENT_FILES = [
+  'dom-compat.js',
   'prompt-format.js',
   'config.js',
   'runtime-reset.js',

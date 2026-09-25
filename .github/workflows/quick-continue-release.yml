@@ -31,6 +31,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           foreach ($script in @(
+            '.\standalone-quick-continue\dom-compat.js',
             '.\standalone-quick-continue\background.js',
             '.\standalone-quick-continue\prompt-format.js',
             '.\standalone-quick-continue\config.js',
@@ -78,6 +79,7 @@ jobs:
             New-Item -ItemType Directory -Path $stage -Force | Out-Null
             $runtimeFiles = @(
               'manifest.json',
+              'dom-compat.js',
               'background.js',
               'prompt-format.js',
               'config.js',
