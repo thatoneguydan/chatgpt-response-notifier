@@ -8,7 +8,8 @@
   const CANONICAL_STATUS_SELECTOR = '[id^="chatgpt-notifier-countdown-v"], #chatgpt-notifier-automation-status';
   const OVERVIEW_REFRESH_MS = 2000;
   const VIEWPORT_MARGIN_PX = 8;
-  const MAX_STATUS_WIDTH_PX = 240;
+  const STATUS_WIDTH_PX = 200;
+  const WATCHDOG_DELAY_MS = 30 * 60_000;
 
   const previous = globalThis.__chatgptNotifierQuickContinueStatusFallback;
   if (Number(previous?.version || 0) === RUNTIME_VERSION) {
@@ -66,6 +67,13 @@
     const deadlineAt = Math.max(0, Number(watchdog?.deadlineAt || 0));
     const retryAt = Math.max(0, Number(watchdog?.retryAt || 0));
     const waitingFor = holdText(watchdog?.retryReason);
+    const manualActivatedAt = Math.max(0, Number(watchdog?.manualActivatedAt || 0));
+    const requestStartedAt = Math.max(0, Number(watchdog?.lastRequestStartedAt || 0));
+    const manualOnlyDeadline = manualActivatedAt > 0
+      && requestStartedAt < manualActivatedAt
+      && deadlineAt > 0
+      && Math.abs(deadlineAt - (manualActivatedAt + WATCHDOG_DELAY_MS)) < 2500;
+    if (manualOnlyDeadline || watchdog?.waitingForRequestStart === true) return '';
 
     if (deadlineAt > 0) {
       if (deadlineAt <= Number(now)) {
@@ -103,7 +111,6 @@
         position: absolute !important;
         right: auto !important;
         bottom: calc(100% + 4px) !important;
-        width: max-content !important;
         padding: 3px 6px !important;
         border: 1px solid var(--border-light, rgba(0, 0, 0, 0.14)) !important;
         border-radius: 6px !important;
@@ -138,18 +145,15 @@
     if (viewportWidth <= 0) return;
 
     const margin = VIEWPORT_MARGIN_PX;
-    const maxWidth = Math.max(1, Math.min(MAX_STATUS_WIDTH_PX, viewportWidth - (margin * 2)));
-    try {
-      node.style.setProperty('width', 'max-content', 'important');
-      node.style.setProperty('max-width', `${maxWidth}px`, 'important');
-    } catch {}
-
-    let measuredWidth = maxWidth;
-    try { measuredWidth = Math.max(1, Math.min(maxWidth, Number(node.getBoundingClientRect?.().width || maxWidth))); } catch {}
-    const maxViewportLeft = Math.max(margin, viewportWidth - measuredWidth - margin);
+    const statusWidth = Math.max(1, Math.min(STATUS_WIDTH_PX, viewportWidth - (margin * 2)));
+    const maxViewportLeft = Math.max(margin, viewportWidth - statusWidth - margin);
     const viewportLeft = Math.min(Math.max(toolbarLeft, margin), maxViewportLeft);
     const leftOffset = viewportLeft - toolbarLeft;
-    try { node.style.setProperty('left', `${leftOffset}px`, 'important'); } catch {}
+    try {
+      node.style.setProperty('left', `${leftOffset}px`, 'important');
+      node.style.setProperty('width', `${statusWidth}px`, 'important');
+      node.style.setProperty('max-width', `${statusWidth}px`, 'important');
+    } catch {}
   }
 
   function ensureFallback(toolbar) {
@@ -168,8 +172,8 @@
       left: '0',
       right: 'auto',
       bottom: 'calc(100% + 4px)',
-      width: 'max-content',
-      maxWidth: `${MAX_STATUS_WIDTH_PX}px`,
+      width: `${STATUS_WIDTH_PX}px`,
+      maxWidth: `${STATUS_WIDTH_PX}px`,
       padding: '3px 6px',
       border: '1px solid var(--border-light, rgba(0, 0, 0, 0.14))',
       borderRadius: '6px',
