@@ -13,9 +13,17 @@
   const PROFILE_KEY = 'recovery';
   const ALARM_NAME = 'chatgpt-notifier-recovery-deadline';
   const RELOAD_RECONCILE_MS = 15_000;
+  const REQUEST_ACTIVITY_RETENTION_MS = 2 * 60 * 60_000;
+  const REQUEST_FILTER = {
+    urls: [
+      'https://chatgpt.com/backend-api/f/conversation*',
+      'https://chatgpt.com/backend-api/conversation*'
+    ]
+  };
 
   let databasePromise = null;
   let processingPromise = null;
+  const requestActivityByTab = new Map();
 
   const model = () => globalThis.ChatGPTNotifierRecoveryModel || null;
   const policy = () => globalThis.ChatGPTNotifierContinuationPolicy || null;
@@ -34,6 +42,64 @@
       }
     } catch {}
     return null;
+  }
+
+  function normalizePathname(url) {
+    try { return new URL(String(url || '')).pathname.replace(/\/+$/, ''); } catch { return ''; }
+  }
+
+  function isAnswerStreamRequest(details = {}) {
+    if (!Number.isInteger(details.tabId) || details.tabId < 0 || details.method !== 'POST') return false;
+    const path = normalizePathname(details.url);
+    return path === '/backend-api/f/conversation' || path === '/backend-api/conversation';
+  }
+
+  function rememberRequestActivity(details, phase, patch = {}) {
+    if (!isAnswerStreamRequest(details)) return;
+    const now = Date.now();
+    const existing = requestActivityByTab.get(details.tabId);
+    const sameRequest = existing && String(existing.requestId || '') === String(details.requestId || '');
+    const startedAt = sameRequest ? Number(existing.startedAt || now) : now;
+    requestActivityByTab.set(details.tabId, {
+      ...(sameRequest ? existing : {}),
+      tabId: details.tabId,
+      requestId: String(details.requestId || ''),
+      phase: String(phase || 'started'),
+      startedAt,
+      updatedAt: now,
+      ...patch
+    });
+  }
+
+  function liveRequestActivity(tabId) {
+    const current = requestActivityByTab.get(tabId) || null;
+    if (!current) return null;
+    if (Date.now() - Number(current.updatedAt || 0) > REQUEST_ACTIVITY_RETENTION_MS) {
+      requestActivityByTab.delete(tabId);
+      return null;
+    }
+    return current;
+  }
+
+  function applyRequestActivity(snapshotValue, tabId) {
+    const snapshot = snapshotValue && typeof snapshotValue === 'object' ? snapshotValue : {};
+    const activity = liveRequestActivity(tabId);
+    if (!activity) return snapshot;
+    const snapshotStartedAt = Math.max(0, Number(snapshot.requestStartedAt || 0));
+    const activityStartedAt = Math.max(0, Number(activity.startedAt || 0));
+    if (!activityStartedAt || snapshotStartedAt > activityStartedAt) return snapshot;
+    const phase = activity.phase === 'error'
+      ? 'error'
+      : activity.phase === 'completed'
+        ? 'completed'
+        : 'started';
+    return {
+      ...snapshot,
+      requestPhase: phase,
+      requestStartedAt: activityStartedAt,
+      requestSettledAt: phase === 'started' ? 0 : Math.max(0, Number(activity.settledAt || activity.updatedAt || 0)),
+      requestError: phase === 'error' ? String(activity.error || snapshot.requestError || '') : String(snapshot.requestError || '')
+    };
   }
 
   function openDatabase() {
@@ -286,12 +352,12 @@
     if (!identity) return { ok: false, reason: 'conversation-unavailable' };
     try {
       const snapshot = await chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_MONITOR_QUERY' });
-      if (snapshot?.conversationId) return { ok: true, tab, identity, snapshot };
+      if (snapshot?.conversationId) return { ok: true, tab, identity, snapshot: applyRequestActivity(snapshot, tabId) };
     } catch {}
     try {
       await chrome.scripting.executeScript({ target: { tabId }, files: ['status-code.js', 'status-policy.js', 'monitor-script.js'] });
       const snapshot = await chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_MONITOR_QUERY' });
-      if (snapshot?.conversationId) return { ok: true, tab, identity, snapshot };
+      if (snapshot?.conversationId) return { ok: true, tab, identity, snapshot: applyRequestActivity(snapshot, tabId) };
     } catch {}
     return { ok: false, reason: 'page-unobservable', tab, identity };
   }
@@ -403,7 +469,11 @@
       return;
     }
     try {
-      await chrome.tabs.reload(generation.ownerTabId, { bypassCache: true });
+      if (globalThis.__chatgptNotifierRecoveryRefreshPolicy?.bypassCacheRequired === true) {
+        await chrome.tabs.reload(generation.ownerTabId);
+      } else {
+        await chrome.tabs.reload(generation.ownerTabId, { bypassCache: true });
+      }
     } catch {
       await finishClaim(claim, incident, { uncertain: true, state: 'attention', reason: 'reload-call-failed' });
       return;
@@ -534,14 +604,15 @@
     if (!snapshot?.conversationId || !snapshot?.promptKey) return;
     const enrollment = await recoveryEnrollment(snapshot.conversationId);
     if (enrollment?.enabled !== true) return;
-    const generation = await ensureGeneration(snapshot, sender);
+    const enrichedSnapshot = Number.isInteger(sender?.tab?.id) ? applyRequestActivity(snapshot, sender.tab.id) : snapshot;
+    const generation = await ensureGeneration(enrichedSnapshot, sender);
     if (!generation) return;
-    const classification = policy()?.classifyObservation?.(snapshot) || { state: 'waiting', reason: 'policy-unavailable' };
+    const classification = policy()?.classifyObservation?.(enrichedSnapshot) || { state: 'waiting', reason: 'policy-unavailable' };
     const updated = {
       ...generation,
       ownerTabId: Number.isInteger(sender?.tab?.id) ? sender.tab.id : generation.ownerTabId,
-      ownerDocumentId: String(sender?.documentId || snapshot.documentId || generation.ownerDocumentId || ''),
-      snapshot: { ...snapshot },
+      ownerDocumentId: String(sender?.documentId || enrichedSnapshot.documentId || generation.ownerDocumentId || ''),
+      snapshot: { ...enrichedSnapshot },
       classification,
       state: classification.state,
       updatedAt: Date.now()
@@ -554,7 +625,7 @@
       return;
     }
     if (classification.state === 'coded-terminal') {
-      await resolveIncidents(updated.generationKey, `coded:${snapshot.statusCode}`);
+      await resolveIncidents(updated.generationKey, `coded:${enrichedSnapshot.statusCode}`);
       return;
     }
 
@@ -566,7 +637,7 @@
     }
     if (enrollment.recoveryEnabled !== true) return;
 
-    const provisional = model().recoveryCandidate(classification, snapshot, { budget: existingIncident?.budget || {} });
+    const provisional = model().recoveryCandidate(classification, enrichedSnapshot, { budget: existingIncident?.budget || {} });
     if (!provisional.kind) return;
     const incident = existingIncident || await ensureIncident(updated, classification);
     if (incident.state === 'waiting-watchdog') return;
@@ -669,6 +740,25 @@
     await scheduleEarliestWake();
   }
 
+  chrome.webRequest.onBeforeRequest.addListener((details) => {
+    rememberRequestActivity(details, 'started');
+  }, REQUEST_FILTER);
+
+  chrome.webRequest.onHeadersReceived.addListener((details) => {
+    if (!isAnswerStreamRequest(details)) return;
+    rememberRequestActivity(details, 'started', { statusCode: Number(details.statusCode || 0) });
+  }, REQUEST_FILTER);
+
+  chrome.webRequest.onCompleted.addListener((details) => {
+    if (!isAnswerStreamRequest(details)) return;
+    rememberRequestActivity(details, 'completed', { statusCode: Number(details.statusCode || 0), settledAt: Date.now() });
+  }, REQUEST_FILTER);
+
+  chrome.webRequest.onErrorOccurred.addListener((details) => {
+    if (!isAnswerStreamRequest(details)) return;
+    rememberRequestActivity(details, 'error', { error: String(details.error || ''), settledAt: Date.now() });
+  }, REQUEST_FILTER);
+
   if (chrome.alarms?.onAlarm) {
     chrome.alarms.onAlarm.addListener((alarm) => {
       if (alarm?.name !== ALARM_NAME) return;
@@ -698,6 +788,10 @@
       const match = incidents.find((item) => generations.get(item.generationKey)?.ownerTabId === tabId);
       if (match) await processIncident(match.incidentId);
     })().catch(() => {});
+  });
+
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    requestActivityByTab.delete(tabId);
   });
 
   globalThis.__chatgptNotifierBoundedRecovery = Object.freeze({
