@@ -11,17 +11,24 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   const bootstrap = readText('extension/diagnostics-bootstrap.js');
   const background = readText('extension/quick-continue-monitor-bridge-background.js');
   const bridge = readText('extension/quick-continue-monitor-bridge.js');
+  const fallback = readText('extension/quick-continue-status-fallback.js');
 
-  assert.equal(manifest.version, '0.9.71');
+  assert.equal(manifest.version, '0.9.72');
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-monitor-bridge.js')));
+  assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-fallback.js')));
   assert.match(bootstrap, /importScripts\('quick-continue-monitor-bridge-background\.js'\)/);
+  assert.match(background, /BRIDGE_FILE = 'quick-continue-monitor-bridge\.js'/);
+  assert.match(background, /STATUS_FALLBACK_FILE = 'quick-continue-status-fallback\.js'/);
   assert.match(background, /files:\s*\[BRIDGE_FILE\]/);
+  assert.match(background, /files:\s*\[STATUS_FALLBACK_FILE\]/);
   assert.match(background, /ensureExistingTabs/);
   assert.match(background, /chrome\.tabs\.onUpdated\.addListener/);
   assert.match(background, /CHATGPT_NOTIFIER_QUICK_BRIDGE_PING/);
+  assert.match(background, /CHATGPT_NOTIFIER_QUICK_STATUS_PING/);
 
   assert.doesNotThrow(() => new vm.Script(background));
   assert.doesNotThrow(() => new vm.Script(bridge));
+  assert.doesNotThrow(() => new vm.Script(fallback));
 });
 
 test('Continue and Project actions enable monitoring before arming the fresh user turn', () => {
@@ -76,4 +83,21 @@ test('automation status is left aligned above the toolbar and reinjection preser
   assert.match(bridge, /data-chatgpt-notifier-last-status/);
   assert.match(bridge, /:not\(:has\(\[id\^="chatgpt-notifier-control-v"\]\)\)::before/);
   assert.match(bridge, /:not\(:has\(\[id\^="chatgpt-notifier-countdown-v"\]\)\)::after/);
+});
+
+test('timer fallback keeps countdown and attempts visible when canonical status is hidden', () => {
+  const fallback = readText('extension/quick-continue-status-fallback.js');
+
+  assert.match(fallback, /CANONICAL_STATUS_SELECTOR/);
+  assert.match(fallback, /status\.hidden === true/);
+  assert.match(fallback, /Next auto-continue \$\{formatCountdown/);
+  assert.match(fallback, /const remainingText = `\$\{remaining\} left`/);
+  assert.match(fallback, /GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER/);
+  assert.match(fallback, /RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER/);
+  assert.match(fallback, /refreshTimer = setInterval/);
+  assert.match(fallback, /tickTimer = setInterval\(render, 1000\)/);
+  assert.match(fallback, /if \(canonicalStatusVisible\(toolbar\)\) \{\s*fallback\.hidden = true/);
+  assert.match(fallback, /target === fallback \|\| fallback\?\.contains\?\.\(target\)/);
+  assert.doesNotMatch(fallback, /fetch\(/);
+  assert.doesNotMatch(fallback, /XMLHttpRequest/);
 });
