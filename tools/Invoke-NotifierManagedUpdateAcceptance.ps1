@@ -14,18 +14,18 @@ $Utf8 = [Text.Encoding]::UTF8
 
 function New-BridgeSocket {
     $socket = [Net.WebSockets.ClientWebSocket]::new()
-    $socket.Options.SetRequestHeader('Origin', $BridgeOrigin)
+    [void]$socket.Options.SetRequestHeader('Origin', $BridgeOrigin)
     $connectTimeout = [Threading.CancellationTokenSource]::new([TimeSpan]::FromSeconds(10))
     try {
-        $socket.ConnectAsync($BridgeUri, $connectTimeout.Token).GetAwaiter().GetResult()
-        return $socket
+        [void]$socket.ConnectAsync($BridgeUri, $connectTimeout.Token).GetAwaiter().GetResult()
+        Write-Output -NoEnumerate $socket
     }
     catch {
-        $socket.Dispose()
+        [void]$socket.Dispose()
         throw
     }
     finally {
-        $connectTimeout.Dispose()
+        [void]$connectTimeout.Dispose()
     }
 }
 
