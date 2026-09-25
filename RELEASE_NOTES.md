@@ -1,7 +1,7 @@
-# ChatGPT Response Notifier 0.9.72
+# ChatGPT Response Notifier 0.9.73
 
-- Restores the auto-continue timer and attempts-remaining text above the Quick Continue toolbar when the canonical countdown control is temporarily hidden or replaced during notifier hot reinjection.
-- Adds a local-only status fallback that reads the notifier's existing automation overview, keeps the countdown moving once per second, and yields immediately whenever the canonical countdown is visible again.
-- The fallback retains the existing click-to-reset behavior for auto-continue attempts and uses only extension-local messaging; it does not poll ChatGPT or add conversation/network requests.
-- Continue and Project actions continue to enable monitoring and arm only after the new user turn exists, preserving the previous-response race fix from 0.9.71.
-- Definitive current-turn GitHub status footers continue to stop the watchdog through prompt-identity-checked reconciliation.
+- Restores notification delivery when a ChatGPT conversation stream settles through Chrome's request-error path after the assistant response and terminal GitHub status footer have already rendered.
+- Request-error settlement now runs the same local terminal-status DOM probe used after successful request completion and routes valid terminal results through the existing durable notification pipeline.
+- Genuine transport failures without a valid rendered terminal status footer do not manufacture completion notifications.
+- Live Glass diagnostics confirmed the 0.9.72 helper, localhost bridge, extension runtime, and Chrome registration were healthy and isolated the missed-delivery boundary to request-error settlement.
+- The 0.9.72 auto-continue timer and attempts-remaining fallback remains unchanged.
