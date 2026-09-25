@@ -21,6 +21,7 @@
   let databasePromise = null;
   const requestContexts = new Map();
   const latestRequestByDocument = new Map();
+  const streamReadRecoveryInFlight = new Set();
 
   function delivery() {
     return globalThis.__chatgptNotifierDeliveryReliability || null;
@@ -543,6 +544,69 @@
     return await queueEarlyNotification(identity, sender);
   }
 
+  async function recoverStreamReadError(sender) {
+    const context = currentContext(sender);
+    if (!context || typeof queryTerminalStatus !== 'function') return;
+    const key = context.key;
+    if (streamReadRecoveryInFlight.has(key)) return;
+    streamReadRecoveryInFlight.add(key);
+    try {
+      const status = await queryTerminalStatus(context.tabId, context.chromeDocumentId, 30_000);
+      if (!globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(String(status?.statusCode || ''))) {
+        recordDiagnostic('response-stream-read-error-no-terminal-code', {
+          tabId: context.tabId, chromeDocumentId: context.chromeDocumentId,
+          reason: 'terminal-code-not-observed'
+        });
+        return;
+      }
+      const before = context.snapshot || null;
+      if (String(before?.statusCode || '') === String(status.statusCode || '')
+        && String(before?.promptKey || '') === String(status.promptKey || '')
+        && String(before?.assistantKey || '') === String(status.assistantKey || '')
+        && String(before?.assistantRevision || '') === String(status.revision || '')) {
+        recordDiagnostic('response-stream-read-error-status-predates-request', {
+          tabId: context.tabId, chromeDocumentId: context.chromeDocumentId,
+          reason: 'terminal-turn-already-present-at-request-start'
+        });
+        return;
+      }
+      if (currentContext(sender)?.key !== key) return;
+      const observed = await queryMonitorSnapshot(context.tabId, context.chromeDocumentId);
+      if (String(observed?.requestId || '') !== context.requestId
+        || String(observed?.conversationId || '') !== String(status.conversationId || '')
+        || String(observed?.promptKey || '') !== String(status.promptKey || '')
+        || String(observed?.assistantKey || '') !== String(status.assistantKey || '')
+        || String(observed?.statusCode || '') !== String(status.statusCode || '')) {
+        recordDiagnostic('response-stream-read-error-identity-unconfirmed', {
+          tabId: context.tabId, chromeDocumentId: context.chromeDocumentId,
+          reason: 'request-or-turn-identity-mismatch'
+        });
+        return;
+      }
+      let tab = null;
+      try { tab = await chrome.tabs.get(context.tabId); } catch {}
+      if (!tab || tab.discarded === true || tab.frozen === true
+        || conversationFromUrl(tab.url || '')?.id !== String(status.conversationId || '')) return;
+      const schedule = globalThis.__chatgptNotifierNormalContinuationBudgetHook?.scheduleObservedStatusDelivery;
+      if (typeof schedule !== 'function') return;
+      await schedule({ type: 'CHATGPT_MONITOR_STATE', snapshot: observed }, {
+        tab, documentId: context.chromeDocumentId
+      });
+      recordDiagnostic('response-stream-read-error-status-routed', {
+        tabId: context.tabId, conversationId: status.conversationId,
+        chromeDocumentId: context.chromeDocumentId,
+        reason: `status=${String(status.statusCode)}`
+      });
+    } catch {
+      recordDiagnostic('response-stream-read-error-recovery-failed', {
+        tabId: context.tabId, chromeDocumentId: context.chromeDocumentId,
+        reason: 'status-observation-failed'
+      });
+    } finally {
+      streamReadRecoveryInFlight.delete(key);
+    }
+  }
+
   function installLateDomNotificationDedupe() {
     const original = globalThis.queueDurableNotification;
     if (typeof original !== 'function' || original.__responseStreamDedupeWrapped === true) return;
@@ -624,6 +688,7 @@
         reason: `transport=${String(message?.transport || '')}`,
         chromeDocumentId: sender?.documentId
       });
+      if (message.state === 'stream-read-error') recoverStreamReadError(sender).catch(() => {});
       return false;
     }
     if (message?.type !== 'CHATGPT_RESPONSE_STREAM_TERMINAL_STATUS') return false;

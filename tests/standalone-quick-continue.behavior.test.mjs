@@ -13,6 +13,7 @@ const bundledConfig = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'confi
 const domCompatSource = fs.readFileSync(path.join(extensionRoot, 'dom-compat.js'), 'utf8');
 const backgroundSource = fs.readFileSync(path.join(extensionRoot, 'background.js'), 'utf8');
 const promptSource = fs.readFileSync(path.join(extensionRoot, 'prompt-format.js'), 'utf8');
+const composerSource = fs.readFileSync(path.join(extensionRoot, 'composer-text.js'), 'utf8');
 const configSource = fs.readFileSync(path.join(extensionRoot, 'config.js'), 'utf8');
 const runtimeResetSource = fs.readFileSync(path.join(extensionRoot, 'runtime-reset.js'), 'utf8');
 const contentSource = fs.readFileSync(path.join(extensionRoot, 'content-script.js'), 'utf8');
@@ -27,8 +28,8 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.permissions].sort(), ['alarms', 'scripting', 'storage', 'tabs'].sort());
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
-  assert.deepEqual(manifest.content_scripts[0].js, ['dom-compat.js', 'prompt-format.js', 'config.js', 'runtime-reset.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.18');
+  assert.deepEqual(manifest.content_scripts[0].js, ['dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'runtime-reset.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
+  assert.equal(manifest.version, '1.2.19');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -42,6 +43,7 @@ test('managed updater talks only to loopback, reloads itself, and reinjects curr
   assert.match(backgroundSource, /chrome\.scripting\.executeScript/);
   assert.match(backgroundSource, /'dom-compat\.js'/);
   assert.match(backgroundSource, /'runtime-reset\.js'/);
+  assert.match(backgroundSource, /'composer-text\.js'/);
   assert.match(backgroundSource, /'conversation-state\.js'/);
   assert.doesNotMatch(backgroundSource, /github\.com|raw\.githubusercontent\.com|backend-api|XMLHttpRequest|WebSocket/);
 });
@@ -124,13 +126,12 @@ test('prompt formatter places configurable time, project, and message placeholde
   assert.equal(api.projectContinuePrompt('campaign desk', 'No placeholder here.', date), '');
 });
 
-test('send path still clicks the real ChatGPT Send button at most once and writes multiline content explicitly', () => {
+test('send path clicks the real ChatGPT Send button at most once and verifies exact multiline content', () => {
   assert.match(contentSource, /button\[data-testid="send-button"\]/);
   assert.match(contentSource, /sendButton\.click\(\)/);
   assert.equal((contentSource.match(/sendButton\.click\(\)/g) || []).length, 1);
-  assert.match(contentSource, /function writeContentEditable\(node, text\)/);
-  assert.match(contentSource, /value\.split\('\\n'\)/);
-  assert.match(contentSource, /document\.createElement\('br'\)/);
+  assert.match(contentSource, /composerApi\.replace\(node, text\)/);
+  assert.doesNotMatch(contentSource, /document\.createElement\('br'\)/);
   assert.doesNotMatch(contentSource, /XMLHttpRequest/);
   assert.doesNotMatch(contentSource, /WebSocket/);
   assert.match(contentSource, /chatgpt-notifier-quick-prompts/);
@@ -171,14 +172,57 @@ test('clock toggle renders the configured manual-message template only for trust
   assert.match(hoverEditSource, /event\?\.isTrusted !== true/);
   assert.match(hoverEditSource, /event\.key !== 'Enter' \|\| event\.shiftKey \|\| event\.altKey/);
   assert.match(hoverEditSource, /event\.isComposing \|\| event\.keyCode === 229/);
-  assert.match(hoverEditSource, /next\.split\('\\n'\)/);
-  assert.match(hoverEditSource, /document\.createElement\('br'\)/);
-  assert.match(hoverEditSource, /node\.replaceChildren\(fragment\)/);
-  assert.doesNotMatch(hoverEditSource, /document\.execCommand/);
+  assert.match(hoverEditSource, /composerApi\?\.replace\(node, text\)/);
+  assert.doesNotMatch(hoverEditSource, /document\.createElement\('br'\)|node\.replaceChildren\(fragment\)/);
   assert.match(hoverEditSource, /document\.addEventListener\('click', handleManualSendClick, true\)/);
   assert.match(hoverEditSource, /document\.addEventListener\('keydown', handleManualSendKeydown, true\)/);
   assert.match(hoverEditSource, /document\.removeEventListener\('click', handleManualSendClick, true\)/);
   assert.match(hoverEditSource, /document\.removeEventListener\('keydown', handleManualSendKeydown, true\)/);
+});
+
+test('composer replacement uses an editor transaction and refuses altered line breaks', () => {
+  class Textarea { constructor() { this.value = ''; this.events = []; } dispatchEvent(event) { this.events.push(event.type); } }
+  class Input extends Textarea {}
+  class Editable { constructor() { this.isContentEditable = true; this.innerText = ''; this.focused = false; } focus() { this.focused = true; } }
+  const element = new Editable();
+  let changed = '';
+  let distort = false;
+  let syntheticInputCount = 0;
+  const context = {
+    globalThis: null,
+    HTMLTextAreaElement: Textarea,
+    HTMLInputElement: Input,
+    Event: class { constructor(type) { this.type = type; } },
+    InputEvent: class { constructor(type) { this.type = type; } },
+    window: { getSelection: () => ({ removeAllRanges() {}, addRange() {} }) },
+    document: {
+      createRange: () => ({ selectNodeContents() {} }),
+      execCommand(command, ui, text) {
+        assert.equal(command, 'insertText');
+        assert.equal(ui, false);
+        changed = text;
+        element.innerText = distort ? text.replaceAll('\n', '\n\n') : text;
+        return true;
+      }
+    }
+  };
+  context.globalThis = context;
+  element.dispatchEvent = () => { syntheticInputCount += 1; };
+  vm.runInNewContext(composerSource, context);
+  const api = context.ChatGPTQuickContinueComposer;
+  for (const expected of ['one\ntwo', 'one\n\ntwo', 'one\n\n\ntwo', 'one\n', '\none']) {
+    distort = false;
+    assert.equal(api.replace(element, expected), true, `exact editor write: ${JSON.stringify(expected)}`);
+    assert.equal(changed, expected);
+    assert.equal(api.read(element), expected);
+  }
+  distort = true;
+  assert.equal(api.replace(element, 'one\ntwo'), false, 'mismatched editor paragraph count must block send');
+  assert.equal(syntheticInputCount, 0, 'do not send a synthetic contenteditable input event');
+  const textarea = new Textarea();
+  assert.equal(api.replace(textarea, 'one\n\ntwo'), true);
+  assert.equal(textarea.value, 'one\n\ntwo');
+  assert.deepEqual(textarea.events, ['input']);
 });
 
 test('manual timestamp preference is isolated by ChatGPT conversation and follows SPA navigation', () => {
@@ -351,6 +395,7 @@ test('installer copies managed worker/config files and removes the legacy projec
   assert.match(installerSource, /'background\.js'/);
   assert.match(installerSource, /'config\.js'/);
   assert.match(installerSource, /'config\.json'/);
+  assert.match(installerSource, /'composer-text\.js'/);
   assert.match(installerSource, /'runtime-reset\.js'/);
   assert.match(installerSource, /'conversation-state\.js'/);
   assert.match(installerSource, /'projects\.json'/);
@@ -405,6 +450,7 @@ test('standalone runtime hot-replaces stale generations, restores a detached too
   assert.match(contentSource, /if \(!root\.isConnected\)/);
   assert.match(contentSource, /\(document\.body \|\| document\.documentElement\)\.append\(root\)/);
   assert.match(contentSource, /const NOTIFIER_MUTATION_SELECTOR/);
+  assert.match(contentSource, /chatgpt-notifier-countdown-fallback-v/);
   assert.match(contentSource, /function notifierOnlyMutation\(records\)/);
   assert.match(contentSource, /new MutationObserver\(handleDocumentMutations\)/);
   assert.match(contentSource, /document\.addEventListener\('pointerdown', handleDocumentPointerDown, true\)/);

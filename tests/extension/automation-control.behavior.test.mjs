@@ -939,10 +939,20 @@ test('explicit Quick Continue action re-arms a terminal watchdog from the user a
   assert.equal(parked.stopped, true);
   assert.equal(parked.deadlineAt, 0);
 
+  const late = await monitor.message({
+    type: 'ARM_CODE_WATCHDOG_FOR_SENDER',
+    source: 'quick-continue',
+    promptKey: 'conversation-1|user-1',
+    requestId: 'late-previous-turn'
+  }, sender);
+  assert.equal(late.ok, false);
+  assert.equal(late.codeWatchdog.stopReason, 'status:BLOCKED_HUMAN');
+
   const before = Date.now();
   const armed = await monitor.message({
     type: 'ARM_CODE_WATCHDOG_FOR_SENDER',
     source: 'quick-continue',
+    promptKey: 'conversation-1|user-2',
     requestId: 'quick-continue-arm'
   }, sender);
   const after = Date.now();
@@ -955,8 +965,71 @@ test('explicit Quick Continue action re-arms a terminal watchdog from the user a
   assert.equal(armed.codeWatchdog.stopReason, '');
   assert.equal(armed.codeWatchdog.lastStatusCode, '');
   assert.equal(armed.codeWatchdog.operatorPromptArmSource, 'quick-continue');
+  assert.equal(armed.codeWatchdog.lastPromptKey, 'conversation-1|user-2');
   assert.ok(Number(armed.codeWatchdog.deadlineAt) >= before + 30 * 60_000);
   assert.ok(Number(armed.codeWatchdog.deadlineAt) <= after + 30 * 60_000);
+});
+
+test('Stop cancels only the current timer; monitoring and a later request continue normally', async () => {
+  const monitor = loadMonitor();
+  await tick();
+  const sender = { tab: { id: 1, url: 'https://chatgpt.com/c/conversation-1', title: 'Build chat' }, documentId: 'document-1' };
+  await monitor.message({ type: 'SET_BUILD_AUTOMATION_STATE', enabled: true, tabId: 1,
+    conversationId: 'conversation-1', expectedRevision: 0, requestId: 'enable-stop-test' });
+  await monitor.message({ type: 'CHATGPT_MONITOR_STATE', snapshot: baseSnapshot() }, sender);
+  const current = await monitor.api.readCodeWatchdog('conversation-1');
+  assert.ok(current.deadlineAt > 0);
+
+  const stale = await monitor.message({ type: 'STOP_CODE_WATCHDOG_TIMER_FOR_SENDER',
+    conversationId: 'conversation-1', watchdogRevision: current.watchdogRevision - 1, requestId: 'stale-stop' }, sender);
+  assert.equal(stale.ok, false);
+  assert.equal((await monitor.api.readCodeWatchdog('conversation-1')).stopped, false);
+
+  const stopped = await monitor.message({ type: 'STOP_CODE_WATCHDOG_TIMER_FOR_SENDER',
+    conversationId: 'conversation-1', watchdogRevision: current.watchdogRevision, requestId: 'stop-now' }, sender);
+  assert.equal(stopped.ok, true);
+  assert.equal(stopped.requestId, 'stop-now');
+  assert.equal(stopped.automationEnabled, true);
+  assert.equal(stopped.codeWatchdog.stopped, true);
+  assert.equal(stopped.codeWatchdog.stopReason, 'operator-timer-stop');
+  assert.equal(stopped.codeWatchdog.deadlineAt, 0);
+  assert.equal(stopped.codeWatchdog.retryAt, 0);
+
+  await monitor.message({ type: 'CHATGPT_MONITOR_STATE', snapshot: baseSnapshot() }, sender);
+  assert.equal((await monitor.api.readCodeWatchdog('conversation-1')).stopped, true);
+  await monitor.message({ type: 'CHATGPT_MONITOR_STATE', snapshot: baseSnapshot({
+    promptKey: 'conversation-1|user-2', requestId: 'request-2', requestStartedAt: Date.now(), statusCode: ''
+  }) }, sender);
+  const resumed = await monitor.api.readCodeWatchdog('conversation-1');
+  assert.equal(resumed.stopped, false);
+  assert.ok(resumed.deadlineAt > Date.now());
+  const overview = await monitor.message({ type: 'GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER' }, sender);
+  assert.equal(overview.automationEnabled, true);
+});
+
+test('all four definitive status codes park the current timer and resist late same-turn arms', async () => {
+  for (const statusCode of ['COMPLETE_APPLIED', 'COMPLETE_NO_CHANGES', 'BLOCKED_HUMAN', 'PLANNING_ACTIVE']) {
+    const monitor = loadMonitor();
+    await tick();
+    const sender = { tab: { id: 1, url: 'https://chatgpt.com/c/conversation-1', title: 'Build chat' }, documentId: 'document-1' };
+    await monitor.message({ type: 'SET_BUILD_AUTOMATION_STATE', enabled: true, tabId: 1,
+      conversationId: 'conversation-1', expectedRevision: 0, requestId: 'enable-definitive' });
+    await monitor.message({ type: 'CHATGPT_MONITOR_STATE', snapshot: baseSnapshot() }, sender);
+    await monitor.message({ type: 'CHATGPT_MONITOR_STATE', snapshot: baseSnapshot({ statusCode }) }, sender);
+    const stopped = await monitor.api.readCodeWatchdog('conversation-1');
+    assert.equal(stopped.stopped, true, statusCode);
+    assert.equal(stopped.deadlineAt, 0, statusCode);
+    assert.equal(stopped.stopReason, `status:${statusCode}`);
+    await monitor.api.reconcileCodeWatchdog({
+      conversationId: 'conversation-1', conversationUrl: 'https://chatgpt.com/c/conversation-1',
+      promptKey: '', statusCode: '', requestStartedAt: stopped.lastRequestStartedAt
+    }, sender);
+    assert.equal((await monitor.api.readCodeWatchdog('conversation-1')).stopped, true,
+      `${statusCode}: a late request-start without a rendered prompt cannot rearm this turn`);
+    const late = await monitor.message({ type: 'ARM_CODE_WATCHDOG_FOR_SENDER',
+      promptKey: 'conversation-1|user-1', requestId: 'late-definitive' }, sender);
+    assert.equal(late.armed, false, statusCode);
+  }
 });
 
 test('web request completion carries the original start time to a replacement page runtime', async () => {

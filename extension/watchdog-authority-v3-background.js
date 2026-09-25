@@ -5,7 +5,7 @@
 
   const RUNTIME_VERSION = 3;
   const PAGE_RUNTIME_VERSION = 3;
-  const STATUS_RUNTIME_VERSION = 6;
+  const STATUS_RUNTIME_VERSION = 7;
   const PAGE_FILE = 'watchdog-page-authority-v3.js';
   const STATUS_FILE = 'quick-continue-status-owner-v6.js';
 
@@ -63,6 +63,11 @@
     if (!current) {
       await monitor.publishAutomationOverview(target, overview).catch(() => false);
       return { ok: true, stopped: true, statusCode, ...(overview || {}) };
+    }
+
+    if (current.lastPromptKey && message?.promptKey
+      && String(current.lastPromptKey) !== String(message.promptKey)) {
+      return { ok: false, reason: 'terminal-prompt-superseded', ...(overview || {}) };
     }
 
     const requestStartedAt = Math.max(

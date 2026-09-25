@@ -1,15 +1,13 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
-  const STYLE_ID = 'chatgpt-notifier-quick-continue-bridge-style-v2';
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const USER_TURN_WAIT_MS = 8000;
   const ARM_RETRY_DELAY_MS = 250;
   const ARM_RETRY_COUNT = 12;
   const TERMINAL_DEBOUNCE_MS = 120;
-  const LEGACY_MASKED_ARIA_LABEL = 'Quick Continue sending';
   const DEFINITIVE_STOP_CODES = new Set([
     'PLANNING_ACTIVE',
     'COMPLETE_APPLIED',
@@ -26,8 +24,6 @@
 
   const abortController = new AbortController();
   let documentObserver = null;
-  let toolbarObserver = null;
-  let observedToolbar = null;
   let terminalTimer = null;
   let actionGeneration = 0;
   let lastTerminalFingerprint = '';
@@ -91,18 +87,6 @@
     try { control = target?.closest?.(`#${TOOLBAR_ID} button`); } catch {}
     if (!control || control.disabled === true || control.getAttribute?.('aria-disabled') === 'true') return null;
     return control;
-  }
-
-  function maskLegacyQuickAction(control, originalLabel) {
-    if (!control || !originalLabel) return;
-    try { control.setAttribute('aria-label', LEGACY_MASKED_ARIA_LABEL); } catch { return; }
-    setTimeout(() => {
-      try {
-        if (control.getAttribute('aria-label') === LEGACY_MASKED_ARIA_LABEL) {
-          control.setAttribute('aria-label', originalLabel);
-        }
-      } catch {}
-    }, 0);
   }
 
   function isDefinitiveStopStatus(codeValue) {
@@ -293,6 +277,7 @@
         const result = await chrome.runtime.sendMessage({
           type: 'ARM_CODE_WATCHDOG_FOR_SENDER',
           source: `quick-${action}-fresh-turn`,
+          promptKey: newUserKey,
           requestId
         });
         if (result?.ok === true && String(result.requestId || '') === requestId) return true;
@@ -310,126 +295,15 @@
     const action = quickActionFromLabel(originalLabel);
     if (!action) return;
 
-    maskLegacyQuickAction(control, originalLabel);
-
     const previousUserKey = latestUserKey();
     const generation = ++actionGeneration;
     armFreshQuickAction(action, previousUserKey, generation).catch(() => false);
-  }
-
-  function ensureStyle() {
-    let style = document.getElementById(STYLE_ID);
-    if (!style) {
-      style = document.createElement('style');
-      style.id = STYLE_ID;
-      (document.head || document.documentElement).append(style);
-    }
-    const css = `
-      #${TOOLBAR_ID} [id^="chatgpt-notifier-countdown-v"],
-      #${TOOLBAR_ID} #chatgpt-notifier-automation-status {
-        display: none !important;
-      }
-      #${TOOLBAR_ID}[data-chatgpt-notifier-last-state]:not(:has([id^="chatgpt-notifier-control-v"]))::before {
-        content: '';
-        display: block;
-        flex: 0 0 18px;
-        width: 18px;
-        min-width: 18px;
-        height: 24px;
-        border-radius: 5px;
-        background: radial-gradient(circle at center, #888888 0 4px, transparent 4.5px);
-      }
-      #${TOOLBAR_ID}[data-chatgpt-notifier-last-state="enabled"]:not(:has([id^="chatgpt-notifier-control-v"]))::before {
-        background: radial-gradient(circle at center, #22c55e 0 4px, transparent 4.5px);
-      }
-      #${TOOLBAR_ID}[data-chatgpt-notifier-last-status]::after {
-        content: none !important;
-        display: none !important;
-      }
-    `;
-    if (style.textContent !== css) style.textContent = css;
-    return style;
-  }
-
-  function composerVisible() {
-    let composer = null;
-    try {
-      composer = document.querySelector('#prompt-textarea, textarea[data-testid="prompt-textarea"], [contenteditable="true"][data-testid="prompt-textarea"]');
-    } catch {}
-    if (!composer) return false;
-    let anchor = composer;
-    try {
-      anchor = composer.closest?.('form')
-        || composer.closest?.('[data-type="unified-composer"]')
-        || composer.closest?.('[data-testid*="composer" i]')
-        || composer;
-    } catch {}
-    try {
-      const rect = anchor.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0
-        && rect.bottom > 0 && rect.right > 0
-        && rect.top < window.innerHeight && rect.left < window.innerWidth;
-    } catch {
-      return false;
-    }
-  }
-
-  function mirrorToolbarState(toolbar) {
-    if (!toolbar) return;
-    let control = null;
-    let status = null;
-    try {
-      control = toolbar.querySelector('[id^="chatgpt-notifier-control-v"]');
-      status = toolbar.querySelector('[id^="chatgpt-notifier-countdown-v"], #chatgpt-notifier-automation-status');
-    } catch {}
-    const state = String(control?.dataset?.state || '').trim();
-    if (state) toolbar.setAttribute('data-chatgpt-notifier-last-state', state);
-    if (status) {
-      const text = normalize(status.textContent || '');
-      if (!status.hidden && text) toolbar.setAttribute('data-chatgpt-notifier-last-status', text);
-      else toolbar.removeAttribute('data-chatgpt-notifier-last-status');
-    }
-
-    if (
-      toolbar.style.display === 'none'
-      && toolbar.style.left
-      && toolbar.style.top
-      && composerVisible()
-    ) {
-      toolbar.style.display = 'flex';
-    }
-  }
-
-  function observeToolbar(toolbar) {
-    if (toolbar === observedToolbar) return;
-    try { toolbarObserver?.disconnect(); } catch {}
-    toolbarObserver = null;
-    observedToolbar = toolbar || null;
-    if (!observedToolbar || typeof MutationObserver !== 'function') return;
-    toolbarObserver = new MutationObserver(() => mirrorToolbarState(observedToolbar));
-    toolbarObserver.observe(observedToolbar, {
-      childList: true,
-      subtree: true,
-      characterData: true,
-      attributes: true,
-      attributeFilter: ['style', 'hidden', 'data-state']
-    });
-    mirrorToolbarState(observedToolbar);
-  }
-
-  function refreshUiBridge() {
-    ensureStyle();
-    let toolbar = null;
-    try { toolbar = document.getElementById(TOOLBAR_ID); } catch {}
-    observeToolbar(toolbar);
-    if (toolbar) mirrorToolbarState(toolbar);
   }
 
   function scheduleTerminalInspection() {
     if (terminalTimer !== null) return;
     terminalTimer = setTimeout(() => {
       terminalTimer = null;
-      refreshUiBridge();
       forceDefinitiveTerminalStop().catch(() => false);
     }, TERMINAL_DEBOUNCE_MS);
   }
@@ -456,21 +330,17 @@
     quickActionFromLabel,
     terminalStatusFromText,
     refresh() {
-      refreshUiBridge();
       scheduleTerminalInspection();
     },
     dispose() {
       try { abortController.abort(); } catch {}
       try { documentObserver?.disconnect(); } catch {}
-      try { toolbarObserver?.disconnect(); } catch {}
       try { if (terminalTimer !== null) clearTimeout(terminalTimer); } catch {}
       try { chrome.runtime.onMessage.removeListener(handleRuntimeMessage); } catch {}
-      try { document.getElementById(STYLE_ID)?.remove(); } catch {}
       if (globalThis.__chatgptNotifierQuickContinueBridge === runtime) delete globalThis.__chatgptNotifierQuickContinueBridge;
     }
   };
   globalThis.__chatgptNotifierQuickContinueBridge = Object.freeze(runtime);
 
-  refreshUiBridge();
   scheduleTerminalInspection();
 })();

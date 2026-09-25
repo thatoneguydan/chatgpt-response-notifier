@@ -9,6 +9,7 @@
 
   const prompts = globalThis.ChatGPTQuickContinuePrompts;
   const configApi = globalThis.ChatGPTQuickContinueConfig;
+  const composerApi = globalThis.ChatGPTQuickContinueComposer;
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const CLOCK_SELECTOR = '[aria-label="Current local time"]';
   const SEND_BUTTON_SELECTOR = [
@@ -42,18 +43,17 @@
       let node = null;
       try { node = document.querySelector(selector); } catch {}
       if (!node || node.disabled || node.getAttribute?.('aria-disabled') === 'true') continue;
+      try {
+        const style = getComputedStyle(node);
+        if (node.hidden || style.display === 'none' || style.visibility === 'hidden') continue;
+      } catch {}
       if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement || node.isContentEditable) return node;
     }
     return null;
   }
 
   function rawComposerText(node) {
-    try {
-      if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) return String(node.value || '');
-      return String(node?.innerText || node?.textContent || '');
-    } catch {
-      return '';
-    }
+    return composerApi?.read(node) || '';
   }
 
   function normalizedComposerText(value) {
@@ -93,57 +93,8 @@
     return /^\[[^\]\r\n]{0,80}\d{1,2}:\d{2}(?:\s*[AP]M)?[^\]\r\n]{0,80}\](?:\s|$)/i.test(value);
   }
 
-  function dispatchInput(node, data) {
-    try {
-      node.dispatchEvent(new InputEvent('input', {
-        bubbles: true,
-        inputType: 'insertText',
-        data
-      }));
-    } catch {
-      try { node.dispatchEvent(new Event('input', { bubbles: true })); } catch {}
-    }
-  }
-
-  function replaceTextControl(node, text) {
-    const next = normalizedComposerText(text);
-    try {
-      const proto = node instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-      const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
-      if (setter) setter.call(node, next);
-      else node.value = next;
-      dispatchInput(node, next);
-      return normalizedComposerText(node.value) === next;
-    } catch {
-      return false;
-    }
-  }
-
-  function replaceContentEditable(node, text) {
-    const next = normalizedComposerText(text);
-    try { node.focus({ preventScroll: true }); } catch { try { node.focus(); } catch {} }
-    try {
-      const fragment = document.createDocumentFragment();
-      const lines = next.split('\n');
-      lines.forEach((line, index) => {
-        if (index > 0) fragment.append(document.createElement('br'));
-        if (line) fragment.append(document.createTextNode(line));
-      });
-      node.replaceChildren(fragment);
-      dispatchInput(node, next);
-      return normalizedComposerText(rawComposerText(node)) === next;
-    } catch {
-      return false;
-    }
-  }
-
   function replaceComposerText(node, text) {
-    if (!node) return false;
-    if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement) {
-      return replaceTextControl(node, text);
-    }
-    if (node.isContentEditable) return replaceContentEditable(node, text);
-    return false;
+    return composerApi?.replace(node, text) === true;
   }
 
   function enabledSendButton(composer) {
@@ -173,7 +124,10 @@
     if (!(node instanceof Element)) return;
     const sendButton = node.closest(SEND_BUTTON_SELECTOR);
     if (!sendButton || sendButton.disabled || sendButton.getAttribute?.('aria-disabled') === 'true') return;
-    stampManualMessage();
+    if (!stampManualMessage()) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
   }
 
   function handleManualSendKeydown(event) {
@@ -185,7 +139,10 @@
     if (!composer || !enabledSendButton(composer)) return;
     const target = event.target;
     if (target !== composer && !(target instanceof Node && composer.contains(target))) return;
-    stampManualMessage();
+    if (!stampManualMessage()) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }
   }
 
   function updateClockToggleStyle() {

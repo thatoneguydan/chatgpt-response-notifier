@@ -859,8 +859,20 @@ async function showCompletionFromUpstream(message, sender) {
 
   const status = await queryTerminalStatus(tabId, senderDocumentId);
   const statusCode = String(status?.statusCode || '');
-  if (!globalThis.ChatGPTNotifierStatusCode?.isStatusCode(statusCode)) return null;
-  if (!statusBoundToCompletion(status, originIdentity, message?.response)) return null;
+  if (!globalThis.ChatGPTNotifierStatusCode?.isStatusCode(statusCode)) {
+    globalThis.__chatgptNotifierDeliveryReliability?.record?.('completion-status-unavailable', {
+      tabId, conversationId: originIdentity.id, chromeDocumentId: senderDocumentId,
+      reason: 'terminal-code-not-observed'
+    });
+    return null;
+  }
+  if (!statusBoundToCompletion(status, originIdentity, message?.response)) {
+    globalThis.__chatgptNotifierDeliveryReliability?.record?.('completion-binding-rejected', {
+      tabId, conversationId: originIdentity.id, chromeDocumentId: senderDocumentId,
+      reason: 'response-or-turn-identity-mismatch'
+    });
+    return null;
+  }
 
   const requestOwner = globalThis.__chatgptNotifierResponseStreamStatus?.requestOwnerForTurn?.({
     tabId,
@@ -869,7 +881,13 @@ async function showCompletionFromUpstream(message, sender) {
     promptKey: status.promptKey
   }) || null;
   const requestId = String(message?.requestId || requestOwner?.requestId || '');
-  if (!requestId) return null;
+  if (!requestId) {
+    globalThis.__chatgptNotifierDeliveryReliability?.record?.('completion-request-unavailable', {
+      tabId, conversationId: originIdentity.id, chromeDocumentId: senderDocumentId,
+      reason: 'request-identity-missing'
+    });
+    return null;
+  }
 
   return await processCodedCompletion(status, {
     tabId,
@@ -1003,7 +1021,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         return;
       }
       const notificationId = crypto.randomUUID();
-      const sent = sendNative({
+      const accepted = await sendNativeRequest({
         type: 'toast.show',
         notification: {
           id: notificationId,
@@ -1014,8 +1032,14 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           statusCode: 'TEST',
           completedAt: new Date().toISOString()
         }
-      });
-      sendResponse?.(sent ? { ok: true, notificationId } : { ok: false, error: 'Windows helper disconnected before the test toast was sent.' });
+      }, ['toast.accepted'], 5000, { queueIfDisconnected: false });
+      if (accepted?.accepted === true && accepted.notificationId === notificationId && accepted.presented === true) {
+        sendResponse?.({ ok: true, notificationId, presented: true });
+      } else {
+        sendResponse?.({ ok: false, notificationId, error: accepted
+          ? `Windows helper did not present the test toast (${String(accepted.presentationState || 'unknown')}).`
+          : 'Windows helper did not acknowledge the test toast.' });
+      }
     })().catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
     return true;
   }

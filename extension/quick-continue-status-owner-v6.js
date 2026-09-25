@@ -1,15 +1,11 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 6;
+  const RUNTIME_VERSION = 7;
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
-  const FALLBACK_ID = 'chatgpt-notifier-countdown-fallback-v6';
-  const LEGACY_FALLBACK_ID = 'chatgpt-notifier-countdown-fallback';
-  const STYLE_ID = 'chatgpt-notifier-countdown-readability-v6';
-  const CANONICAL_STATUS_SELECTOR = '[id^="chatgpt-notifier-countdown-v"], #chatgpt-notifier-automation-status';
+  const STATUS_ID = 'chatgpt-notifier-countdown-fallback-v7';
+  const STYLE_ID = 'chatgpt-notifier-countdown-style-v7';
   const OVERVIEW_REFRESH_MS = 2000;
-  const VIEWPORT_MARGIN_PX = 8;
-  const STATUS_WIDTH_PX = 200;
   const WATCHDOG_DELAY_MS = 30 * 60_000;
   const DUE_KICK_MIN_INTERVAL_MS = 750;
 
@@ -30,13 +26,13 @@
   let busy = false;
   let dueKickInFlight = false;
   let lastDueKickAt = 0;
-  let fallbackNode = null;
+  let row = null;
+  let resetButton = null;
+  let stopButton = null;
 
   function formatCountdown(milliseconds) {
     const seconds = Math.max(0, Math.ceil(Number(milliseconds || 0) / 1000));
-    const minutes = Math.floor(seconds / 60);
-    const remainder = seconds % 60;
-    return `${minutes}:${String(remainder).padStart(2, '0')}`;
+    return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
   }
 
   function holdText(reason) {
@@ -52,42 +48,33 @@
       'upload-present': 'upload to clear',
       'application-state-identity-mismatch': 'current response identity',
       'watchdog-runtime-unavailable': 'watchdog runtime',
-      'continue-send-failed': 'send retry',
-      'watchdog-runtime-unavailable': 'watchdog runtime'
+      'continue-send-failed': 'send retry'
     };
     const key = String(reason || '');
-    if (!key) return '';
-    return labels[key] || key.replace(/-/g, ' ');
+    return key ? (labels[key] || key.replace(/-/g, ' ')) : '';
   }
 
-  function candidateIdentity(candidate) {
-    const conversationId = String(candidate?.activeConversationId || '');
-    if (conversationId) return `conversation:${conversationId}`;
-    const tabId = Number.isInteger(candidate?.activeTabId) ? candidate.activeTabId : 'none';
-    return `tab:${tabId}`;
+  function candidateIdentity(value) {
+    const id = String(value?.activeConversationId || '');
+    return id ? `conversation:${id}` : `tab:${Number.isInteger(value?.activeTabId) ? value.activeTabId : 'none'}`;
   }
 
-  function acceptOverview(candidateValue) {
-    if (!candidateValue || typeof candidateValue !== 'object') return false;
-    let candidate = candidateValue;
+  function acceptOverview(value) {
+    if (!value || typeof value !== 'object') return false;
+    let candidate = value;
     const identity = candidateIdentity(candidate);
     const stateRevision = Math.max(0, Number(candidate.stateRevision || 0));
     const watchdogRevision = Math.max(0, Number(candidate?.codeWatchdog?.watchdogRevision || 0));
-
     if (identity !== overviewIdentity) {
       overviewIdentity = identity;
       highestStateRevision = -1;
       highestWatchdogRevision = -1;
       overview = null;
     }
-
     if (highestStateRevision >= 0 && stateRevision < highestStateRevision) return false;
-
-    const automationTransition = overview
-      && stateRevision > highestStateRevision
+    const automationTransition = overview && stateRevision > highestStateRevision
       && Boolean(overview.automationEnabled) !== Boolean(candidate.automationEnabled);
     if (automationTransition) highestWatchdogRevision = -1;
-
     if (candidate.automationEnabled === true && overview?.automationEnabled === true) {
       if (overview.codeWatchdog && !candidate.codeWatchdog) {
         candidate = { ...candidate, codeWatchdog: overview.codeWatchdog };
@@ -95,194 +82,154 @@
         candidate = { ...candidate, codeWatchdog: overview.codeWatchdog || candidate.codeWatchdog };
       }
     }
-
-    const acceptedWatchdogRevision = Math.max(0, Number(candidate?.codeWatchdog?.watchdogRevision || 0));
     highestStateRevision = Math.max(highestStateRevision, stateRevision);
     if (candidate.automationEnabled === true && candidate.codeWatchdog) {
-      highestWatchdogRevision = Math.max(highestWatchdogRevision, acceptedWatchdogRevision);
+      highestWatchdogRevision = Math.max(highestWatchdogRevision, Number(candidate.codeWatchdog.watchdogRevision || 0));
     } else if (candidate.automationEnabled !== true) {
       highestWatchdogRevision = -1;
     }
-
     overview = candidate;
     return true;
   }
 
-  function watchdogPresentation(state = overview, now = Date.now()) {
-    if (state?.automationEnabled !== true) return { text: '', due: false };
-    const watchdog = state?.codeWatchdog || null;
-    if (!watchdog) return { text: '', due: false };
-
+  function presentation(state = overview, now = Date.now()) {
+    const watchdog = state?.automationEnabled === true ? state?.codeWatchdog : null;
+    if (!watchdog) return { text: '', active: false, due: false };
     const maxSends = Math.max(1, Number(state?.codeWatchdogMaxSends || 3));
-    const sendCount = Math.max(0, Number(watchdog?.sendCount || 0));
-    const remaining = Math.max(0, maxSends - sendCount);
-    const stopReason = String(watchdog?.stopReason || '');
-
-    if (stopReason.startsWith('status:')) return { text: '', due: false };
-    if (remaining <= 0 || (watchdog?.stopped === true && stopReason === 'retry-cap-reached')) {
-      return { text: 'Auto-continues exhausted', due: false };
+    const remaining = Math.max(0, maxSends - Math.max(0, Number(watchdog.sendCount || 0)));
+    const stopReason = String(watchdog.stopReason || '');
+    if (stopReason.startsWith('status:')) return { text: '', active: false, due: false };
+    if (remaining <= 0 || stopReason === 'retry-cap-reached') {
+      return { text: 'Auto-continues exhausted', active: false, due: false };
     }
-
-    const remainingText = `${remaining} left`;
-    const deadlineAt = Math.max(0, Number(watchdog?.deadlineAt || 0));
-    const retryAt = Math.max(0, Number(watchdog?.retryAt || 0));
-    const waitingFor = holdText(watchdog?.retryReason);
-    const manualActivatedAt = Math.max(0, Number(watchdog?.manualActivatedAt || 0));
-    const requestStartedAt = Math.max(0, Number(watchdog?.lastRequestStartedAt || 0));
-    const manualOnlyDeadline = manualActivatedAt > 0
-      && requestStartedAt < manualActivatedAt
-      && deadlineAt > 0
-      && Math.abs(deadlineAt - (manualActivatedAt + WATCHDOG_DELAY_MS)) < 2500;
-    if (manualOnlyDeadline || watchdog?.waitingForRequestStart === true) return { text: '', due: false };
-
-    if (retryAt > Number(now)) {
+    const left = `${remaining} left`;
+    if (watchdog.stopped === true) return { text: `Timer stopped · ${left}`, active: false, due: false };
+    const deadlineAt = Math.max(0, Number(watchdog.deadlineAt || 0));
+    const retryAt = Math.max(0, Number(watchdog.retryAt || 0));
+    const activatedAt = Math.max(0, Number(watchdog.manualActivatedAt || 0));
+    const startedAt = Math.max(0, Number(watchdog.lastRequestStartedAt || 0));
+    const manualOnly = activatedAt > 0 && startedAt < activatedAt && deadlineAt > 0
+      && Math.abs(deadlineAt - (activatedAt + WATCHDOG_DELAY_MS)) < 2500;
+    if (manualOnly || watchdog.waitingForRequestStart === true) return { text: '', active: false, due: false };
+    if (retryAt > now) {
+      const waitingFor = holdText(watchdog.retryReason);
       const label = waitingFor ? `Auto-continue blocked · ${waitingFor}` : 'Retrying auto-continue';
-      return { text: `${label} · retry ${formatCountdown(retryAt - Number(now))} · ${remainingText}`, due: false };
+      return { text: `${label} · retry ${formatCountdown(retryAt - now)} · ${left}`, active: true, due: false };
     }
-
-    if (deadlineAt > Number(now)) {
-      return { text: `Next auto-continue ${formatCountdown(deadlineAt - Number(now))} · ${remainingText}`, due: false };
+    if (deadlineAt > now) {
+      return { text: `Next auto-continue ${formatCountdown(deadlineAt - now)} · ${left}`, active: true, due: false };
     }
-
-    if ((deadlineAt > 0 && deadlineAt <= Number(now)) || (retryAt > 0 && retryAt <= Number(now))) {
-      return { text: `Sending auto-continue… · ${remainingText}`, due: true };
+    if ((deadlineAt > 0 && deadlineAt <= now) || (retryAt > 0 && retryAt <= now)) {
+      return { text: `Sending auto-continue… · ${left}`, active: true, due: true };
     }
-
-    if (watchdog?.stopped === true) return { text: `Auto-continue stopped · ${remainingText}`, due: false };
-    return { text: '', due: false };
+    return { text: '', active: false, due: false };
   }
 
-  function canonicalStatuses(toolbar) {
-    try { return Array.from(toolbar?.querySelectorAll?.(CANONICAL_STATUS_SELECTOR) || []); } catch { return []; }
-  }
-
-  function ensureReadabilityStyle() {
-    let style = document.getElementById(STYLE_ID);
-    if (!style) {
-      style = document.createElement('style');
-      style.id = STYLE_ID;
-      (document.head || document.documentElement).append(style);
-    }
-    const css = `
-      #${TOOLBAR_ID} [id^="chatgpt-notifier-countdown-v"],
-      #${TOOLBAR_ID} #chatgpt-notifier-automation-status,
-      #${TOOLBAR_ID} #${LEGACY_FALLBACK_ID},
-      #${TOOLBAR_ID} [id^="chatgpt-notifier-countdown-fallback-v"] {
-        display: none !important;
+  function ensureStyle() {
+    if (document.getElementById(STYLE_ID)) return;
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+      #${TOOLBAR_ID} #${STATUS_ID}:not([hidden]) {
+        display: flex;
+        position: absolute;
+        box-sizing: border-box;
+        width: calc(100% + 2px);
+        max-width: calc(100% + 2px);
+        left: -1px;
+        bottom: calc(100% + 4px);
+        align-items: flex-start;
+        gap: 3px;
+        padding: 3px 4px;
+        border: 1px solid var(--border-light, rgba(0, 0, 0, .14));
+        border-radius: 6px;
+        background: var(--main-surface-primary, #fff);
+        color: #111;
+        box-shadow: 0 1px 4px rgba(0, 0, 0, .14);
+        font-size: 11px;
+        line-height: 1.25;
+        white-space: normal;
+        text-align: right;
+        font-variant-numeric: tabular-nums;
       }
-      #${TOOLBAR_ID} #${FALLBACK_ID}:not([hidden]) {
-        display: block !important;
-        position: absolute !important;
-        right: auto !important;
-        bottom: calc(100% + 4px) !important;
-        padding: 3px 6px !important;
-        border: 1px solid var(--border-light, rgba(0, 0, 0, 0.14)) !important;
-        border-radius: 6px !important;
-        background: var(--main-surface-primary, #fff) !important;
-        color: var(--text-primary, var(--text-secondary, #666)) !important;
-        box-shadow: 0 1px 4px rgba(0, 0, 0, 0.14) !important;
-        box-sizing: border-box !important;
-        font-size: 10px !important;
-        line-height: 1.25 !important;
-        font-variant-numeric: tabular-nums !important;
-        white-space: normal !important;
-        overflow-wrap: normal !important;
-        text-align: left !important;
+      #${STATUS_ID} button {
+        color: inherit;
+        font: inherit;
+        line-height: inherit;
+        background: transparent;
+        border: 0;
+        border-radius: 3px;
+        padding: 0 2px;
+        cursor: pointer;
       }
-      #${TOOLBAR_ID}[data-chatgpt-notifier-last-status]::after {
-        content: none !important;
-        display: none !important;
+      #${STATUS_ID} button:disabled { cursor: default; }
+      #${STATUS_ID} button:focus-visible { outline: 1px solid currentColor; }
+      #${STATUS_ID} .chatgpt-notifier-timer-text {
+        flex: 1 1 auto;
+        min-width: 0;
+        max-width: 100%;
+        overflow-wrap: anywhere;
+        white-space: normal;
+        text-align: right;
       }
+      #${STATUS_ID} .chatgpt-notifier-timer-stop {
+        flex: 0 0 18px;
+        padding: 0;
+        width: 18px;
+        min-height: 18px;
+        border: 1px solid currentColor;
+        text-align: center;
+      }
+      #${STATUS_ID} .chatgpt-notifier-timer-stop[hidden] { display: none; }
     `;
-    if (style.textContent !== css) style.textContent = css;
-    return style;
+    (document.head || document.documentElement).append(style);
   }
 
-  function applyViewportBounds(toolbar, node) {
-    if (!toolbar || !node || node.hidden === true) return;
-    let viewportWidth = 0;
-    let toolbarLeft = 0;
-    try {
-      viewportWidth = Math.max(0, Number(window.innerWidth || document.documentElement?.clientWidth || 0));
-      toolbarLeft = Number(toolbar.getBoundingClientRect?.().left || 0);
-    } catch {}
-    if (viewportWidth <= 0) return;
-
-    const margin = VIEWPORT_MARGIN_PX;
-    const statusWidth = Math.max(1, Math.min(STATUS_WIDTH_PX, viewportWidth - (margin * 2)));
-    const maxViewportLeft = Math.max(margin, viewportWidth - statusWidth - margin);
-    const viewportLeft = Math.min(Math.max(toolbarLeft, margin), maxViewportLeft);
-    const leftOffset = viewportLeft - toolbarLeft;
-    try {
-      node.style.setProperty('left', `${leftOffset}px`, 'important');
-      node.style.setProperty('width', `${statusWidth}px`, 'important');
-      node.style.setProperty('max-width', `${statusWidth}px`, 'important');
-    } catch {}
-  }
-
-  function cleanupOldStatusNodes(toolbar) {
-    if (!toolbar) return;
-    for (const status of canonicalStatuses(toolbar)) {
-      try {
-        status.hidden = true;
-        status.style?.setProperty?.('display', 'none', 'important');
-      } catch {}
-    }
-    let oldNodes = [];
-    try {
-      oldNodes = Array.from(toolbar.querySelectorAll(`#${LEGACY_FALLBACK_ID}, [id^="chatgpt-notifier-countdown-fallback-v"]`));
-    } catch {}
-    for (const node of oldNodes) {
-      if (node === fallbackNode) continue;
-      try { node.hidden = true; } catch {}
-      try { node.style?.setProperty?.('display', 'none', 'important'); } catch {}
+  function removeLegacyStatusNodes(toolbar) {
+    for (const node of toolbar.querySelectorAll(
+      '[id^="chatgpt-notifier-countdown-v"], #chatgpt-notifier-automation-status, '
+      + '#chatgpt-notifier-countdown-fallback, [id^="chatgpt-notifier-countdown-fallback-v"]'
+    )) {
+      if (node.id !== STATUS_ID) node.remove();
     }
   }
 
-  function ensureFallback(toolbar) {
-    if (!toolbar) return null;
-    if (fallbackNode?.isConnected && fallbackNode.parentElement === toolbar) return fallbackNode;
+  function ensureRow(toolbar) {
+    if (row?.isConnected && row.parentElement === toolbar) return row;
+    removeLegacyStatusNodes(toolbar);
+    row = document.createElement('div');
+    row.id = STATUS_ID;
+    row.hidden = true;
+    row.setAttribute('role', 'group');
+    row.setAttribute('aria-label', 'Auto-continue timer');
+    resetButton = document.createElement('button');
+    resetButton.type = 'button';
+    resetButton.className = 'chatgpt-notifier-timer-text';
+    resetButton.setAttribute('aria-label', 'Reset auto-continues remaining');
+    resetButton.addEventListener('click', resetBudget);
+    stopButton = document.createElement('button');
+    stopButton.type = 'button';
+    stopButton.className = 'chatgpt-notifier-timer-stop';
+    stopButton.textContent = '■';
+    stopButton.setAttribute('aria-label', 'Stop current auto-continue timer');
+    stopButton.addEventListener('click', stopTimer);
+    row.append(resetButton, stopButton);
+    toolbar.append(row);
+    return row;
+  }
 
-    let existing = null;
-    try { existing = toolbar.querySelector(`#${FALLBACK_ID}`); } catch {}
-    fallbackNode = existing || document.createElement('button');
-    fallbackNode.id = FALLBACK_ID;
-    fallbackNode.type = 'button';
-    fallbackNode.hidden = true;
-    fallbackNode.setAttribute('aria-label', 'Reset auto-continues remaining');
-    Object.assign(fallbackNode.style, {
-      position: 'absolute',
-      left: '0',
-      right: 'auto',
-      bottom: 'calc(100% + 4px)',
-      width: `${STATUS_WIDTH_PX}px`,
-      maxWidth: `${STATUS_WIDTH_PX}px`,
-      padding: '3px 6px',
-      border: '1px solid var(--border-light, rgba(0, 0, 0, 0.14))',
-      borderRadius: '6px',
-      background: 'var(--main-surface-primary, #fff)',
-      color: 'var(--text-primary, var(--text-secondary, #666))',
-      font: 'inherit',
-      fontSize: '10px',
-      lineHeight: '1.25',
-      fontVariantNumeric: 'tabular-nums',
-      whiteSpace: 'normal',
-      pointerEvents: 'auto',
-      cursor: 'pointer',
-      opacity: '1',
-      boxShadow: '0 1px 4px rgba(0, 0, 0, 0.14)',
-      boxSizing: 'border-box',
-      textAlign: 'left'
-    });
-    if (!existing) {
-      fallbackNode.addEventListener('click', resetBudget);
-      toolbar.append(fallbackNode);
-    }
-    return fallbackNode;
+  async function refreshOverview() {
+    if (disposed) return null;
+    try {
+      const result = await chrome.runtime.sendMessage({ type: 'GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER' });
+      if (result?.ok === true) acceptOverview(result);
+    } catch {}
+    render();
+    return overview;
   }
 
   async function kickDueWatchdog() {
-    if (disposed || dueKickInFlight || overview?.automationEnabled !== true || !overview?.activeConversationId) return false;
+    if (disposed || busy || dueKickInFlight || overview?.automationEnabled !== true || !overview?.activeConversationId) return false;
     const now = Date.now();
     if (now - lastDueKickAt < DUE_KICK_MIN_INTERVAL_MS) return false;
     lastDueKickAt = now;
@@ -305,32 +252,17 @@
 
   function render() {
     if (disposed) return;
-    let toolbar = null;
-    try { toolbar = document.getElementById(TOOLBAR_ID); } catch {}
+    const toolbar = document.getElementById(TOOLBAR_ID);
     if (!toolbar) return;
-
-    ensureReadabilityStyle();
-    const fallback = ensureFallback(toolbar);
-    cleanupOldStatusNodes(toolbar);
-    if (!fallback) return;
-
-    const presentation = watchdogPresentation();
-    if (fallback.textContent !== presentation.text) fallback.textContent = presentation.text;
-    fallback.hidden = !presentation.text;
-    fallback.disabled = busy || overview?.automationEnabled !== true;
-    fallback.style.cursor = fallback.disabled ? 'default' : 'pointer';
-    applyViewportBounds(toolbar, fallback);
-    if (presentation.due) kickDueWatchdog().catch(() => false);
-  }
-
-  async function refreshOverview() {
-    if (disposed) return null;
-    try {
-      const result = await chrome.runtime.sendMessage({ type: 'GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER' });
-      if (result?.ok === true) acceptOverview(result);
-    } catch {}
-    render();
-    return overview;
+    ensureStyle();
+    ensureRow(toolbar);
+    const state = presentation();
+    if (resetButton.textContent !== state.text) resetButton.textContent = state.text;
+    if (row.hidden !== !state.text) row.hidden = !state.text;
+    resetButton.disabled = busy || overview?.automationEnabled !== true;
+    stopButton.hidden = !state.active;
+    stopButton.disabled = busy || overview?.automationEnabled !== true;
+    if (state.due) kickDueWatchdog().catch(() => false);
   }
 
   async function resetBudget(event) {
@@ -348,11 +280,26 @@
       });
       if (result?.ok === true && String(result.requestId || '') === requestId) acceptOverview(result);
       else await refreshOverview();
-    } catch {}
-    finally {
-      busy = false;
-      render();
-    }
+    } catch {} finally { busy = false; render(); }
+  }
+
+  async function stopTimer(event) {
+    event?.preventDefault?.();
+    event?.stopPropagation?.();
+    if (busy || overview?.automationEnabled !== true || !overview?.activeConversationId || !presentation().active) return;
+    busy = true;
+    render();
+    try {
+      const requestId = crypto.randomUUID();
+      const result = await chrome.runtime.sendMessage({
+        type: 'STOP_CODE_WATCHDOG_TIMER_FOR_SENDER',
+        conversationId: overview.activeConversationId,
+        watchdogRevision: overview.codeWatchdog.watchdogRevision,
+        requestId
+      });
+      if (result?.ok === true && String(result.requestId || '') === requestId) acceptOverview(result);
+      else await refreshOverview();
+    } catch {} finally { busy = false; render(); }
   }
 
   function handleRuntimeMessage(message, _sender, sendResponse) {
@@ -374,26 +321,22 @@
 
   const runtime = Object.freeze({
     version: RUNTIME_VERSION,
-    refresh() {
-      refreshOverview().catch(() => null);
-      render();
-    },
+    refresh() { refreshOverview().catch(() => null); render(); },
     dispose() {
       disposed = true;
-      try { if (refreshTimer !== null) clearInterval(refreshTimer); } catch {}
-      try { if (tickTimer !== null) clearInterval(tickTimer); } catch {}
+      if (refreshTimer !== null) clearInterval(refreshTimer);
+      if (tickTimer !== null) clearInterval(tickTimer);
       try { chrome.runtime.onMessage.removeListener(handleRuntimeMessage); } catch {}
       try { window.removeEventListener('resize', render); } catch {}
-      try { fallbackNode?.remove?.(); } catch {}
+      try { row?.remove(); } catch {}
       try { document.getElementById(STYLE_ID)?.remove(); } catch {}
-      fallbackNode = null;
+      row = resetButton = stopButton = null;
       if (globalThis.__chatgptNotifierQuickContinueStatusFallback === runtime) {
         delete globalThis.__chatgptNotifierQuickContinueStatusFallback;
       }
     }
   });
   globalThis.__chatgptNotifierQuickContinueStatusFallback = runtime;
-
   refreshOverview().catch(() => null);
   render();
 })();

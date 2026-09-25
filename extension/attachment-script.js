@@ -2,7 +2,6 @@
 
 (() => {
   const QUICK_CONTINUE_TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
-  const AUTOMATION_DUE_REFRESH_MS = 5000;
   const ATTACHMENT_RUNTIME_VERSION = 14;
   const AUTOMATION_OWNER_ATTR = 'data-chatgpt-notifier-automation-owner';
   const AUTOMATION_UI_OWNER_ATTR = 'data-chatgpt-notifier-automation-ui-owner';
@@ -10,10 +9,8 @@
     try { return crypto.randomUUID(); } catch { return `${Date.now()}-${Math.random()}`; }
   })();
   const AUTOMATION_INDICATOR_ID = `chatgpt-notifier-control-v${ATTACHMENT_RUNTIME_VERSION}-${automationOwnerToken}`;
-  const AUTOMATION_STATUS_ID = `chatgpt-notifier-countdown-v${ATTACHMENT_RUNTIME_VERSION}-${automationOwnerToken}`;
   const AUTOMATION_RUNTIME_STYLE_ID = 'chatgpt-notifier-automation-runtime-style-v13';
   const LEGACY_AUTOMATION_INDICATOR_ID = 'chatgpt-notifier-automation-indicator';
-  const LEGACY_AUTOMATION_STATUS_ID = 'chatgpt-notifier-automation-status';
 
   let extensionVersion = '';
   try { extensionVersion = String(chrome.runtime.getManifest().version || ''); } catch {}
@@ -71,13 +68,9 @@
 
   let automationIndicator = null;
   let automationDot = null;
-  let automationStatus = null;
   let automationBusy = false;
-  let automationBudgetBusy = false;
   let automationOverview = null;
   let automationIndicatorObserver = null;
-  let automationCountdownTimerId = null;
-  let automationDueRefreshAt = 0;
 
   function ownsAutomationUi() {
     try {
@@ -103,7 +96,6 @@
     }
     const css = `
       #${LEGACY_AUTOMATION_INDICATOR_ID},
-      #${LEGACY_AUTOMATION_STATUS_ID},
       [id^="chatgpt-notifier-automation-indicator-v"],
       [id^="chatgpt-notifier-automation-status-v"],
       [${AUTOMATION_UI_OWNER_ATTR}]:not([${AUTOMATION_UI_OWNER_ATTR}="${automationOwnerToken}"]) {
@@ -117,7 +109,6 @@
   function removeStaleAutomationNodes() {
     for (const selector of [
       `#${LEGACY_AUTOMATION_INDICATOR_ID}`,
-      `#${LEGACY_AUTOMATION_STATUS_ID}`,
       '[id^="chatgpt-notifier-automation-indicator-v"]',
       '[id^="chatgpt-notifier-automation-status-v"]',
       `[${AUTOMATION_UI_OWNER_ATTR}]`
@@ -125,7 +116,7 @@
       let nodes = [];
       try { nodes = Array.from(document.querySelectorAll(selector)); } catch {}
       for (const node of nodes) {
-        if (node.id === AUTOMATION_INDICATOR_ID || node.id === AUTOMATION_STATUS_ID) continue;
+        if (node.id === AUTOMATION_INDICATOR_ID) continue;
         try { node.remove(); } catch {}
       }
     }
@@ -249,148 +240,6 @@
     return automationOverview;
   }
 
-  function formatCountdown(milliseconds) {
-    const seconds = Math.max(0, Math.ceil(Number(milliseconds || 0) / 1000));
-    const minutes = Math.floor(seconds / 60);
-    const remainder = seconds % 60;
-    return `${minutes}:${String(remainder).padStart(2, '0')}`;
-  }
-
-  function automationHoldText(reason) {
-    const labels = {
-      'page-unobservable': 'page observation',
-      'page-unavailable': 'page availability',
-      'runtime-unavailable': 'page runtime',
-      'offline': 'connection',
-      'auth-required': 'sign-in',
-      'approval-required': 'approval',
-      'rate-limited': 'rate-limit clearance',
-      'draft-present': 'draft to clear',
-      'upload-present': 'upload to clear',
-      'application-state-identity-mismatch': 'current response identity',
-      'watchdog-runtime-unavailable': 'watchdog runtime'
-    };
-    return labels[String(reason || '')] || '';
-  }
-
-  function automationStatusText(overview = automationOverview, now = Date.now()) {
-    if (overview?.automationEnabled !== true) return '';
-    const watchdog = overview?.codeWatchdog || null;
-    const maxSends = Math.max(1, Number(overview?.codeWatchdogMaxSends || 3));
-    const sendCount = Math.max(0, Number(watchdog?.sendCount || 0));
-    const remaining = Math.max(0, maxSends - sendCount);
-
-    if (remaining <= 0 || (watchdog?.stopped === true && String(watchdog?.stopReason || '') === 'retry-cap-reached')) {
-      return 'Auto-continues exhausted';
-    }
-
-    const remainingText = `${remaining} left`;
-    const deadlineAt = Math.max(0, Number(watchdog?.deadlineAt || 0));
-    const retryAt = Math.max(0, Number(watchdog?.retryAt || 0));
-    const holdText = automationHoldText(watchdog?.retryReason);
-
-    if (deadlineAt > 0) {
-      if (deadlineAt <= Number(now)) {
-        return holdText
-          ? `Auto-continue due · waiting for ${holdText} · ${remainingText}`
-          : `Auto-continue due · ${remainingText}`;
-      }
-      return `Next auto-continue ${formatCountdown(deadlineAt - Number(now))} · ${remainingText}`;
-    }
-
-    if (retryAt > Number(now)) {
-      return `Retrying auto-continue ${formatCountdown(retryAt - Number(now))} · ${remainingText}`;
-    }
-    if (watchdog?.stopped === true) return `Auto-continue stopped · ${remainingText}`;
-    return `Auto-continue waiting · ${remainingText}`;
-  }
-
-  function ensureAutomationStatus() {
-    if (!ownsAutomationUi()) return null;
-    const toolbar = document.getElementById(QUICK_CONTINUE_TOOLBAR_ID);
-    if (!toolbar) {
-      automationStatus = null;
-      return null;
-    }
-
-    const existing = document.getElementById(AUTOMATION_STATUS_ID);
-    if (existing && existing.parentElement === toolbar) {
-      automationStatus = existing;
-      return existing;
-    }
-    if (existing) {
-      try { existing.remove(); } catch {}
-    }
-
-    const status = document.createElement('button');
-    status.id = AUTOMATION_STATUS_ID;
-    status.type = 'button';
-    status.setAttribute(AUTOMATION_UI_OWNER_ATTR, automationOwnerToken);
-    status.hidden = true;
-    status.setAttribute('aria-label', 'Reset auto-continues remaining');
-    Object.assign(status.style, {
-      position: 'absolute',
-      left: '22px',
-      bottom: 'calc(100% + 3px)',
-      padding: '2px 4px',
-      border: '1px solid transparent',
-      borderRadius: '5px',
-      background: 'var(--main-surface-primary, #fff)',
-      color: 'var(--text-secondary, #666)',
-      font: 'inherit',
-      fontSize: '9px',
-      lineHeight: '1.2',
-      fontVariantNumeric: 'tabular-nums',
-      whiteSpace: 'nowrap',
-      pointerEvents: 'auto',
-      cursor: 'pointer',
-      opacity: '1',
-      boxShadow: 'none'
-    });
-    status.addEventListener('mouseenter', () => {
-      if (status.disabled) return;
-      status.style.borderColor = 'currentColor';
-    });
-    status.addEventListener('mouseleave', () => {
-      status.style.borderColor = 'transparent';
-    });
-    status.addEventListener('click', resetAutomationBudget);
-
-    toolbar.append(status);
-    automationStatus = status;
-    return status;
-  }
-
-  function renderAutomationStatus(overview = automationOverview) {
-    if (!ownsAutomationUi()) return;
-    const status = ensureAutomationStatus();
-    if (!status) return;
-    const text = automationStatusText(overview);
-    status.hidden = !text;
-    status.disabled = automationBudgetBusy || overview?.automationEnabled !== true;
-    status.style.cursor = status.disabled ? 'default' : 'pointer';
-    status.textContent = text;
-  }
-
-  function tickAutomationStatus() {
-    if (!ownsAutomationUi()) return;
-    renderAutomationStatus();
-    const watchdog = automationOverview?.codeWatchdog;
-    const deadlineAt = Math.max(0, Number(watchdog?.deadlineAt || 0));
-    const retryAt = Math.max(0, Number(watchdog?.retryAt || 0));
-    const refreshBoundaryAt = deadlineAt > 0 ? deadlineAt : retryAt;
-    const now = Date.now();
-    if (
-      automationOverview?.automationEnabled === true
-      && refreshBoundaryAt > 0
-      && refreshBoundaryAt <= now
-      && now >= automationDueRefreshAt
-    ) {
-      automationDueRefreshAt = now + AUTOMATION_DUE_REFRESH_MS;
-      refreshAutomationIndicator().catch(() => {});
-    }
-  }
-
   function renderAutomationIndicator(overview = automationOverview) {
     if (!ownsAutomationUi()) return;
     if (!automationIndicator || !automationDot) return;
@@ -405,7 +254,6 @@
         : `Build automation: ${mode.label}. Click to ${mode.label.toLowerCase()}.`
     );
     automationIndicator.dataset.state = mode.key;
-    renderAutomationStatus(overview);
     if (mode.disabled) {
       automationDot.style.visibility = 'hidden';
       return;
@@ -469,7 +317,6 @@
     if (!toolbar) {
       automationIndicator = null;
       automationDot = null;
-      automationStatus = null;
       return null;
     }
 
@@ -490,7 +337,6 @@
 
     const indicator = buildAutomationIndicator();
     continueButton.insertAdjacentElement('beforebegin', indicator);
-    ensureAutomationStatus();
     return indicator;
   }
 
@@ -525,57 +371,6 @@
     if (label === 'Send custom Project Continue') return 'project';
     if (/^Continue\s+.+/.test(label)) return 'project';
     return '';
-  }
-
-  async function armAutomationForQuickContinueAction(event) {
-    const action = quickContinueActionFromEvent(event);
-    if (!action) return;
-    try {
-      const requestId = crypto.randomUUID();
-      const result = await chrome.runtime.sendMessage({
-        type: 'ARM_CODE_WATCHDOG_FOR_SENDER',
-        source: `quick-${action}`,
-        requestId
-      });
-      if (!result?.ok) return;
-      if (String(result.requestId || '') !== requestId) return;
-      applyAutomationOverview(result);
-    } catch {}
-  }
-
-  async function resetAutomationBudget(event) {
-    event?.preventDefault?.();
-    event?.stopPropagation?.();
-    if (!ownsAutomationUi()) return;
-    if (automationBudgetBusy || automationBusy) return;
-
-    const status = ensureAutomationStatus();
-    if (!status || automationOverview?.automationEnabled !== true) return;
-
-    automationBudgetBusy = true;
-    renderAutomationStatus();
-    try {
-      const observedBefore = await readAutomationOverview();
-      const before = observedBefore && automationOverviewIsFresh(observedBefore)
-        ? applyAutomationOverview(observedBefore)
-        : automationOverview;
-      if (!before?.automationEnabled || !before.activeConversationId) return;
-
-      const requestId = crypto.randomUUID();
-      const result = await chrome.runtime.sendMessage({
-        type: 'RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER',
-        conversationId: before.activeConversationId,
-        requestId
-      });
-      if (!result?.ok) throw new Error(result?.error || result?.reason || 'Auto-continue reset was rejected.');
-      if (String(result.requestId || '') !== requestId) throw new Error('Auto-continue reset confirmation did not match this request.');
-      applyAutomationOverview(result);
-    } catch {
-      setTimeout(() => { refreshAutomationIndicator().catch(() => {}); }, 800);
-    } finally {
-      automationBudgetBusy = false;
-      renderAutomationStatus();
-    }
   }
 
   async function cycleAutomationState(event) {
@@ -639,7 +434,6 @@
     if (!ownsAutomationUi()) return;
     const previousIndicator = automationIndicator;
     const indicator = ensureAutomationIndicator();
-    ensureAutomationStatus();
     if (!indicator || document.visibilityState === 'hidden') return;
     if (indicator !== previousIndicator || !automationOverview) {
       refreshAutomationIndicator().catch(() => {});
@@ -678,7 +472,6 @@
   try { document.getElementById(AUTOMATION_INDICATOR_ID)?.remove(); } catch {}
   try { chrome.runtime.onMessage.addListener(handleAutomationStateMessage); } catch {}
   document.addEventListener('visibilitychange', handleVisibilityChange, true);
-  document.addEventListener('click', armAutomationForQuickContinueAction, true);
   window.addEventListener('focus', handleWindowFocus, true);
   automationIndicatorObserver = new MutationObserver(() => {
     if (!ownsAutomationUi()) return;
@@ -687,7 +480,6 @@
   });
   automationIndicatorObserver.observe(document.documentElement, { childList: true, subtree: true });
   setTimeout(() => { maintainAutomationIndicator(); }, 100);
-  automationCountdownTimerId = setInterval(tickAutomationStatus, 1000);
 
   globalThis.__chatgptNotifierAttachmentRuntime = Object.freeze({
     version: ATTACHMENT_RUNTIME_VERSION,
@@ -696,13 +488,10 @@
       try { if (heartbeatTimerId !== null) clearInterval(heartbeatTimerId); } catch {}
       try { if (heartbeatInitialTimerId !== null) clearTimeout(heartbeatInitialTimerId); } catch {}
       try { automationIndicatorObserver?.disconnect(); } catch {}
-      try { if (automationCountdownTimerId !== null) clearInterval(automationCountdownTimerId); } catch {}
       try { chrome.runtime.onMessage.removeListener(handleAutomationStateMessage); } catch {}
       try { document.removeEventListener('visibilitychange', handleVisibilityChange, true); } catch {}
-      try { document.removeEventListener('click', armAutomationForQuickContinueAction, true); } catch {}
       try { window.removeEventListener('focus', handleWindowFocus, true); } catch {}
       try { document.getElementById(AUTOMATION_INDICATOR_ID)?.remove(); } catch {}
-      try { document.getElementById(AUTOMATION_STATUS_ID)?.remove(); } catch {}
       try {
         if (ownsAutomationUi()) document.documentElement?.removeAttribute?.(AUTOMATION_OWNER_ATTR);
       } catch {}

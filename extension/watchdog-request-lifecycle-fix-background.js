@@ -328,6 +328,10 @@
     if (overview?.automationEnabled !== true) return { ok: false, reason: 'automation-not-active', ...(overview || {}) };
 
     const current = await readWatchdog(target.id).catch(() => null);
+    if (current?.lastPromptKey && message?.promptKey
+      && String(current.lastPromptKey) !== String(message.promptKey)) {
+      return { ok: false, reason: 'terminal-prompt-superseded', ...(overview || {}) };
+    }
     const promptKey = String(message?.promptKey || current?.lastPromptKey || '');
     const stoppedAt = Date.now();
     const stopped = await monitor.reconcileCodeWatchdog({

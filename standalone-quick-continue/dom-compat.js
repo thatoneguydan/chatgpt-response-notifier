@@ -48,6 +48,7 @@
   function visibleEnough(node) {
     if (!node || node.isConnected === false) return false;
     if (node.hidden === true || nativeAttribute(node, 'aria-hidden') === 'true') return false;
+    try { if (nativeClosest.call(node, '[hidden], [aria-hidden="true"], [inert]')) return false; } catch {}
     try {
       const style = typeof getComputedStyle === 'function' ? getComputedStyle(node) : null;
       if (style && (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse')) return false;
@@ -107,6 +108,9 @@
   function compatibleQuery(root, selector, original) {
     let direct = null;
     try { direct = original.call(root, selector); } catch { return null; }
+    if (LEGACY_COMPOSER_SELECTORS.has(selector) && direct && !usableComposer(direct)) {
+      return fallbackComposer(root);
+    }
     if (direct) return direct;
     if (LEGACY_COMPOSER_SELECTORS.has(selector)) return fallbackComposer(root);
     if (LEGACY_SEND_SELECTORS.has(selector) || selector === LEGACY_SEND_SELECTOR) return fallbackSend(root);

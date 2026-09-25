@@ -483,8 +483,14 @@
 
   function stoppedWatchdogStillOwnsSnapshot(clean = {}, current = null) {
     if (!current?.stopped) return false;
+    // An operator stops only this timer. The first later request is a fresh
+    // interaction even before ChatGPT has rendered its new user turn.
+    if (current.stopReason === 'operator-timer-stop'
+      && Number(clean?.requestStartedAt || 0) > Number(current.lastRequestStartedAt || 0)) return false;
     const snapshotPromptKey = String(clean?.promptKey || '');
     const currentPromptKey = String(current?.lastPromptKey || '');
+    if (!snapshotPromptKey && Number(clean?.requestStartedAt || 0)
+      <= Number(current?.lastRequestStartedAt || 0)) return true;
     const samePrompt = Boolean(currentPromptKey) && snapshotPromptKey === currentPromptKey;
     const followsAutomaticSend = Boolean(
       (current?.lastAutomaticPromptKey && snapshotPromptKey === String(current.lastAutomaticPromptKey))
@@ -529,7 +535,12 @@
       );
     }
 
-    const statusCode = String(clean?.statusCode || '');
+    let statusCode = String(clean?.statusCode || '');
+    // While a fresh request is starting, the page can still expose the
+    // previous turn's footer. That footer must not stop the new timer.
+    if (current?.stopped === true && current.stopReason === 'operator-timer-stop'
+      && requestStartedAt > persistedRequestStartedAt
+      && String(clean?.promptKey || '') === String(current.lastPromptKey || '')) statusCode = '';
     if (
       globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode)
       && !statusSnapshotBelongsToCurrentWatchdog(clean, current)
@@ -1375,6 +1386,33 @@
     return await resetCodeWatchdogBudgetForTarget(message, senderChatTarget(sender));
   }
 
+  async function stopSenderCodeWatchdogTimer(message, sender) {
+    const target = senderChatTarget(sender);
+    if (!target?.id || !Number.isInteger(target?.tab?.id)
+      || (message?.conversationId && String(message.conversationId) !== target.id)) {
+      return { ok: false, reason: 'watchdog-target-unavailable' };
+    }
+    const enrollment = await getEnrollment(target.id);
+    if (enrollment?.enabled !== true || enrollment?.userPaused === true) {
+      return { ok: false, reason: 'automation-not-active' };
+    }
+    const result = await queueCodeWatchdogMutation(target.id, async () => {
+      const current = await readCodeWatchdog(target.id);
+      if (!current || current.stopped === true
+        || (Number(current.deadlineAt || 0) <= 0 && Number(current.retryAt || 0) <= 0)) {
+        return { ok: false, reason: 'no-active-timer' };
+      }
+      if (Number(message?.watchdogRevision || 0) !== Number(current.watchdogRevision || 0)) {
+        return { ok: false, reason: 'watchdog-revision-changed' };
+      }
+      await parkCodeWatchdog(current, 'operator-timer-stop');
+      return { ok: true };
+    });
+    const overview = await monitorOverview(target);
+    publishAutomationOverview(target, overview).catch(() => {});
+    return { ...result, requestId: String(message?.requestId || ''), ...overview };
+  }
+
   async function armCodeWatchdogForTarget(message, target) {
     if (!target?.id || !Number.isInteger(target?.tab?.id)) {
       return { ok: false, error: 'Open a monitored ChatGPT conversation to start the auto-continue timer.', reason: 'watchdog-target-unavailable' };
@@ -1390,8 +1428,12 @@
     }
 
     const armedAt = Date.now();
-    await queueCodeWatchdogMutation(target.id, async () => {
+    const armed = await queueCodeWatchdogMutation(target.id, async () => {
       const current = await readCodeWatchdog(target.id);
+      // A delayed quick/manual arm for the turn that was just stopped must not
+      // resurrect its timer. A different rendered user turn may arm normally.
+      if (current?.stopped === true && String(current.lastPromptKey || '')
+        && (!message?.promptKey || String(message.promptKey) === String(current.lastPromptKey))) return false;
       await cancelCodeWatchdogAlarm(target.id);
       const record = await putCodeWatchdog(target.id, {
         ...(current || {}),
@@ -1402,6 +1444,7 @@
         stopReason: '',
         waitingForRequestStart: false,
         lastStatusCode: '',
+        lastPromptKey: String(message?.promptKey || current?.lastPromptKey || ''),
         lastAutomaticSentAt: 0,
         lastAutomaticPromptKey: '',
         lastAutomaticParentPromptKey: '',
@@ -1412,15 +1455,16 @@
         retryReason: ''
       });
       try { chrome.alarms.create(codeWatchdogAlarmName(target.id), { when: record.deadlineAt }); } catch {}
-      return record;
+      return Boolean(record);
     });
 
     const overview = await monitorOverview(target);
     publishAutomationOverview(target, overview).catch(() => {});
     return {
-      ok: true,
+      ok: armed === true,
       requestId: String(message?.requestId || ''),
-      armed: true,
+      armed: armed === true,
+      reason: armed === true ? '' : 'stopped-current-turn',
       ...overview
     };
   }
@@ -1610,6 +1654,12 @@
       return true;
     }
 
+    if (message?.type === 'STOP_CODE_WATCHDOG_TIMER_FOR_SENDER') {
+      stopSenderCodeWatchdogTimer(message, sender).then((result) => sendResponse?.(result))
+        .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error), requestId: String(message?.requestId || '') }));
+      return true;
+    }
+
     if (message?.type === 'ARM_CODE_WATCHDOG_FOR_SENDER') {
       armSenderCodeWatchdog(message, sender).then((result) => sendResponse?.(result))
         .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error), requestId: String(message?.requestId || '') }));
@@ -1713,6 +1763,7 @@
     codeWatchdogBudgetReset,
     resetCodeWatchdogBudgetForTarget,
     resetSenderCodeWatchdogBudget,
+    stopSenderCodeWatchdogTimer,
     armCodeWatchdogForTarget,
     armSenderCodeWatchdog,
     chatTargetFromTab,

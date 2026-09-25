@@ -3,10 +3,10 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 
 const root = new URL('../../', import.meta.url);
-const fallback = readFileSync(new URL('extension/quick-continue-status-fallback.js', root), 'utf8');
+const owner = readFileSync(new URL('extension/quick-continue-status-owner-v6.js', root), 'utf8');
 
 test('terminal-status watchdogs disappear from the timer surface', () => {
-  assert.match(fallback, /stopReason\.startsWith\('status:'\)/);
-  assert.match(fallback, /if \(!watchdog\) return ''/);
-  assert.match(fallback, /if \(stopReason\.startsWith\('status:'\)\) return ''/);
+  assert.match(owner, /stopReason\.startsWith\('status:'\)/);
+  assert.match(owner, /if \(!watchdog\) return \{ text: ''/);
+  assert.match(owner, /if \(stopReason\.startsWith\('status:'\)\) return \{ text: ''/);
 });

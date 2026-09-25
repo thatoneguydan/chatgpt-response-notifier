@@ -19,7 +19,7 @@ function loadStatusParser() {
 }
 
 test('completion detector matches the reviewed hidden-tab-safe source', () => {
-  assert.equal(normalizedBlobSha('extension/content-script.js'), '4c8a571e62689cd2ce20eb5db05a91f6852f2b2a');
+  assert.equal(normalizedBlobSha('extension/content-script.js'), 'f88bc1745660a30e7649f6a87ed5faf4ba438ac2');
 });
 
 test('only the canonical seven exact terminal footer codes qualify', () => {
@@ -206,25 +206,21 @@ test('monitored chats use a 30-minute local code watchdog with a three-send cap 
 test('in-page auto-continue controls reset allowance and explicitly arm user-triggered timers', () => {
   const attachment = text('extension/attachment-script.js');
   const monitor = text('extension/monitor-background.js');
+  const timer = text('extension/quick-continue-status-owner-v6.js');
+  const bridge = text('extension/quick-continue-monitor-bridge.js');
 
   assert.match(attachment, /document\.createElement\('button'\)/);
-  assert.match(attachment, /RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER/);
-  assert.match(attachment, /resetAutomationBudget/);
-  assert.match(attachment, /ARM_CODE_WATCHDOG_FOR_SENDER/);
-  assert.match(attachment, /quickContinueActionFromEvent/);
-  assert.match(attachment, /Send timestamped Continue/);
-  assert.match(attachment, /Send custom Project Continue/);
-  assert.match(attachment, /\^Continue\\s\+\.\+/);
-  assert.match(attachment, /document\.addEventListener\('click', armAutomationForQuickContinueAction, true\)/);
-  assert.match(attachment, /document\.removeEventListener\('click', armAutomationForQuickContinueAction, true\)/);
-  assert.match(attachment, /pointerEvents: 'auto'/);
+  assert.match(timer, /RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER/);
+  assert.match(timer, /STOP_CODE_WATCHDOG_TIMER_FOR_SENDER/);
+  assert.match(bridge, /ARM_CODE_WATCHDOG_FOR_SENDER/);
+  assert.match(bridge, /Send timestamped Continue/);
+  assert.match(bridge, /Send custom Project Continue/);
+  assert.doesNotMatch(attachment, /armAutomationForQuickContinueAction|tickAutomationStatus/);
   assert.match(attachment, /cursor: 'pointer'/);
-  assert.match(attachment, /opacity: '1'/);
+  assert.match(attachment, /style\.opacity = '1'/);
   assert.doesNotMatch(attachment, /opacity: '\.78'/);
   assert.match(attachment, /mouseenter/);
-  assert.match(attachment, /border: '1px solid transparent'/);
-  assert.match(attachment, /status\.style\.borderColor = 'currentColor'/);
-  assert.match(attachment, /status\.style\.borderColor = 'transparent'/);
+  assert.match(attachment, /border: '0'/);
   assert.doesNotMatch(attachment, /0 0 0 1px var\(--border-light/);
 
   assert.match(monitor, /function codeWatchdogBudgetReset/);
@@ -610,6 +606,7 @@ test('local JavaScript is syntactically valid', () => {
 test('notifier-owned Quick Continue light mirrors popup automation states without ChatGPT network traffic', () => {
   const attachment = text('extension/attachment-script.js');
   const monitor = text('extension/monitor-background.js');
+  const timer = text('extension/quick-continue-status-owner-v6.js');
   assert.match(attachment, /chatgpt-quick-continue-toolbar/);
   assert.match(attachment, /chatgpt-notifier-automation-indicator/);
   assert.match(attachment, /GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER/);
@@ -622,15 +619,14 @@ test('notifier-owned Quick Continue light mirrors popup automation states withou
   assert.match(attachment, /#22c55e/);
   assert.doesNotMatch(attachment, /#f59e0b/);
   assert.match(attachment, /#888888/);
-  assert.match(attachment, /chatgpt-notifier-automation-status/);
-  assert.match(attachment, /Next auto-continue/);
-  assert.match(attachment, /Auto-continue due · waiting for/);
-  assert.match(attachment, /Retrying auto-continue/);
-  assert.match(attachment, /connection/);
+  assert.match(timer, /Next auto-continue/);
+  assert.match(timer, /Auto-continue blocked/);
+  assert.match(timer, /Retrying auto-continue/);
+  assert.match(timer, /connection/);
   assert.doesNotMatch(attachment, /response to settle/);
   assert.doesNotMatch(attachment, /generation to finish/);
-  assert.match(attachment, /Auto-continues exhausted/);
-  assert.match(attachment, /setInterval\(tickAutomationStatus, 1000\)/);
+  assert.match(timer, /Auto-continues exhausted/);
+  assert.match(timer, /setInterval\(render, 1000\)/);
   assert.match(attachment, /function automationOverviewIsFresh/);
   assert.match(attachment, /nextWatchdogRevision < currentWatchdogRevision/);
   assert.match(attachment, /nextWatchdogRevision === 0[\s\S]*currentWatchdogRevision === 0[\s\S]*nextWatchdogUpdatedAt < currentWatchdogUpdatedAt/);
@@ -714,14 +710,14 @@ test('terminal watchdog state is sticky and stale attachment generations cannot 
   assert.match(attachment, /AUTOMATION_UI_OWNER_ATTR = 'data-chatgpt-notifier-automation-ui-owner'/);
   assert.match(attachment, /automationOwnerToken/);
   assert.match(attachment, /chatgpt-notifier-control-v\$\{ATTACHMENT_RUNTIME_VERSION\}-\$\{automationOwnerToken\}/);
-  assert.match(attachment, /chatgpt-notifier-countdown-v\$\{ATTACHMENT_RUNTIME_VERSION\}-\$\{automationOwnerToken\}/);
+  assert.doesNotMatch(attachment, /chatgpt-notifier-countdown-v\$\{ATTACHMENT_RUNTIME_VERSION\}-\$\{automationOwnerToken\}/);
   assert.match(attachment, /function ownsAutomationUi/);
   assert.match(attachment, /function claimAutomationUi/);
   assert.match(attachment, /display: none !important/);
   assert.match(attachment, /\[id\^="chatgpt-notifier-automation-indicator-v"\]/);
   assert.match(attachment, /\[id\^="chatgpt-notifier-automation-status-v"\]/);
   assert.match(attachment, /\[\$\{AUTOMATION_UI_OWNER_ATTR\}\]:not/);
-  assert.match(attachment, /function tickAutomationStatus\(\) \{\s*if \(!ownsAutomationUi\(\)\) return;/);
+  assert.doesNotMatch(attachment, /function tickAutomationStatus\(/);
   assert.match(attachment, /async function cycleAutomationState\(event\)[\s\S]{0,180}if \(!ownsAutomationUi\(\)\) return;/);
   assert.match(attachment, /function maintainAutomationIndicator\(\) \{\s*if \(!ownsAutomationUi\(\)\) return;/);
   assert.doesNotMatch(attachment, /const AUTOMATION_INDICATOR_ID = `chatgpt-notifier-automation-indicator-v/);
