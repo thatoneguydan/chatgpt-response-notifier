@@ -134,9 +134,9 @@
         display: flex;
         position: absolute;
         box-sizing: border-box;
-        width: 100%;
-        max-width: 100%;
-        left: 0;
+        width: calc(100% + 2px);
+        max-width: calc(100% + 2px);
+        left: -1px;
         bottom: calc(100% + 4px);
         align-items: flex-start;
         gap: 3px;

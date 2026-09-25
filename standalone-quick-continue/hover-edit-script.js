@@ -43,6 +43,10 @@
       let node = null;
       try { node = document.querySelector(selector); } catch {}
       if (!node || node.disabled || node.getAttribute?.('aria-disabled') === 'true') continue;
+      try {
+        const style = getComputedStyle(node);
+        if (node.hidden || style.display === 'none' || style.visibility === 'hidden') continue;
+      } catch {}
       if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement || node.isContentEditable) return node;
     }
     return null;

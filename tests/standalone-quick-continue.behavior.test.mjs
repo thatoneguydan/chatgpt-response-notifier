@@ -29,7 +29,7 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'runtime-reset.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.18');
+  assert.equal(manifest.version, '1.2.19');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -395,6 +395,7 @@ test('installer copies managed worker/config files and removes the legacy projec
   assert.match(installerSource, /'background\.js'/);
   assert.match(installerSource, /'config\.js'/);
   assert.match(installerSource, /'config\.json'/);
+  assert.match(installerSource, /'composer-text\.js'/);
   assert.match(installerSource, /'runtime-reset\.js'/);
   assert.match(installerSource, /'conversation-state\.js'/);
   assert.match(installerSource, /'projects\.json'/);
@@ -449,6 +450,7 @@ test('standalone runtime hot-replaces stale generations, restores a detached too
   assert.match(contentSource, /if \(!root\.isConnected\)/);
   assert.match(contentSource, /\(document\.body \|\| document\.documentElement\)\.append\(root\)/);
   assert.match(contentSource, /const NOTIFIER_MUTATION_SELECTOR/);
+  assert.match(contentSource, /chatgpt-notifier-countdown-fallback-v/);
   assert.match(contentSource, /function notifierOnlyMutation\(records\)/);
   assert.match(contentSource, /new MutationObserver\(handleDocumentMutations\)/);
   assert.match(contentSource, /document\.addEventListener\('pointerdown', handleDocumentPointerDown, true\)/);

@@ -65,6 +65,11 @@
       return { ok: true, stopped: true, statusCode, ...(overview || {}) };
     }
 
+    if (current.lastPromptKey && message?.promptKey
+      && String(current.lastPromptKey) !== String(message.promptKey)) {
+      return { ok: false, reason: 'terminal-prompt-superseded', ...(overview || {}) };
+    }
+
     const requestStartedAt = Math.max(
       0,
       Number(message?.requestStartedAt || 0),

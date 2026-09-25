@@ -489,6 +489,8 @@
       && Number(clean?.requestStartedAt || 0) > Number(current.lastRequestStartedAt || 0)) return false;
     const snapshotPromptKey = String(clean?.promptKey || '');
     const currentPromptKey = String(current?.lastPromptKey || '');
+    if (!snapshotPromptKey && Number(clean?.requestStartedAt || 0)
+      <= Number(current?.lastRequestStartedAt || 0)) return true;
     const samePrompt = Boolean(currentPromptKey) && snapshotPromptKey === currentPromptKey;
     const followsAutomaticSend = Boolean(
       (current?.lastAutomaticPromptKey && snapshotPromptKey === String(current.lastAutomaticPromptKey))

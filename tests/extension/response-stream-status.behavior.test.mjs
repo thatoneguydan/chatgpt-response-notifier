@@ -247,7 +247,7 @@ test('stream dedupe carries exact request identity when page prompt identity is 
   assert.match(backgroundSource, /requestOwnerForTurn,/);
   assert.match(serviceWorkerSource, /__chatgptNotifierResponseStreamStatus\?\.requestOwnerForTurn/);
   assert.match(serviceWorkerSource, /message\?\.requestId \|\| requestOwner\?\.requestId/);
-  assert.match(serviceWorkerSource, /if \(!requestId\) return null;/);
+  assert.match(serviceWorkerSource, /if \(!requestId\) \{[\s\S]*?completion-request-unavailable[\s\S]*?return null;/);
 });
 
 test('request completion arms durable worker DOM fallback without generating ChatGPT traffic', () => {
@@ -264,6 +264,42 @@ test('request completion arms durable worker DOM fallback without generating Cha
     serviceWorkerSource.indexOf('async function handleWorkerObservedTerminalStatus'),
     serviceWorkerSource.indexOf('globalThis.__chatgptNotifierWorkerTerminalFallback')
   ), /\bfetch\s*\(|XMLHttpRequest|backend-api/);
+});
+
+test('stream read error routes a coded DOM status only when the same request and turn are confirmed', async () => {
+  const start = backgroundSource.indexOf('async function recoverStreamReadError(sender)');
+  const end = backgroundSource.indexOf('function installLateDomNotificationDedupe()', start);
+  assert.ok(start >= 0 && end > start);
+  const status = { conversationId: 'conversation-1', promptKey: 'conversation-1|user-2',
+    assistantKey: 'assistant-2', statusCode: 'COMPLETE_APPLIED' };
+  const snapshot = { ...status, requestId: 'request-2', assistantRevision: '10:abc' };
+  const routed = [];
+  const diagnostics = [];
+  const context = vm.createContext({
+    streamReadRecoveryInFlight: new Set(),
+    currentContext: () => ({ key: 'tab|request-2', tabId: 7,
+      chromeDocumentId: 'chrome-doc-7', requestId: 'request-2' }),
+    queryTerminalStatus: async () => status,
+    queryMonitorSnapshot: async () => snapshot,
+    recordDiagnostic: (kind) => diagnostics.push(kind),
+    chrome: { tabs: { get: async () => ({ id: 7, url: 'https://chatgpt.com/c/conversation-1' }) } },
+    conversationFromUrl: () => ({ id: 'conversation-1' }),
+    ChatGPTNotifierStatusCode: { isStatusCode: (code) => code === 'COMPLETE_APPLIED' },
+    __chatgptNotifierNormalContinuationBudgetHook: {
+      scheduleObservedStatusDelivery: async (message, sender) => routed.push({ message, sender })
+    }
+  });
+  vm.runInContext(`${backgroundSource.slice(start, end)}\nglobalThis.recover = recoverStreamReadError;`, context);
+  await context.recover({ tab: { id: 7 }, documentId: 'chrome-doc-7' });
+  assert.equal(routed.length, 1);
+  assert.equal(routed[0].message.snapshot.requestId, 'request-2');
+  assert.equal(routed[0].sender.documentId, 'chrome-doc-7');
+  assert.ok(diagnostics.includes('response-stream-read-error-status-routed'));
+
+  snapshot.requestId = 'request-1';
+  await context.recover({ tab: { id: 7 }, documentId: 'chrome-doc-7' });
+  assert.equal(routed.length, 1, 'old request status must never queue a new toast');
+  assert.ok(diagnostics.includes('response-stream-read-error-identity-unconfirmed'));
 });
 
 test('MAIN observer does not poll ChatGPT or use extension privileges', () => {

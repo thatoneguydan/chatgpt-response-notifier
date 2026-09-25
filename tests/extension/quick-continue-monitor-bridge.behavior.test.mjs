@@ -15,7 +15,7 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   const pageAuthority = readText('extension/watchdog-page-authority-v3.js');
   const backgroundAuthority = readText('extension/watchdog-authority-v3-background.js');
 
-  assert.equal(manifest.version, '0.9.81');
+  assert.equal(manifest.version, '0.9.82');
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-monitor-bridge.js')));
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-fallback.js')));
   assert.ok(!manifest.content_scripts.some((entry) => entry.js?.includes('quick-continue-status-stabilizer.js')));
@@ -107,7 +107,7 @@ test('status presentation has one versioned visible owner and never parks at a d
 
   assert.match(owner, /RUNTIME_VERSION = 7/);
   assert.match(owner, /STATUS_ID = 'chatgpt-notifier-countdown-fallback-v7'/);
-  assert.match(owner, /width: 100%/);
+  assert.match(owner, /width: calc\(100% \+ 2px\)/);
   assert.match(owner, /color: #111/);
   assert.match(owner, /text-align: right/);
   assert.match(owner, /overflow-wrap: anywhere/);

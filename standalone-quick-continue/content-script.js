@@ -15,6 +15,7 @@
   const NOTIFIER_MUTATION_SELECTOR = [
     '#chatgpt-notifier-automation-indicator',
     '#chatgpt-notifier-automation-status',
+    '[id^="chatgpt-notifier-countdown-fallback-v"]',
     '[id^="chatgpt-notifier-automation-indicator-v"]',
     '[id^="chatgpt-notifier-automation-status-v"]'
   ].join(',');
@@ -189,7 +190,7 @@
       setStatus('ChatGPT composer not found.');
       return false;
     }
-    if (composerText(composer)) {
+    if (composerText(composer).trim()) {
       setStatus('Clear the current draft first.');
       scheduleSync();
       return false;
@@ -309,7 +310,7 @@
     const composer = composerElement();
     return !busy
       && Boolean(composer)
-      && !composerText(composer);
+      && !composerText(composer).trim();
   }
 
   function updateProjectSendState() {
@@ -782,7 +783,7 @@
   }
 
   function updateAvailability(composer) {
-    const hasDraft = Boolean(composer && composerText(composer));
+    const hasDraft = Boolean(composer && composerText(composer).trim());
     const unavailable = busy || !composer || hasDraft;
     for (const button of sendButtons) {
       button.disabled = unavailable;
