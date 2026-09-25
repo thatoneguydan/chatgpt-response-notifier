@@ -1,9 +1,9 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
-  const STYLE_ID = 'chatgpt-notifier-quick-continue-bridge-style-v1';
+  const STYLE_ID = 'chatgpt-notifier-quick-continue-bridge-style-v2';
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const USER_TURN_WAIT_MS = 8000;
   const ARM_RETRY_DELAY_MS = 250;
@@ -180,25 +180,20 @@
   async function forceDefinitiveTerminalStop() {
     const terminal = latestDefinitiveTerminal();
     if (!terminal?.statusCode) return false;
-    const monitorRuntime = globalThis.__chatgptNotifierMonitorRuntime;
-    let snapshot = null;
-    try { snapshot = monitorRuntime?.snapshot?.() || null; } catch {}
-    if (!snapshot?.conversationId || !snapshot?.promptKey) return false;
-    if (terminal.conversationId && String(terminal.conversationId) !== String(snapshot.conversationId)) return false;
-    if (terminal.promptKey && String(terminal.promptKey) !== String(snapshot.promptKey)) return false;
+    const conversationId = conversationIdentity();
+    if (!conversationId) return false;
+    if (terminal.conversationId && String(terminal.conversationId) !== conversationId) return false;
 
-    const fingerprint = `${snapshot.conversationId}|${snapshot.promptKey}|${terminal.statusCode}`;
+    const promptKey = String(terminal.promptKey || latestUserKey() || '');
+    const fingerprint = `${conversationId}|${promptKey}|${terminal.statusCode}`;
     if (fingerprint === lastTerminalFingerprint || fingerprint === terminalInFlightFingerprint) return false;
     terminalInFlightFingerprint = fingerprint;
     try {
       const result = await chrome.runtime.sendMessage({
-        type: 'CHATGPT_MONITOR_STATE',
-        snapshot: {
-          ...snapshot,
-          statusCode: terminal.statusCode,
-          hasStatusEvidence: true,
-          stableTerminal: true
-        }
+        type: 'PARK_CODE_WATCHDOG_FOR_TERMINAL_STATUS_FOR_SENDER',
+        conversationId,
+        promptKey,
+        statusCode: terminal.statusCode
       });
       if (result?.ok === true) {
         lastTerminalFingerprint = fingerprint;
@@ -315,10 +310,6 @@
     const action = quickActionFromLabel(originalLabel);
     if (!action) return;
 
-    // This listener runs on window capture, before the legacy attachment's
-    // document-capture listener. Mask the one semantic label that legacy code
-    // uses as an immediate-arm signal, then restore it after this click has
-    // propagated. The responder's own click handler does not depend on aria-label.
     maskLegacyQuickAction(control, originalLabel);
 
     const previousUserKey = latestUserKey();
@@ -336,13 +327,7 @@
     const css = `
       #${TOOLBAR_ID} [id^="chatgpt-notifier-countdown-v"],
       #${TOOLBAR_ID} #chatgpt-notifier-automation-status {
-        left: 0 !important;
-        right: auto !important;
-        bottom: calc(100% + 4px) !important;
-        padding-left: 2px !important;
-        padding-right: 2px !important;
-        background: transparent !important;
-        text-align: left !important;
+        display: none !important;
       }
       #${TOOLBAR_ID}[data-chatgpt-notifier-last-state]:not(:has([id^="chatgpt-notifier-control-v"]))::before {
         content: '';
@@ -357,19 +342,9 @@
       #${TOOLBAR_ID}[data-chatgpt-notifier-last-state="enabled"]:not(:has([id^="chatgpt-notifier-control-v"]))::before {
         background: radial-gradient(circle at center, #22c55e 0 4px, transparent 4.5px);
       }
-      #${TOOLBAR_ID}[data-chatgpt-notifier-last-status]:not(:has([id^="chatgpt-notifier-countdown-v"]))::after {
-        content: attr(data-chatgpt-notifier-last-status);
-        position: absolute;
-        left: 0;
-        bottom: calc(100% + 4px);
-        padding: 0 2px;
-        color: var(--text-secondary, #666);
-        font: inherit;
-        font-size: 9px;
-        line-height: 1.2;
-        font-variant-numeric: tabular-nums;
-        white-space: nowrap;
-        pointer-events: none;
+      #${TOOLBAR_ID}[data-chatgpt-notifier-last-status]::after {
+        content: none !important;
+        display: none !important;
       }
     `;
     if (style.textContent !== css) style.textContent = css;

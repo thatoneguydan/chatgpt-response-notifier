@@ -12,14 +12,19 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   const background = readText('extension/quick-continue-monitor-bridge-background.js');
   const bridge = readText('extension/quick-continue-monitor-bridge.js');
   const fallback = readText('extension/quick-continue-status-fallback.js');
+  const stabilizer = readText('extension/quick-continue-status-stabilizer.js');
 
-  assert.equal(manifest.version, '0.9.75');
+  assert.equal(manifest.version, '0.9.76');
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-monitor-bridge.js')));
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-fallback.js')));
+  const stabilizerEntry = manifest.content_scripts.find((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-stabilizer.js'));
+  assert.ok(stabilizerEntry);
+  assert.equal(stabilizerEntry.run_at, 'document_start');
   assert.match(bootstrap, /importScripts\('quick-continue-monitor-bridge-background\.js'\)/);
   assert.match(background, /BRIDGE_FILE = 'quick-continue-monitor-bridge\.js'/);
   assert.match(background, /STATUS_FALLBACK_FILE = 'quick-continue-status-fallback\.js'/);
-  assert.match(background, /STATUS_RUNTIME_VERSION = 2/);
+  assert.match(background, /BRIDGE_RUNTIME_VERSION = 2/);
+  assert.match(background, /STATUS_RUNTIME_VERSION = 3/);
   assert.match(background, /runtimeCurrent\(tabId, 'CHATGPT_NOTIFIER_QUICK_STATUS_PING', STATUS_RUNTIME_VERSION\)/);
   assert.match(background, /files:\s*\[BRIDGE_FILE\]/);
   assert.match(background, /files:\s*\[STATUS_FALLBACK_FILE\]/);
@@ -27,10 +32,13 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   assert.match(background, /chrome\.tabs\.onUpdated\.addListener/);
   assert.match(background, /CHATGPT_NOTIFIER_QUICK_BRIDGE_PING/);
   assert.match(background, /CHATGPT_NOTIFIER_QUICK_STATUS_PING/);
+  assert.match(stabilizer, /chatgpt-notifier-countdown-v/);
+  assert.match(stabilizer, /display:\s*none !important/);
 
   assert.doesNotThrow(() => new vm.Script(background));
   assert.doesNotThrow(() => new vm.Script(bridge));
   assert.doesNotThrow(() => new vm.Script(fallback));
+  assert.doesNotThrow(() => new vm.Script(stabilizer));
 });
 
 test('Continue and Project actions enable monitoring before arming the fresh user turn', () => {
@@ -58,56 +66,38 @@ test('Quick Continue bridge suppresses the legacy click-time arm before the fres
   assert.match(bridge, /LEGACY_MASKED_ARIA_LABEL = 'Quick Continue sending'/);
   assert.match(bridge, /control\.setAttribute\('aria-label', LEGACY_MASKED_ARIA_LABEL\)/);
   assert.match(bridge, /control\.setAttribute\('aria-label', originalLabel\)/);
-  assert.match(bridge, /setTimeout\(\(\) => \{/);
 });
 
-test('definitive status fallback stops the current prompt without inheriting an old footer', () => {
+test('definitive rendered statuses directly park the watchdog', () => {
   const bridge = readText('extension/quick-continue-monitor-bridge.js');
 
   for (const code of ['PLANNING_ACTIVE', 'COMPLETE_APPLIED', 'COMPLETE_NO_CHANGES', 'BLOCKED_HUMAN']) {
     assert.ok(bridge.includes(`'${code}'`));
   }
-  assert.match(bridge, /terminal\.promptKey.*snapshot\.promptKey/);
-  assert.match(bridge, /terminal\.conversationId.*snapshot\.conversationId/);
-  assert.match(bridge, /type:\s*'CHATGPT_MONITOR_STATE'/);
+  assert.match(bridge, /type:\s*'PARK_CODE_WATCHDOG_FOR_TERMINAL_STATUS_FOR_SENDER'/);
   assert.match(bridge, /statusCode:\s*terminal\.statusCode/);
-  assert.match(bridge, /hasStatusEvidence:\s*true/);
+  assert.doesNotMatch(bridge, /type:\s*'CHATGPT_MONITOR_STATE'/);
 });
 
-test('automation status remains left aligned above the toolbar while reinjection preserves visual geometry', () => {
+test('status presentation has one compact fixed owner and no competing pseudo status', () => {
   const bridge = readText('extension/quick-continue-monitor-bridge.js');
-
-  assert.match(bridge, /left:\s*0 !important/);
-  assert.match(bridge, /bottom:\s*calc\(100% \+ 4px\) !important/);
-  assert.match(bridge, /text-align:\s*left !important/);
-  assert.match(bridge, /data-chatgpt-notifier-last-state/);
-  assert.match(bridge, /data-chatgpt-notifier-last-status/);
-  assert.match(bridge, /:not\(:has\(\[id\^="chatgpt-notifier-control-v"\]\)\)::before/);
-});
-
-test('timer fallback keeps countdown and attempts in a readable fixed-width viewport-bounded chip', () => {
   const fallback = readText('extension/quick-continue-status-fallback.js');
 
-  assert.match(fallback, /RUNTIME_VERSION = 2/);
-  assert.match(fallback, /STATUS_WIDTH_PX = 280/);
-  assert.match(fallback, /CANONICAL_STATUS_SELECTOR/);
-  assert.match(fallback, /status\.hidden === true/);
-  assert.match(fallback, /Next auto-continue \$\{formatCountdown/);
-  assert.match(fallback, /const remainingText = `\$\{remaining\} left`/);
-  assert.match(fallback, /GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER/);
-  assert.match(fallback, /RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER/);
+  assert.match(bridge, /RUNTIME_VERSION = 2/);
+  assert.match(bridge, /display:\s*none !important/);
+  assert.match(bridge, /content:\s*none !important/);
+  assert.match(fallback, /RUNTIME_VERSION = 3/);
+  assert.match(fallback, /STATUS_WIDTH_PX = 200/);
+  assert.match(fallback, /font-size:\s*10px !important/);
   assert.match(fallback, /background:\s*var\(--main-surface-primary, #fff\) !important/);
-  assert.match(fallback, /font-size:\s*11px !important/);
-  assert.match(fallback, /white-space:\s*normal !important/);
-  assert.match(fallback, /overflow-wrap:\s*anywhere !important/);
-  assert.match(fallback, /content:\s*none !important/);
   assert.match(fallback, /node\.style\.setProperty\('width', `\$\{statusWidth\}px`, 'important'\)/);
-  assert.match(fallback, /const maxViewportLeft = Math\.max\(margin, viewportWidth - statusWidth - margin\)/);
-  assert.match(fallback, /window\.addEventListener\('resize', render\)/);
-  assert.match(fallback, /refreshTimer = setInterval/);
-  assert.match(fallback, /tickTimer = setInterval\(render, 1000\)/);
-  assert.match(fallback, /if \(canonicalStatusVisible\(toolbar\)\) \{\s*fallback\.hidden = true/);
-  assert.match(fallback, /target === fallback \|\| fallback\?\.contains\?\.\(target\)/);
+  assert.match(fallback, /stopReason\.startsWith\('status:'\)/);
+  assert.match(fallback, /manualOnlyDeadline/);
+  assert.match(fallback, /waitingForRequestStart === true/);
+  assert.match(fallback, /if \(!watchdog\) return ''/);
+  assert.match(fallback, /overview\?\.codeWatchdog/);
+  assert.doesNotMatch(fallback, /MutationObserver/);
+  assert.doesNotMatch(fallback, /STATUS_WIDTH_PX = 280/);
   assert.doesNotMatch(fallback, /fetch\(/);
   assert.doesNotMatch(fallback, /XMLHttpRequest/);
 });
