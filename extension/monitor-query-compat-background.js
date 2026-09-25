@@ -3,7 +3,6 @@
 (() => {
   if (globalThis.__chatgptNotifierMonitorQueryCompat) return;
   const originalSendMessage = chrome.tabs.sendMessage.bind(chrome.tabs);
-  const MONITOR_QUERY = 'CHATGPT_MONITOR_QUERY';
   const HARD_DEADLINE_IDENTITY_BYPASS = 'hard-deadline-identity-bypass';
 
   function normalizeMonitorQueryResult(result) {
@@ -64,7 +63,7 @@
 
   chrome.tabs.sendMessage = async function normalizedMonitorSendMessage(tabId, message, ...rest) {
     const rawResult = await originalSendMessage(tabId, message, ...rest);
-    if (message?.type !== MONITOR_QUERY) return rawResult;
+    if (message?.type !== 'CHATGPT_MONITOR_QUERY') return rawResult;
     const normalized = normalizeMonitorQueryResult(rawResult);
     return await applyHardDeadlineIdentityBypass(normalized);
   };
