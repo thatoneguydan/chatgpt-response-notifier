@@ -22,6 +22,13 @@ test('live acceptance uses only the pinned localhost bridge and explicit update 
   assert.doesNotMatch(script, /https?:\/\/(?!127\.0\.0\.1)/);
 });
 
+test('WebSocket factory emits exactly the connected socket instead of PowerShell method output', () => {
+  assert.match(script, /\[void\]\$socket\.Options\.SetRequestHeader\('Origin', \$BridgeOrigin\)/);
+  assert.match(script, /\[void\]\$socket\.ConnectAsync\([\s\S]*?\.GetResult\(\)/);
+  assert.match(script, /Write-Output -NoEnumerate \$socket/);
+  assert.match(script, /\[void\]\$connectTimeout\.Dispose\(\)/);
+});
+
 test('live acceptance retries stale feed observations without replacing an already-current helper', () => {
   assert.match(script, /for \(\$attempt = 1; \$attempt -le \$Attempts; \$attempt \+= 1\)/);
   assert.match(script, /if \(\$installed -eq \$ExpectedVersion\) \{ break \}/);
