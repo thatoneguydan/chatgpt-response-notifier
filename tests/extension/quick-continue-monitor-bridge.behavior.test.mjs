@@ -17,7 +17,9 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   assert.equal(manifest.version, '0.9.76');
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-monitor-bridge.js')));
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-fallback.js')));
-  assert.ok(manifest.content_scripts[0].js.includes('quick-continue-status-stabilizer.js'));
+  const stabilizerEntry = manifest.content_scripts.find((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-stabilizer.js'));
+  assert.ok(stabilizerEntry);
+  assert.equal(stabilizerEntry.run_at, 'document_start');
   assert.match(bootstrap, /importScripts\('quick-continue-monitor-bridge-background\.js'\)/);
   assert.match(background, /BRIDGE_FILE = 'quick-continue-monitor-bridge\.js'/);
   assert.match(background, /STATUS_FALLBACK_FILE = 'quick-continue-status-fallback\.js'/);
