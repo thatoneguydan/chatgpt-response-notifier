@@ -5,6 +5,7 @@ importScripts('background.js');
 importScripts('watchdog-request-lifecycle-fix-background.js');
 importScripts('terminal-watchdog-authority-background.js');
 importScripts('quick-continue-monitor-bridge-background.js');
+importScripts('watchdog-authority-v3-background.js');
 importScripts('recovery-refresh-policy-background.js');
 
 if (!globalThis.__chatgptNotifierBootstrapFailure) {
