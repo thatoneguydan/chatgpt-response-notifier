@@ -10,5 +10,8 @@ test('rendered definitive status has an explicit page-to-worker watchdog stop ro
   assert.match(bridge, /PARK_CODE_WATCHDOG_FOR_TERMINAL_STATUS_FOR_SENDER/);
   assert.match(lifecycle, /PARK_CODE_WATCHDOG_FOR_TERMINAL_STATUS_FOR_SENDER/);
   assert.match(lifecycle, /isDefinitiveStopStatusCode/);
-  assert.match(lifecycle, /parkCodeWatchdogForTerminalStatus/);
+  assert.match(lifecycle, /monitor\.reconcileCodeWatchdog/);
+  assert.doesNotMatch(lifecycle, /monitor\.parkCodeWatchdogForTerminalStatus/);
+  assert.match(lifecycle, /resetStoppedAttempts/);
+  assert.match(lifecycle, /terminalLatchesByConversation/);
 });

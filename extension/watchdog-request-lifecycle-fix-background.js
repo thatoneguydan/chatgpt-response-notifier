@@ -3,7 +3,7 @@
 (() => {
   if (globalThis.__chatgptNotifierWatchdogRequestLifecycleFix) return;
 
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   const DB_NAME = 'chatgpt-response-notifier-monitor';
   const DB_VERSION = 1;
   const PROFILE_STORE = 'profile';
@@ -13,7 +13,10 @@
   const MANUAL_SETTLE_RETRIES = 16;
   const ROUTE_BIND_RETRY_MS = 80;
   const ROUTE_BIND_RETRIES = 25;
+  const TERMINAL_REASSERT_DELAYS_MS = Object.freeze([25, 125, 400]);
   const requestStartsByTab = new Map();
+  const terminalLatchesByConversation = new Map();
+  const terminalReassertionsByConversation = new Map();
   let databasePromise = null;
 
   function conversationFromUrl(rawUrl) {
@@ -90,6 +93,58 @@
     return `${ALARM_PREFIX}${encodeURIComponent(String(conversationId || ''))}`;
   }
 
+  function statusCodeFromStopReason(reasonValue) {
+    const reason = String(reasonValue || '');
+    return reason.startsWith('status:') ? reason.slice('status:'.length) : '';
+  }
+
+  async function resetStoppedAttempts(conversationId, statusCode) {
+    const current = await readWatchdog(conversationId).catch(() => null);
+    if (!current || current.stopped !== true) return current;
+    if (String(current.stopReason || '') !== `status:${statusCode}`) return current;
+    try { await chrome.alarms.clear(watchdogAlarmName(conversationId)); } catch {}
+    return await writeWatchdog({
+      ...current,
+      sendCount: 0,
+      waitingForRequestStart: false,
+      lastAutomaticSentAt: 0,
+      lastAutomaticPromptKey: '',
+      lastAutomaticParentPromptKey: '',
+      deadlineAt: 0,
+      retryAt: 0,
+      retryReason: ''
+    });
+  }
+
+  function clearTerminalLatch(conversationId) {
+    const id = String(conversationId || '');
+    if (!id) return;
+    terminalLatchesByConversation.delete(id);
+  }
+
+  function rememberTerminalLatch(conversationId, statusCode, promptKey, stoppedAt = Date.now()) {
+    const id = String(conversationId || '');
+    if (!id || !statusCode) return null;
+    const latch = Object.freeze({
+      conversationId: id,
+      statusCode: String(statusCode),
+      promptKey: String(promptKey || ''),
+      stoppedAt: Math.max(0, Number(stoppedAt || Date.now()))
+    });
+    terminalLatchesByConversation.set(id, latch);
+    return latch;
+  }
+
+  function freshRequestClearsTerminalLatch(conversationId, requestStartedAt) {
+    const id = String(conversationId || '');
+    const latch = terminalLatchesByConversation.get(id);
+    if (!latch) return false;
+    const startedAt = Math.max(0, Number(requestStartedAt || 0));
+    if (!startedAt || startedAt <= Number(latch.stoppedAt || 0)) return false;
+    clearTerminalLatch(id);
+    return true;
+  }
+
   async function publishOverview(target) {
     const monitor = globalThis.__chatgptNotifierMonitorBackground;
     if (!target || typeof monitor?.monitorOverview !== 'function' || typeof monitor?.publishAutomationOverview !== 'function') return;
@@ -97,6 +152,60 @@
       const overview = await monitor.monitorOverview(target);
       await monitor.publishAutomationOverview(target, overview);
     } catch {}
+  }
+
+  async function reassertTerminalLatch(conversationId, tabId, expectedStoppedAt) {
+    const id = String(conversationId || '');
+    const latch = terminalLatchesByConversation.get(id);
+    if (!latch || Number(latch.stoppedAt || 0) !== Number(expectedStoppedAt || 0)) return false;
+
+    let tab = null;
+    try { tab = await chrome.tabs.get(tabId); } catch { return false; }
+    const identity = conversationFromUrl(tab?.url || '');
+    if (!identity || identity.id !== id) return false;
+
+    const monitor = globalThis.__chatgptNotifierMonitorBackground;
+    if (typeof monitor?.reconcileCodeWatchdog !== 'function') return false;
+
+    for (const delayMs of TERMINAL_REASSERT_DELAYS_MS) {
+      if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+      const activeLatch = terminalLatchesByConversation.get(id);
+      if (!activeLatch || Number(activeLatch.stoppedAt || 0) !== Number(expectedStoppedAt || 0)) return false;
+
+      const current = await readWatchdog(id).catch(() => null);
+      const currentRequestStartedAt = Math.max(0, Number(current?.lastRequestStartedAt || 0));
+      if (currentRequestStartedAt > Number(activeLatch.stoppedAt || 0)) {
+        clearTerminalLatch(id);
+        return false;
+      }
+
+      try {
+        await monitor.reconcileCodeWatchdog({
+          conversationId: id,
+          conversationUrl: identity.url,
+          promptKey: String(activeLatch.promptKey || current?.lastPromptKey || ''),
+          previousPromptKey: '',
+          previousStatusCode: '',
+          statusCode: activeLatch.statusCode,
+          requestStartedAt: currentRequestStartedAt
+        }, { tab });
+        await resetStoppedAttempts(id, activeLatch.statusCode).catch(() => null);
+      } catch {}
+    }
+
+    await publishOverview({ tab, id, url: identity.url });
+    return true;
+  }
+
+  function scheduleTerminalReassert(conversationId, tabId) {
+    const id = String(conversationId || '');
+    const latch = terminalLatchesByConversation.get(id);
+    if (!latch || !Number.isInteger(tabId)) return;
+    if (terminalReassertionsByConversation.has(id)) return;
+    const promise = reassertTerminalLatch(id, tabId, latch.stoppedAt)
+      .catch(() => false)
+      .finally(() => terminalReassertionsByConversation.delete(id));
+    terminalReassertionsByConversation.set(id, promise);
   }
 
   async function armRequestStartForTab(tabId, requestId, requestStartedAt, attempt = 0) {
@@ -107,6 +216,7 @@
     try { tab = await chrome.tabs.get(tabId); } catch { return false; }
     const identity = conversationFromUrl(tab?.url || '');
     if (!identity) return false;
+    freshRequestClearsTerminalLatch(identity.id, requestStartedAt);
 
     let overview = null;
     try { overview = await monitor.monitorOverview({ tab, id: identity.id, url: identity.url }); } catch {}
@@ -199,8 +309,7 @@
     const parser = globalThis.ChatGPTNotifierStatusCode;
     if (
       typeof monitor?.chatTargetFromTab !== 'function'
-      || typeof monitor?.readCodeWatchdog !== 'function'
-      || typeof monitor?.parkCodeWatchdogForTerminalStatus !== 'function'
+      || typeof monitor?.reconcileCodeWatchdog !== 'function'
     ) return { ok: false, reason: 'watchdog-runtime-unavailable' };
 
     const target = monitor.chatTargetFromTab(sender?.tab);
@@ -218,17 +327,25 @@
     try { overview = await monitor.monitorOverview(target); } catch {}
     if (overview?.automationEnabled !== true) return { ok: false, reason: 'automation-not-active', ...(overview || {}) };
 
-    const current = await monitor.readCodeWatchdog(target.id);
-    if (!current) return { ok: true, stopped: true, statusCode, ...(overview || {}) };
-
-    await monitor.parkCodeWatchdogForTerminalStatus({
+    const current = await readWatchdog(target.id).catch(() => null);
+    const promptKey = String(message?.promptKey || current?.lastPromptKey || '');
+    const stoppedAt = Date.now();
+    const stopped = await monitor.reconcileCodeWatchdog({
       conversationId: target.id,
       conversationUrl: target.url,
-      promptKey: String(message?.promptKey || current?.lastPromptKey || ''),
-      requestStartedAt: Math.max(0, Number(current?.lastRequestStartedAt || 0)),
-      statusCode
-    }, { tab: target.tab }, current);
+      promptKey,
+      previousPromptKey: '',
+      previousStatusCode: '',
+      statusCode,
+      requestStartedAt: Math.max(0, Number(current?.lastRequestStartedAt || 0))
+    }, { tab: target.tab });
 
+    if (stopped?.stopped !== true || String(stopped?.stopReason || '') !== `status:${statusCode}`) {
+      return { ok: false, reason: 'terminal-stop-not-persisted', ...(overview || {}) };
+    }
+
+    rememberTerminalLatch(target.id, statusCode, promptKey, stoppedAt);
+    await resetStoppedAttempts(target.id, statusCode).catch(() => null);
     try { overview = await monitor.monitorOverview(target); } catch {}
     await publishOverview(target);
     return { ok: true, stopped: true, statusCode, ...(overview || {}) };
@@ -243,6 +360,14 @@
       requestStartedAt
     };
     requestStartsByTab.set(details.tabId, record);
+
+    let tab = null;
+    chrome.tabs.get(details.tabId).then((value) => {
+      tab = value;
+      const identity = conversationFromUrl(tab?.url || '');
+      if (identity) freshRequestClearsTerminalLatch(identity.id, requestStartedAt);
+    }).catch(() => {});
+
     armRequestStartForTab(details.tabId, record.requestId, requestStartedAt).catch(() => false);
   }, {
     urls: [
@@ -268,6 +393,17 @@
       return true;
     }
 
+    if (message?.type === 'CHATGPT_MONITOR_STATE') {
+      const conversationId = String(message?.snapshot?.conversationId || '');
+      const latch = terminalLatchesByConversation.get(conversationId);
+      if (latch && Number.isInteger(sender?.tab?.id)) {
+        const requestStartedAt = Math.max(0, Number(message?.snapshot?.requestStartedAt || 0));
+        if (requestStartedAt > Number(latch.stoppedAt || 0)) clearTerminalLatch(conversationId);
+        else scheduleTerminalReassert(conversationId, sender.tab.id);
+      }
+      return false;
+    }
+
     const manualEnable = (
       message?.type === 'SET_BUILD_AUTOMATION_STATE'
       || message?.type === 'SET_BUILD_AUTOMATION_STATE_FOR_SENDER'
@@ -286,9 +422,12 @@
   globalThis.__chatgptNotifierWatchdogRequestLifecycleFix = Object.freeze({
     version: RUNTIME_VERSION,
     requestStartsByTab,
+    terminalLatchesByConversation,
     armRequestStartForTab,
     deferManualEnableTimer,
     resolveManualEnableTabId,
-    parkTerminalStatusForSender
+    parkTerminalStatusForSender,
+    resetStoppedAttempts,
+    statusCodeFromStopReason
   });
 })();
