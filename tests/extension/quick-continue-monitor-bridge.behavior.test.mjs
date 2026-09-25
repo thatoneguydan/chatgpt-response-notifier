@@ -13,6 +13,8 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   const bridge = readText('extension/quick-continue-monitor-bridge.js');
   const fallback = readText('extension/quick-continue-status-fallback.js');
   const statusOwner = readText('extension/quick-continue-status-owner-v6.js');
+  const pageAuthority = readText('extension/watchdog-page-authority-v3.js');
+  const backgroundAuthority = readText('extension/watchdog-authority-v3-background.js');
   const stabilizer = readText('extension/quick-continue-status-stabilizer.js');
 
   assert.equal(manifest.version, '0.9.80');
@@ -22,6 +24,9 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   assert.ok(stabilizerEntry);
   assert.equal(stabilizerEntry.run_at, 'document_start');
   assert.ok(stabilizerEntry.js.includes('quick-continue-status-owner-v6.js'));
+  const watchdogEntry = manifest.content_scripts.find((entry) => Array.isArray(entry.js) && entry.js.includes('watchdog-page-authority-v3.js'));
+  assert.ok(watchdogEntry);
+  assert.equal(watchdogEntry.run_at, 'document_start');
   assert.match(bootstrap, /importScripts\('quick-continue-monitor-bridge-background\.js'\)/);
   assert.match(bootstrap, /importScripts\('watchdog-authority-v3-background\.js'\)/);
   assert.match(background, /BRIDGE_FILE = 'quick-continue-monitor-bridge\.js'/);
@@ -43,6 +48,8 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   assert.doesNotThrow(() => new vm.Script(bridge));
   assert.doesNotThrow(() => new vm.Script(fallback));
   assert.doesNotThrow(() => new vm.Script(statusOwner));
+  assert.doesNotThrow(() => new vm.Script(pageAuthority));
+  assert.doesNotThrow(() => new vm.Script(backgroundAuthority));
   assert.doesNotThrow(() => new vm.Script(stabilizer));
 });
 
@@ -61,6 +68,22 @@ test('Continue and Project actions enable monitoring before arming the fresh use
   const freshTurnIndex = bridge.indexOf('const newUserKey = await waitForNewUserTurn(previousUserKey)');
   const armIndex = bridge.indexOf("type: 'ARM_CODE_WATCHDOG_FOR_SENDER'", freshTurnIndex);
   assert.ok(enableIndex >= 0 && freshTurnIndex > enableIndex && armIndex > freshTurnIndex);
+});
+
+test('trusted manual and Quick Continue sends explicitly reset the fresh-turn 30-minute watchdog', () => {
+  const pageAuthority = readText('extension/watchdog-page-authority-v3.js');
+
+  assert.match(pageAuthority, /event\?\.isTrusted !== true/);
+  assert.match(pageAuthority, /handleTrustedClick/);
+  assert.match(pageAuthority, /handleTrustedKeydown/);
+  assert.match(pageAuthority, /handleTrustedSubmit/);
+  assert.match(pageAuthority, /quick-toolbar-fresh-turn-v3/);
+  assert.match(pageAuthority, /trusted-send-click-v3/);
+  assert.match(pageAuthority, /trusted-enter-submit-v3/);
+  assert.match(pageAuthority, /type:\s*'ARM_CODE_WATCHDOG_FOR_SENDER'/);
+  assert.match(pageAuthority, /const newUserKey = await waitForNewUserTurn\(previousUserKey\)/);
+  assert.match(pageAuthority, /overview\?\.automationEnabled !== true/);
+  assert.doesNotMatch(pageAuthority, /SET_BUILD_AUTOMATION_STATE_FOR_SENDER/);
 });
 
 test('Quick Continue bridge suppresses the legacy click-time arm before the fresh turn exists', () => {
