@@ -1,11 +1,15 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const FALLBACK_ID = 'chatgpt-notifier-countdown-fallback';
+  const STYLE_ID = 'chatgpt-notifier-countdown-readability-v2';
   const CANONICAL_STATUS_SELECTOR = '[id^="chatgpt-notifier-countdown-v"], #chatgpt-notifier-automation-status';
   const OVERVIEW_REFRESH_MS = 2000;
+  const VIEWPORT_MARGIN_PX = 8;
+  const PREFERRED_MIN_WIDTH_PX = 160;
+  const MAX_STATUS_WIDTH_PX = 440;
 
   const previous = globalThis.__chatgptNotifierQuickContinueStatusFallback;
   if (Number(previous?.version || 0) === RUNTIME_VERSION) {
@@ -93,6 +97,68 @@
     return true;
   }
 
+  function ensureReadabilityStyle() {
+    let style = document.getElementById(STYLE_ID);
+    if (!style) {
+      style = document.createElement('style');
+      style.id = STYLE_ID;
+      (document.head || document.documentElement).append(style);
+    }
+    const css = `
+      #${TOOLBAR_ID} [id^="chatgpt-notifier-countdown-v"],
+      #${TOOLBAR_ID} #chatgpt-notifier-automation-status,
+      #${TOOLBAR_ID} #${FALLBACK_ID} {
+        right: auto !important;
+        bottom: calc(100% + 4px) !important;
+        padding: 3px 6px !important;
+        border: 1px solid var(--border-light, rgba(0, 0, 0, 0.14)) !important;
+        border-radius: 6px !important;
+        background: var(--main-surface-primary, #fff) !important;
+        color: var(--text-primary, var(--text-secondary, #666)) !important;
+        box-shadow: 0 1px 5px rgba(0, 0, 0, 0.16) !important;
+        box-sizing: border-box !important;
+        font-size: 11px !important;
+        line-height: 1.25 !important;
+        font-variant-numeric: tabular-nums !important;
+        white-space: normal !important;
+        overflow-wrap: anywhere !important;
+        text-align: left !important;
+      }
+      #${TOOLBAR_ID}[data-chatgpt-notifier-last-status]:not(:has([id^="chatgpt-notifier-countdown-v"]))::after {
+        content: none !important;
+      }
+    `;
+    if (style.textContent !== css) style.textContent = css;
+    return style;
+  }
+
+  function applyViewportBounds(toolbar) {
+    if (!toolbar) return;
+    let viewportWidth = 0;
+    let toolbarLeft = 0;
+    try {
+      viewportWidth = Math.max(0, Number(window.innerWidth || document.documentElement?.clientWidth || 0));
+      toolbarLeft = Number(toolbar.getBoundingClientRect?.().left || 0);
+    } catch {}
+    if (viewportWidth <= 0) return;
+
+    const margin = VIEWPORT_MARGIN_PX;
+    const preferredMinWidth = Math.min(PREFERRED_MIN_WIDTH_PX, Math.max(0, viewportWidth - (margin * 2)));
+    const maxViewportLeft = Math.max(margin, viewportWidth - preferredMinWidth - margin);
+    const viewportLeft = Math.min(Math.max(toolbarLeft, margin), maxViewportLeft);
+    const leftOffset = viewportLeft - toolbarLeft;
+    const availableWidth = Math.max(1, viewportWidth - viewportLeft - margin);
+    const maxWidth = Math.min(MAX_STATUS_WIDTH_PX, availableWidth);
+
+    const nodes = [canonicalStatus(toolbar), document.getElementById(FALLBACK_ID)].filter(Boolean);
+    for (const node of nodes) {
+      try {
+        node.style.setProperty('left', `${leftOffset}px`, 'important');
+        node.style.setProperty('max-width', `${maxWidth}px`, 'important');
+      } catch {}
+    }
+  }
+
   function ensureFallback(toolbar) {
     if (!toolbar) return null;
     let fallback = document.getElementById(FALLBACK_ID);
@@ -109,27 +175,23 @@
       left: '0',
       right: 'auto',
       bottom: 'calc(100% + 4px)',
-      padding: '2px',
-      border: '1px solid transparent',
-      borderRadius: '5px',
-      background: 'transparent',
-      color: 'var(--text-secondary, #666)',
+      padding: '3px 6px',
+      border: '1px solid var(--border-light, rgba(0, 0, 0, 0.14))',
+      borderRadius: '6px',
+      background: 'var(--main-surface-primary, #fff)',
+      color: 'var(--text-primary, var(--text-secondary, #666))',
       font: 'inherit',
-      fontSize: '9px',
-      lineHeight: '1.2',
+      fontSize: '11px',
+      lineHeight: '1.25',
       fontVariantNumeric: 'tabular-nums',
-      whiteSpace: 'nowrap',
+      whiteSpace: 'normal',
+      overflowWrap: 'anywhere',
       pointerEvents: 'auto',
       cursor: 'pointer',
       opacity: '1',
-      boxShadow: 'none',
+      boxShadow: '0 1px 5px rgba(0, 0, 0, 0.16)',
+      boxSizing: 'border-box',
       textAlign: 'left'
-    });
-    fallback.addEventListener('mouseenter', () => {
-      if (!fallback.disabled) fallback.style.borderColor = 'currentColor';
-    });
-    fallback.addEventListener('mouseleave', () => {
-      fallback.style.borderColor = 'transparent';
     });
     fallback.addEventListener('click', resetBudget);
     toolbar.append(fallback);
@@ -142,8 +204,10 @@
     try { toolbar = document.getElementById(TOOLBAR_ID); } catch {}
     if (!toolbar) return;
 
+    ensureReadabilityStyle();
     const fallback = ensureFallback(toolbar);
     if (!fallback) return;
+    applyViewportBounds(toolbar);
     if (canonicalStatusVisible(toolbar)) {
       fallback.hidden = true;
       return;
@@ -154,6 +218,7 @@
     fallback.hidden = !text;
     fallback.disabled = busy || overview?.automationEnabled !== true;
     fallback.style.cursor = fallback.disabled ? 'default' : 'pointer';
+    applyViewportBounds(toolbar);
   }
 
   async function refreshOverview() {
@@ -202,16 +267,19 @@
 
   function handleMutations(records) {
     const fallback = document.getElementById(FALLBACK_ID);
+    const style = document.getElementById(STYLE_ID);
     const meaningful = Array.from(records || []).some((record) => {
       const target = record?.target;
       if (!target) return false;
       if (target === fallback || fallback?.contains?.(target)) return false;
+      if (target === style || style?.contains?.(target)) return false;
       return true;
     });
     if (meaningful) render();
   }
 
   try { chrome.runtime.onMessage.addListener(handleRuntimeMessage); } catch {}
+  try { window.addEventListener('resize', render); } catch {}
   if (typeof MutationObserver === 'function') {
     observer = new MutationObserver(handleMutations);
     try { observer.observe(document.documentElement, { childList: true, subtree: true }); } catch {}
@@ -231,7 +299,9 @@
       try { if (refreshTimer !== null) clearInterval(refreshTimer); } catch {}
       try { if (tickTimer !== null) clearInterval(tickTimer); } catch {}
       try { chrome.runtime.onMessage.removeListener(handleRuntimeMessage); } catch {}
+      try { window.removeEventListener('resize', render); } catch {}
       try { document.getElementById(FALLBACK_ID)?.remove(); } catch {}
+      try { document.getElementById(STYLE_ID)?.remove(); } catch {}
       if (globalThis.__chatgptNotifierQuickContinueStatusFallback === runtime) {
         delete globalThis.__chatgptNotifierQuickContinueStatusFallback;
       }
