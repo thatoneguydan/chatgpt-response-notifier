@@ -29,7 +29,6 @@
       ],
       "js": [
         "page-dom-compat.js",
-        "quick-continue-status-stabilizer.js",
         "attachment-script.js",
         "content-script.js",
         "persistence-script.js",
@@ -97,6 +96,15 @@
       ],
       "run_at": "document_start",
       "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "quick-continue-status-stabilizer.js"
+      ],
+      "run_at": "document_start"
     }
   ]
 }
