@@ -583,7 +583,7 @@ test('manifest adds only reviewed alarms permission for scheduled recovery wake'
   assert.deepEqual(manifest.permissions.sort(), ['alarms','scripting','tabs','webRequest'].sort());
   assert.deepEqual(manifest.host_permissions.sort(), ['https://chatgpt.com/*','ws://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].js, [
-    'page-dom-compat.js','attachment-script.js','content-script.js','persistence-script.js','status-code.js','status-policy.js','monitor-script.js','bounded-recovery-script.js','status-script.js','recovery-script.js'
+    'page-dom-compat.js','attachment-script.js','content-script.js','persistence-script.js','status-code.js','status-policy.js','rendered-terminal-status.js','monitor-script.js','bounded-recovery-script.js','status-script.js','terminal-status-live-observer.js','recovery-script.js'
   ]);
 });
 

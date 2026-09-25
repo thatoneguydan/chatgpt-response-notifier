@@ -10,7 +10,7 @@ test('post-update rebind replaces all critical isolated-world runtimes without r
   const recovery = read('extension/terminal-stop-post-update-recovery-background.js');
   const rebind = read('extension/page-runtime-rebind.js');
 
-  assert.match(recovery, /const RUNTIME_VERSION = 2/);
+  assert.match(recovery, /const RUNTIME_VERSION = 3/);
   const requiredFiles = [
     'page-runtime-rebind.js',
     'page-dom-compat.js',
@@ -19,9 +19,11 @@ test('post-update rebind replaces all critical isolated-world runtimes without r
     'persistence-script.js',
     'status-code.js',
     'status-policy.js',
+    'rendered-terminal-status.js',
     'monitor-script.js',
     'bounded-recovery-script.js',
     'status-script.js',
+    'terminal-status-live-observer.js',
     'recovery-script.js',
     'watchdog-page-authority-v3.js',
     'quick-continue-monitor-bridge.js',
@@ -31,6 +33,7 @@ test('post-update rebind replaces all critical isolated-world runtimes without r
   assert.ok(recovery.indexOf("'page-runtime-rebind.js'") < recovery.indexOf("'page-dom-compat.js'"));
   assert.ok(recovery.indexOf("'page-dom-compat.js'") < recovery.indexOf("'monitor-script.js'"));
   assert.ok(recovery.indexOf("'attachment-script.js'") < recovery.indexOf("'content-script.js'"));
+  assert.ok(recovery.indexOf("'rendered-terminal-status.js'") < recovery.indexOf("'terminal-status-live-observer.js'"));
   assert.doesNotMatch(recovery, /chrome\.tabs\.reload/);
   assert.doesNotMatch(recovery, /tabs\.update\([^)]*active:\s*true/);
 
@@ -40,6 +43,8 @@ test('post-update rebind replaces all critical isolated-world runtimes without r
   assert.match(rebind, /__chatgptNotifierAttachmentRuntime/);
   assert.match(rebind, /__chatgptNotifierMonitorRuntime/);
   assert.match(rebind, /__chatgptNotifierStatusRuntime/);
+  assert.match(rebind, /__chatgptNotifierRenderedTerminalObserver/);
+  assert.match(rebind, /__chatgptNotifierStreamStatusBridge/);
   assert.match(rebind, /__chatgptNotifierQuickContinueBridge/);
   assert.match(rebind, /__chatgptNotifierQuickContinueStatusFallback/);
   assert.match(rebind, /__chatgptNotifierWatchdogPageAuthorityV3/);
@@ -56,5 +61,6 @@ test('all programmatic turn readers receive the semantic DOM adapter', () => {
   const compat = read('extension/page-runtime-compat-background.js');
   assert.match(compat, /quick-continue-monitor-bridge\.js/);
   assert.match(compat, /watchdog-page-authority-v3\.js/);
+  assert.match(compat, /terminal-status-live-observer\.js/);
   assert.match(compat, /PAGE_COMPAT_FILE = 'page-dom-compat\.js'/);
 });

@@ -11,6 +11,8 @@
     '__chatgptNotifierAttachmentRuntime',
     '__chatgptNotifierMonitorRuntime',
     '__chatgptNotifierStatusRuntime',
+    '__chatgptNotifierRenderedTerminalObserver',
+    '__chatgptNotifierStreamStatusBridge',
     '__chatgptNotifierQuickContinueBridge',
     '__chatgptNotifierQuickContinueStatusFallback',
     '__chatgptNotifierWatchdogPageAuthorityV3'
