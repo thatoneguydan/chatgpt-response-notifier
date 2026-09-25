@@ -17,25 +17,29 @@ test('live acceptance uses only the pinned localhost bridge and explicit update 
   assert.match(script, /chrome-extension:\/\/lciedmoiiapbgemklkpoadimhffaaaah/);
   assert.match(script, /SetRequestHeader\('Origin', \$BridgeOrigin\)/);
   assert.match(script, /type = 'update\.check'/);
-  assert.match(script, /type -ne 'update\.result'/);
   assert.match(script, /installedExtensionVersion/);
+  assert.doesNotMatch(script, /type -ne 'update\.result'/);
+  assert.doesNotMatch(script, /\.updateStatus/);
   assert.doesNotMatch(script, /https?:\/\/(?!127\.0\.0\.1)/);
 });
 
-test('WebSocket factory bypasses the PowerShell output pipeline with a ref result', () => {
+test('WebSocket data handoff bypasses the PowerShell output pipeline', () => {
   assert.match(script, /function Open-BridgeSocket/);
   assert.match(script, /\[ref\]\$Socket/);
-  assert.match(script, /\[void\]\$client\.Options\.SetRequestHeader\('Origin', \$BridgeOrigin\)/);
-  assert.match(script, /\[void\]\$client\.ConnectAsync\([\s\S]*?\.GetResult\(\)/);
   assert.match(script, /\$Socket\.Value = \$client/);
-  assert.match(script, /\$socket = \$null\s+Open-BridgeSocket -Socket \(\[ref\]\$socket\)/);
+  assert.match(script, /function Receive-BridgeJson[\s\S]*?\[ref\]\$Message/);
+  assert.match(script, /\$Message\.Value = \(\$Utf8\.GetString/);
+  assert.match(script, /\[void\]\$Socket\.SendAsync\([\s\S]*?\.GetResult\(\)/);
   assert.doesNotMatch(script, /Write-Output -NoEnumerate/);
-  assert.doesNotMatch(script, /\$socket\s*=\s*New-BridgeSocket/);
+  assert.doesNotMatch(script, /return \$message/);
 });
 
-test('live acceptance retries stale feed observations without replacing an already-current helper', () => {
-  assert.match(script, /for \(\$attempt = 1; \$attempt -le \$Attempts; \$attempt \+= 1\)/);
+test('live acceptance polls host.ready for the installed version and retries update requests at a bounded cadence', () => {
+  assert.match(script, /function Read-BridgeReady/);
+  assert.match(script, /function Request-ManagedUpdate/);
+  assert.match(script, /\$installed = \[string\]\$ready\.installedExtensionVersion/);
+  assert.match(script, /\(\(\$attempt - 1\) % 4 -eq 0\)/);
   assert.match(script, /if \(\$installed -eq \$ExpectedVersion\) \{ break \}/);
   assert.match(script, /Start-Sleep -Seconds \$RetryDelaySeconds/);
-  assert.match(script, /restarted Glass helper did not report that version/);
+  assert.match(script, /fresh Glass helper connection did not report that version/);
 });
