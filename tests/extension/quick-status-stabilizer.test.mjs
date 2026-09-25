@@ -11,6 +11,10 @@ test('one document-start runtime owns the timer surface without a hiding stabili
   assert.equal(entry?.run_at, 'document_start');
   assert.deepEqual(entry.js, ['quick-continue-status-owner-v6.js']);
   assert.ok(!manifest.content_scripts.some((candidate) => candidate.js?.includes('quick-continue-status-stabilizer.js')));
-  assert.match(owner, /removeLegacyStatusNodes/);
+  assert.match(owner, /UI_OWNER_ATTR/);
+  assert.match(owner, /STATUS_OWNER_ATTR/);
+  assert.match(owner, /claimUi\(\)/);
+  assert.match(owner, /relinquishUi\(\)/);
+  assert.match(owner, /display: none !important/);
   assert.doesNotMatch(owner, /MutationObserver/);
 });
