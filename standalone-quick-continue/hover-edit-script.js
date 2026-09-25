@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 7;
+  const RUNTIME_VERSION = 8;
   const previousRuntime = globalThis.__chatgptQuickContinueHoverEditRuntime;
   if (Number(previousRuntime?.version || 0) === RUNTIME_VERSION) return;
   const restoredTimestampState = Boolean(previousRuntime?.manualTimestampEnabled);
@@ -119,8 +119,9 @@
     }
   }
 
-  function replaceContentEditableFallback(node, text) {
+  function replaceContentEditable(node, text) {
     const next = normalizedComposerText(text);
+    try { node.focus({ preventScroll: true }); } catch { try { node.focus(); } catch {} }
     try {
       const fragment = document.createDocumentFragment();
       const lines = next.split('\n');
@@ -134,26 +135,6 @@
     } catch {
       return false;
     }
-  }
-
-  function replaceContentEditable(node, text) {
-    const next = normalizedComposerText(text);
-    try { node.focus({ preventScroll: true }); } catch { try { node.focus(); } catch {} }
-
-    try {
-      const selection = window.getSelection?.();
-      const range = document.createRange?.();
-      if (selection && range && typeof document.execCommand === 'function') {
-        range.selectNodeContents(node);
-        selection.removeAllRanges();
-        selection.addRange(range);
-        if (document.execCommand('insertText', false, next)) {
-          if (normalizedComposerText(rawComposerText(node)) === next) return true;
-        }
-      }
-    } catch {}
-
-    return replaceContentEditableFallback(node, next);
   }
 
   function replaceComposerText(node, text) {
