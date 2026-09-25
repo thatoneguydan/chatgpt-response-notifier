@@ -1,4 +1,12 @@
-# ChatGPT Response Notifier 0.9.85
+# ChatGPT Response Notifier 0.9.86
+
+- Adds a live rendered-footer authority that detects the final GitHub status from connected ChatGPT DOM instead of depending on detached-clone line breaks. This covers segmented/sibling footer markup that was visibly present but still reported as `terminal-code-not-observed`.
+- Routes a confirmed definitive rendered status directly to both watchdog parking and the durable notification outbox, so `PLANNING_ACTIVE`, `COMPLETE_APPLIED`, `COMPLETE_NO_CHANGES`, and `BLOCKED_HUMAN` no longer depend on a second fragile DOM query before stopping or notifying.
+- Keeps terminal delivery identity-bound to the current conversation, prompt, assistant turn, and revision, with coordinator claim/dedupe before a toast is queued.
+- Makes the response-stream bridge replaceable across extension updates; an already-open tab can no longer retain a dead pre-update bridge guard that silently blocks the stream fallback.
+- Hot-binds and verifies the rendered terminal observer in already-open ChatGPT tabs without refreshing or foregrounding them.
+
+## Previous: 0.9.85
 
 - Replaces the watchdog countdown with a durable single-owner DOM surface that can take over an already-open ChatGPT tab even when the pre-update timer runtime is still executing with a dead extension context.
 - Moves the live timer into a new DOM namespace that the stale 0.9.84-and-earlier timer code cannot delete or repaint, while statically hiding those legacy timer rows so they cannot flicker back into view.
