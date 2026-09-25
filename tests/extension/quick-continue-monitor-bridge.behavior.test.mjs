@@ -15,7 +15,7 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   const pageAuthority = readText('extension/watchdog-page-authority-v3.js');
   const backgroundAuthority = readText('extension/watchdog-authority-v3-background.js');
 
-  assert.equal(manifest.version, '0.9.83');
+  assert.equal(manifest.version, '0.9.84');
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-monitor-bridge.js')));
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-fallback.js')));
   assert.ok(!manifest.content_scripts.some((entry) => entry.js?.includes('quick-continue-status-stabilizer.js')));
