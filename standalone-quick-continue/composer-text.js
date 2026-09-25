@@ -48,50 +48,35 @@
   function isEmptyPlaceholderBlock(node, text) {
     if (!isBlock(node)) return false;
     if (normalize(node?.textContent ?? '').length) return false;
-    if (!text) return true;
-    return /^\n+$/.test(text);
+    return !text || /^\n+$/.test(text);
   }
 
   function readEditable(node) {
     const children = childNodes(node);
     if (!children.length) return normalize(node?.textContent ?? node?.innerText ?? '');
 
+    if (!children.some(isBlock)) return normalize(descendantText(node));
+
     let output = '';
-    let previousWasBlock = false;
+    let sawBlock = false;
     for (const child of children) {
       const childIsBlock = isBlock(child);
       let text = descendantText(child);
       if (isEmptyPlaceholderBlock(child, text)) text = '';
 
-      if (childIsBlock && output && !output.endsWith('\n')) output += '\n';
-      else if (childIsBlock && previousWasBlock && !output.endsWith('\n')) output += '\n';
-
-      output += text;
-      previousWasBlock = childIsBlock;
+      if (childIsBlock) {
+        if (sawBlock) output += '\n';
+        else if (output && !output.endsWith('\n')) output += '\n';
+        output += text;
+        sawBlock = true;
+      } else {
+        output += text;
+      }
     }
 
     // Sibling block elements are logical paragraphs. Chromium's innerText can
     // serialize those same paragraphs with extra separator newlines, so read
     // them structurally instead of trusting presentation-oriented innerText.
-    if (children.some(isBlock)) {
-      let structured = '';
-      let firstBlock = true;
-      for (const child of children) {
-        const childIsBlock = isBlock(child);
-        let text = descendantText(child);
-        if (isEmptyPlaceholderBlock(child, text)) text = '';
-
-        if (childIsBlock) {
-          if (!firstBlock) structured += '\n';
-          structured += text;
-          firstBlock = false;
-        } else {
-          structured += text;
-        }
-      }
-      output = structured;
-    }
-
     return normalize(output);
   }
 
