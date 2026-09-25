@@ -12,6 +12,13 @@ test('notifier release requires live Glass managed-update acceptance', () => {
   assert.match(workflow, /Parser\]::ParseFile\([\s\S]*Invoke-NotifierManagedUpdateAcceptance\.ps1/);
 });
 
+test('release acceptance relies on verifier terminating errors instead of stale native LASTEXITCODE', () => {
+  const acceptanceStep = workflow.match(/- name: Install and verify released notifier on Glass[\s\S]*$/)?.[0] ?? '';
+  assert.match(acceptanceStep, /\$ErrorActionPreference = 'Stop'/);
+  assert.match(acceptanceStep, /& \.\\tools\\Invoke-NotifierManagedUpdateAcceptance\.ps1 -ExpectedVersion \$version/);
+  assert.doesNotMatch(acceptanceStep, /\$LASTEXITCODE/);
+});
+
 test('live acceptance uses only the pinned localhost bridge and explicit update request', () => {
   assert.match(script, /ws:\/\/127\.0\.0\.1:38473\/bridge/);
   assert.match(script, /chrome-extension:\/\/lciedmoiiapbgemklkpoadimhffaaaah/);
