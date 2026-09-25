@@ -7,6 +7,7 @@ const source = readFileSync(new URL('../../extension/tab-lifecycle-diagnostics-b
 
 function createRuntime({ documentId = 'chrome-doc-1', frozen = false, discarded = false, statusCode = 'COMPLETE_NO_CHANGES' } = {}) {
   const completedListeners = [];
+  const errorListeners = [];
   const updatedListeners = [];
   const diagnostics = [];
   const scheduled = [];
@@ -43,7 +44,8 @@ function createRuntime({ documentId = 'chrome-doc-1', frozen = false, discarded 
         onUpdated: { addListener: (listener) => updatedListeners.push(listener) }
       },
       webRequest: {
-        onCompleted: { addListener: (listener) => completedListeners.push(listener) }
+        onCompleted: { addListener: (listener) => completedListeners.push(listener) },
+        onErrorOccurred: { addListener: (listener) => errorListeners.push(listener) }
       }
     },
     __chatgptNotifierDeliveryDiagnostics: {
@@ -61,11 +63,16 @@ function createRuntime({ documentId = 'chrome-doc-1', frozen = false, discarded 
 
   vm.runInContext(source, context);
 
+  async function settle(listener, details) {
+    listener(details);
+    for (let i = 0; i < 8; i += 1) await Promise.resolve();
+  }
+
   return {
     diagnostics,
     scheduled,
     async complete() {
-      completedListeners[0]({
+      await settle(completedListeners[0], {
         tabId: 7,
         method: 'POST',
         url: 'https://chatgpt.com/backend-api/f/conversation',
@@ -73,7 +80,16 @@ function createRuntime({ documentId = 'chrome-doc-1', frozen = false, discarded 
         requestId: 'request-1',
         documentId
       });
-      for (let i = 0; i < 8; i += 1) await Promise.resolve();
+    },
+    async fail(error = 'net::ERR_FAILED') {
+      await settle(errorListeners[0], {
+        tabId: 7,
+        method: 'POST',
+        url: 'https://chatgpt.com/backend-api/f/conversation',
+        requestId: 'request-1',
+        documentId,
+        error
+      });
     }
   };
 }
@@ -88,6 +104,28 @@ test('request completion probes terminal status and routes exact Chrome document
   assert.equal(runtime.scheduled[0].message.snapshot.statusCode, 'COMPLETE_NO_CHANGES');
   assert.equal(runtime.scheduled[0].message.snapshot.documentId, 'status-runtime-1');
   assert.ok(runtime.diagnostics.some((item) => item.status === 'request-completion-status-probe-observed'));
+});
+
+test('request transport error still probes rendered terminal status and routes notification delivery', async () => {
+  const runtime = createRuntime();
+  await runtime.fail('net::ERR_ABORTED');
+
+  assert.equal(runtime.scheduled.length, 1);
+  assert.equal(runtime.scheduled[0].sender.documentId, 'chrome-doc-1');
+  assert.equal(runtime.scheduled[0].message.type, 'CHATGPT_MONITOR_STATE');
+  assert.equal(runtime.scheduled[0].message.snapshot.statusCode, 'COMPLETE_NO_CHANGES');
+  assert.ok(runtime.diagnostics.some((item) => item.status === 'request-error-status-probe-observed'));
+});
+
+test('request transport error without a rendered terminal code does not manufacture a notification', async () => {
+  const runtime = createRuntime({ statusCode: '' });
+  await runtime.fail('net::ERR_ABORTED');
+
+  assert.equal(runtime.scheduled.length, 0);
+  assert.ok(runtime.diagnostics.some((item) =>
+    item.status === 'request-error-status-probe-no-terminal-code' &&
+    item.fields.reason === 'terminal-code-not-observed'
+  ));
 });
 
 test('request completion probe fails safe when Chrome document identity is unavailable', async () => {
@@ -116,5 +154,7 @@ test('probe source introduces no ChatGPT HTTP polling or foregrounding', () => {
   assert.doesNotMatch(source, /tabs\.update\([^)]*active:\s*true/);
   assert.doesNotMatch(source, /windows\.update\([^)]*focused:\s*true/);
   assert.match(source, /queryTerminalStatus\(details\.tabId, chromeDocumentId, 30_000\)/);
+  assert.match(source, /chrome\.webRequest\.onErrorOccurred\.addListener/);
+  assert.match(source, /probeTerminalStatusAtRequestSettlement\(details, 'error'\)/);
   assert.match(source, /scheduleObservedStatusDelivery/);
 });
