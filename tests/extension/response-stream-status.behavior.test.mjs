@@ -275,10 +275,11 @@ test('stream read error routes a coded DOM status only when the same request and
   const snapshot = { ...status, requestId: 'request-2', assistantRevision: '10:abc' };
   const routed = [];
   const diagnostics = [];
+  const requestContext = { key: 'tab|request-2', tabId: 7,
+    chromeDocumentId: 'chrome-doc-7', requestId: 'request-2', snapshot: null };
   const context = vm.createContext({
     streamReadRecoveryInFlight: new Set(),
-    currentContext: () => ({ key: 'tab|request-2', tabId: 7,
-      chromeDocumentId: 'chrome-doc-7', requestId: 'request-2' }),
+    currentContext: () => requestContext,
     queryTerminalStatus: async () => status,
     queryMonitorSnapshot: async () => snapshot,
     recordDiagnostic: (kind) => diagnostics.push(kind),
@@ -300,6 +301,12 @@ test('stream read error routes a coded DOM status only when the same request and
   await context.recover({ tab: { id: 7 }, documentId: 'chrome-doc-7' });
   assert.equal(routed.length, 1, 'old request status must never queue a new toast');
   assert.ok(diagnostics.includes('response-stream-read-error-identity-unconfirmed'));
+  requestContext.snapshot = { ...status, assistantRevision: status.revision };
+  status.revision = '10:abc';
+  requestContext.snapshot.assistantRevision = '10:abc';
+  await context.recover({ tab: { id: 7 }, documentId: 'chrome-doc-7' });
+  assert.equal(routed.length, 1, 'footer already present at request start cannot queue a new toast');
+  assert.ok(diagnostics.includes('response-stream-read-error-status-predates-request'));
 });
 
 test('MAIN observer does not poll ChatGPT or use extension privileges', () => {

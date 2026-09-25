@@ -559,6 +559,17 @@
         });
         return;
       }
+      const before = context.snapshot || null;
+      if (String(before?.statusCode || '') === String(status.statusCode || '')
+        && String(before?.promptKey || '') === String(status.promptKey || '')
+        && String(before?.assistantKey || '') === String(status.assistantKey || '')
+        && String(before?.assistantRevision || '') === String(status.revision || '')) {
+        recordDiagnostic('response-stream-read-error-status-predates-request', {
+          tabId: context.tabId, chromeDocumentId: context.chromeDocumentId,
+          reason: 'terminal-turn-already-present-at-request-start'
+        });
+        return;
+      }
       if (currentContext(sender)?.key !== key) return;
       const observed = await queryMonitorSnapshot(context.tabId, context.chromeDocumentId);
       if (String(observed?.requestId || '') !== context.requestId
