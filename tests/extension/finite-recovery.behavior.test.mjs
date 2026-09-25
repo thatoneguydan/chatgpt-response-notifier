@@ -71,7 +71,7 @@ function profile(overrides = {}) {
   return { breakerOpen: false, breakerReason: '', activeLease: null, nextProfileActionAt: 0, ...overrides };
 }
 
-test('explicit interruption always terminates after five reloads and at most one recovery Continue', () => {
+test('explicit interruption gets one refresh then yields to the watchdog without a recovery Continue', () => {
   const { model } = loadRecovery();
   const broken = observation({
     assistantKey: 'assistant-1',
@@ -84,100 +84,69 @@ test('explicit interruption always terminates after five reloads and at most one
   let run = humanRun();
   let shared = profile();
   let current = incident({ reason: 'timed-out' });
-  let now = 10_000;
+  const now = 10_000;
 
-  for (let attempt = 1; attempt <= 5; attempt += 1) {
-    const classification = { state: 'attention', reason: current.reason };
-    const candidate = model.recoveryCandidate(classification, broken, current);
-    assert.equal(candidate.kind, 'reload', `attempt ${attempt} must be a reload`);
-    const claimed = model.claimAction('reload', run, current, shared, broken, {
-      now,
-      leaseId: `explicit-reload-${attempt}`,
-      recoveryEnabled: true
-    });
-    assert.equal(claimed.allowed, true);
-    assert.equal(claimed.incident.budget.reloads, attempt);
-    ({ humanRun: run, incident: current, profile: shared } = model.finishAction(
-      claimed.humanRun,
-      claimed.incident,
-      claimed.profile,
-      { leaseId: claimed.leaseId, state: 'scheduled' },
-      { now: now + 1 }
-    ));
-    current.reason = model.postReloadExplicitReason;
-    now = shared.nextProfileActionAt;
-  }
-
-  const continuationCandidate = model.recoveryCandidate({ state: 'attention', reason: current.reason }, broken, current);
-  assert.equal(continuationCandidate.kind, 'continue');
-  const continuation = model.claimAction('continue', run, current, shared, broken, {
+  const first = model.recoveryCandidate({ state: 'attention', reason: current.reason }, broken, current);
+  assert.equal(first.kind, 'reload');
+  const claimed = model.claimAction('reload', run, current, shared, broken, {
     now,
-    leaseId: 'explicit-continue',
+    leaseId: 'explicit-reload-1',
     recoveryEnabled: true
   });
-  assert.equal(continuation.allowed, true);
+  assert.equal(claimed.allowed, true);
+  assert.equal(claimed.incident.budget.reloads, 1);
   ({ humanRun: run, incident: current, profile: shared } = model.finishAction(
-    continuation.humanRun,
-    continuation.incident,
-    continuation.profile,
-    { leaseId: continuation.leaseId, state: 'resolved' },
+    claimed.humanRun,
+    claimed.incident,
+    claimed.profile,
+    { leaseId: claimed.leaseId, state: 'scheduled' },
     { now: now + 1 }
   ));
+  current.reason = model.postReloadExplicitReason;
 
-  const terminal = model.recoveryCandidate({ state: 'attention', reason: current.reason }, broken, current);
-  assert.deepEqual({ kind: terminal.kind, reason: terminal.reason }, { kind: '', reason: 'continuation-spent' });
-  assert.equal(current.budget.reloads, 5);
-  assert.equal(current.budget.continuations, 1);
-  assert.equal(current.budget.automaticMessages, 1);
+  const afterRefresh = model.recoveryCandidate({ state: 'attention', reason: current.reason }, broken, current);
+  assert.deepEqual({ kind: afterRefresh.kind, reason: afterRefresh.reason }, {
+    kind: '', reason: model.watchdogWaitReason
+  });
+  assert.equal(model.actionKinds.includes('continue'), false);
+  assert.equal(model.admissionDecision('continue', run, current, shared, broken, {
+    now: shared.nextProfileActionAt,
+    recoveryEnabled: true
+  }).reason, 'unknown-recovery-action');
+  assert.equal(current.budget.reloads, 1);
 });
 
-test('silent stop always terminates after three reloads and at most one recovery Continue', () => {
+test('silent stop gets one refresh then yields to the watchdog without a recovery Continue', () => {
   const { model } = loadRecovery();
   const silent = observation({ assistantKey: '', silentIdleConfirmations: 2 });
   let run = humanRun();
   let shared = profile();
   let current = incident({ reason: 'silent-stop-confirmed' });
-  let now = 20_000;
+  const now = 20_000;
 
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const candidate = model.recoveryCandidate({ state: 'attention', reason: current.reason }, silent, current);
-    assert.equal(candidate.kind, 'reload', `silent attempt ${attempt} must be a reload`);
-    const claimed = model.claimAction('reload', run, current, shared, silent, {
-      now,
-      leaseId: `silent-reload-${attempt}`,
-      recoveryEnabled: true
-    });
-    assert.equal(claimed.allowed, true);
-    ({ humanRun: run, incident: current, profile: shared } = model.finishAction(
-      claimed.humanRun,
-      claimed.incident,
-      claimed.profile,
-      { leaseId: claimed.leaseId, state: 'scheduled' },
-      { now: now + 1 }
-    ));
-    current.reason = 'post-reload-silent-stop';
-    now = shared.nextProfileActionAt;
-  }
-
-  assert.equal(model.recoveryCandidate({ state: 'attention', reason: current.reason }, silent, current).kind, 'continue');
-  const continuation = model.claimAction('continue', run, current, shared, silent, {
+  const candidate = model.recoveryCandidate({ state: 'attention', reason: current.reason }, silent, current);
+  assert.equal(candidate.kind, 'reload');
+  const claimed = model.claimAction('reload', run, current, shared, silent, {
     now,
-    leaseId: 'silent-continue',
+    leaseId: 'silent-reload-1',
     recoveryEnabled: true
   });
-  assert.equal(continuation.allowed, true);
+  assert.equal(claimed.allowed, true);
   ({ humanRun: run, incident: current, profile: shared } = model.finishAction(
-    continuation.humanRun,
-    continuation.incident,
-    continuation.profile,
-    { leaseId: continuation.leaseId, state: 'resolved' },
+    claimed.humanRun,
+    claimed.incident,
+    claimed.profile,
+    { leaseId: claimed.leaseId, state: 'scheduled' },
     { now: now + 1 }
   ));
+  current.reason = 'post-reload-silent-stop';
 
-  const terminal = model.recoveryCandidate({ state: 'attention', reason: current.reason }, silent, current);
-  assert.deepEqual({ kind: terminal.kind, reason: terminal.reason }, { kind: '', reason: 'continuation-spent' });
-  assert.equal(current.budget.reloads, 3);
-  assert.equal(current.budget.continuations, 1);
+  const afterRefresh = model.recoveryCandidate({ state: 'attention', reason: current.reason }, silent, current);
+  assert.deepEqual({ kind: afterRefresh.kind, reason: afterRefresh.reason }, {
+    kind: '', reason: model.watchdogWaitReason
+  });
+  assert.equal(current.budget.reloads, 1);
+  assert.equal(Number(current.budget.continuations || 0), 0);
 });
 
 test('post-reload coded terminal and resumed work end recovery without another action', () => {
@@ -198,6 +167,22 @@ test('post-reload coded terminal and resumed work end recovery without another a
   });
   assert.deepEqual({ ...model.postReloadDecision({ ...base, stopGenerating: true }, expected) }, {
     kind: '', state: 'observing', reason: 'work-resumed-after-reload'
+  });
+});
+
+test('a still-stale post-refresh page waits for the existing watchdog instead of scheduling another action', () => {
+  const { model } = loadRecovery();
+  const expected = { conversationId: 'conversation-1', promptKey: 'conversation-1|user-1', documentId: 'document-old' };
+  const silent = observation({
+    conversationId: 'conversation-1',
+    promptKey: 'conversation-1|user-1',
+    documentId: 'document-new',
+    assistantKey: '',
+    silentIdleConfirmations: 2,
+    statusCode: ''
+  });
+  assert.deepEqual({ ...model.postReloadDecision(silent, expected) }, {
+    kind: '', state: 'waiting', reason: model.watchdogWaitReason
   });
 });
 
@@ -227,14 +212,14 @@ test('every current safety boundary produces a named stop reason before admissio
 test('restart never replays an uncertain side effect and uncertainty remains a named terminal hold', () => {
   const { model } = loadRecovery();
   const restart = model.restartDisposition(
-    profile({ activeLease: { leaseId: 'lease-x', kind: 'continue' } }),
-    incident({ inFlight: { leaseId: 'lease-x', kind: 'continue' } })
+    profile({ activeLease: { leaseId: 'lease-x', kind: 'reload' } }),
+    incident({ inFlight: { leaseId: 'lease-x', kind: 'reload' } })
   );
   assert.deepEqual({ ...restart }, { replayAllowed: false, state: 'attention', reason: 'action-interrupted-uncertain' });
 
-  const claim = model.claimAction('continue', humanRun(), incident({ reason: 'post-reload-silent-stop' }), profile(), observation(), {
+  const claim = model.claimAction('reload', humanRun(), incident({ reason: 'silent-stop-confirmed' }), profile(), observation(), {
     now: 1_000,
-    leaseId: 'uncertain-continue',
+    leaseId: 'uncertain-reload',
     recoveryEnabled: true
   });
   assert.equal(claim.allowed, true);
@@ -245,13 +230,13 @@ test('restart never replays an uncertain side effect and uncertainty remains a n
   }, { now: 1_001 });
   assert.equal(finished.incident.state, 'attention');
   assert.equal(finished.incident.budget.uncertainAction, true);
-  assert.equal(model.admissionDecision('continue', finished.humanRun, finished.incident, finished.profile, observation(), {
+  assert.equal(model.admissionDecision('reload', finished.humanRun, finished.incident, finished.profile, observation(), {
     now: finished.profile.nextProfileActionAt,
     recoveryEnabled: true
   }).reason, 'prior-action-uncertain');
 });
 
-test('recovery Continue counts only after page turn plus matching accepted request evidence', () => {
+test('continuation acceptance still requires page turn plus matching accepted request evidence', () => {
   const { policy } = loadRecovery();
   assert.deepEqual({ ...policy.continuationOutcome({ pageTurnConfirmed: true, requestAccepted: true, sameConversation: true }) }, {
     accepted: true,
@@ -292,12 +277,17 @@ test('whole-run fuse remains finite at twelve generation-producing actions', () 
   assert.deepEqual({ allowed: result.allowed, reason: result.reason }, { allowed: false, reason: 'run-action-cap-reached' });
 });
 
-test('timers only trigger local observation; page-affecting recovery still requires fresh inspection', () => {
+test('timers only trigger local observation and stale recovery can only hard-refresh', () => {
   const scheduler = readText('extension/observation-scheduler-background.js');
   const bounded = readText('extension/bounded-recovery-background.js');
   assert.doesNotMatch(scheduler, /chrome\.tabs\.reload|CHATGPT_BOUNDED_RECOVERY_COMMAND/);
   assert.match(scheduler, /CHATGPT_MONITOR_QUERY/);
   assert.match(bounded, /const inspected = await queryTabSnapshot\(generation\.ownerTabId\)[\s\S]*recoveryCandidate\(classification, inspected\.snapshot, incident\)[\s\S]*claimAction\(candidate\.kind/);
+  assert.match(bounded, /chrome\.tabs\.reload\(generation\.ownerTabId, \{ bypassCache: true \}\)/);
+  assert.doesNotMatch(bounded, /CHATGPT_BOUNDED_RECOVERY_COMMAND/);
+  assert.doesNotMatch(bounded, /performMessageAction/);
+  assert.match(bounded, /state: 'waiting-watchdog'/);
+  assert.match(bounded, /stale-after-watchdog-retries/);
 });
 
 test('build status projection exposes attempts, next due, governor and blocker without response content', () => {
@@ -340,7 +330,7 @@ test('build status projection exposes attempts, next due, governor and blocker w
 
   const breaker = summary.summarize({ recovery: {
     humanRun: { generationActions: 4 },
-    incident: { state: 'attention', reason: 'timed-out', budget: { reloads: 5, continuations: 1, uncertainAction: true } },
+    incident: { state: 'attention', reason: 'timed-out', budget: { reloads: 1, continuations: 0, uncertainAction: true } },
     profile: { breakerOpen: true, breakerReason: 'rate-limited', nextProfileActionAt: 0 }
   } }, now);
   assert.equal(breaker.blockedReason, 'rate-limited');
