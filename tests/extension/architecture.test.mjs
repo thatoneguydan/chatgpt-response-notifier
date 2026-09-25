@@ -551,7 +551,7 @@ test('split rendered assistant blocks preserve terminal footer evidence and supp
     assert.match(source, /querySelectorAll\?\.\('\.markdown'\)/);
     assert.match(source, /querySelectorAll\?\.\('\[class\*="prose"\]'\)/);
     assert.match(source, /new Set\(\[\.\.\.markdown, \.\.\.prose\]\)/);
-    assert.match(source, /blocks\.map\(nodeText\)\.filter\(Boolean\)\.join\('\n'\)/);
+    assert.match(source, /blocks\.map\(nodeText\)\.filter\(Boolean\)\.join\('\\n'\)/);
     assert.match(source, /function assistantStatusCodeFromDom/);
     assert.match(source, /pre, code, blockquote, ul, ol, li/);
     assert.match(source, /api\.isStatusCode\(match\[1\]\)/);
@@ -644,7 +644,7 @@ test('notifier-owned Quick Continue light mirrors popup automation states withou
   assert.match(monitor, /queueCodeWatchdogMutation\(identity\.id, \(\) => clearCodeWatchdog\(identity\.id\)\)/);
   assert.match(monitor, /queueCodeWatchdogMutation\(target\.id, async \(\) =>/);
   assert.match(monitor, /watchdogChanged[\s\S]*publishAutomationOverview\(senderTarget\)/);
-  assert.doesNotMatch(attachment, /automationBusy \? '\.62'/);
+  assert.doesNotMatch(attachment, /automationBusy \? '\\.62'/);
   assert.doesNotMatch(attachment, /AUTOMATION_REFRESH_MS/);
   assert.doesNotMatch(attachment, /setInterval\(maintainAutomationIndicator/);
   assert.match(attachment, /if \(!overview\) return automationOverview/);
