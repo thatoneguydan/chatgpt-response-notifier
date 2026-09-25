@@ -8,8 +8,7 @@
   const CANONICAL_STATUS_SELECTOR = '[id^="chatgpt-notifier-countdown-v"], #chatgpt-notifier-automation-status';
   const OVERVIEW_REFRESH_MS = 2000;
   const VIEWPORT_MARGIN_PX = 8;
-  const PREFERRED_MIN_WIDTH_PX = 160;
-  const MAX_STATUS_WIDTH_PX = 440;
+  const STATUS_WIDTH_PX = 280;
 
   const previous = globalThis.__chatgptNotifierQuickContinueStatusFallback;
   if (Number(previous?.version || 0) === RUNTIME_VERSION) {
@@ -143,18 +142,17 @@
     if (viewportWidth <= 0) return;
 
     const margin = VIEWPORT_MARGIN_PX;
-    const preferredMinWidth = Math.min(PREFERRED_MIN_WIDTH_PX, Math.max(0, viewportWidth - (margin * 2)));
-    const maxViewportLeft = Math.max(margin, viewportWidth - preferredMinWidth - margin);
+    const statusWidth = Math.max(1, Math.min(STATUS_WIDTH_PX, viewportWidth - (margin * 2)));
+    const maxViewportLeft = Math.max(margin, viewportWidth - statusWidth - margin);
     const viewportLeft = Math.min(Math.max(toolbarLeft, margin), maxViewportLeft);
     const leftOffset = viewportLeft - toolbarLeft;
-    const availableWidth = Math.max(1, viewportWidth - viewportLeft - margin);
-    const maxWidth = Math.min(MAX_STATUS_WIDTH_PX, availableWidth);
 
     const nodes = [canonicalStatus(toolbar), document.getElementById(FALLBACK_ID)].filter(Boolean);
     for (const node of nodes) {
       try {
         node.style.setProperty('left', `${leftOffset}px`, 'important');
-        node.style.setProperty('max-width', `${maxWidth}px`, 'important');
+        node.style.setProperty('width', `${statusWidth}px`, 'important');
+        node.style.setProperty('max-width', `${statusWidth}px`, 'important');
       } catch {}
     }
   }
