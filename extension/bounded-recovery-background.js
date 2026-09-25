@@ -13,17 +13,9 @@
   const PROFILE_KEY = 'recovery';
   const ALARM_NAME = 'chatgpt-notifier-recovery-deadline';
   const RELOAD_RECONCILE_MS = 15_000;
-  const REQUEST_EVIDENCE_TIMEOUT_MS = 12_000;
-  const REQUEST_FILTER = {
-    urls: [
-      'https://chatgpt.com/backend-api/f/conversation*',
-      'https://chatgpt.com/backend-api/conversation*'
-    ]
-  };
 
   let databasePromise = null;
   let processingPromise = null;
-  const requestWatchers = new Map();
 
   const model = () => globalThis.ChatGPTNotifierRecoveryModel || null;
   const policy = () => globalThis.ChatGPTNotifierContinuationPolicy || null;
@@ -44,16 +36,6 @@
     return null;
   }
 
-  function normalizePathname(url) {
-    try { return new URL(url).pathname.replace(/\/+$/, ''); } catch { return ''; }
-  }
-
-  function isAnswerStreamRequest(details) {
-    if (details.tabId < 0 || details.method !== 'POST') return false;
-    const path = normalizePathname(details.url);
-    return path === '/backend-api/f/conversation' || path === '/backend-api/conversation';
-  }
-
   function openDatabase() {
     if (databasePromise) return databasePromise;
     databasePromise = new Promise((resolve, reject) => {
@@ -68,7 +50,7 @@
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error || new Error('Could not open bounded recovery database.'));
-      request.onblocked = () => reject(new Error('Bounded recovery database upgrade was blocked.'));
+      request.onblocked = () => reject(new Error('Monitored-build database upgrade was blocked.'));
     });
     databasePromise.catch(() => { databasePromise = null; });
     return databasePromise;
@@ -267,6 +249,11 @@
     } catch {}
   }
 
+  async function stopForAttention(generation, reason) {
+    try { await monitor()?.parkCodeWatchdogForAttention?.(generation.conversationId, String(reason || 'automation-stopped')); } catch {}
+    await raiseAttention(generation, reason);
+  }
+
   async function resolveIncidents(generationKeyValue, resolution) {
     for (const incident of await getAll(INCIDENT_STORE)) {
       if (incident.generationKey !== generationKeyValue || ['resolved', 'dismissed'].includes(String(incident.state || ''))) continue;
@@ -307,54 +294,6 @@
     const when = Math.max(Date.now() + 1_000, Number(pending[0].nextEligibleAt));
     try { await chrome.alarms.create(ALARM_NAME, { when }); } catch {}
   }
-
-  function requestWatch(tabId, conversationId) {
-    const prior = requestWatchers.get(tabId);
-    if (prior) prior.finish({ accepted: false, reason: 'superseded-request-watch' });
-    let requestId = '';
-    let settled = false;
-    let resolvePromise;
-    const promise = new Promise((resolve) => { resolvePromise = resolve; });
-    const timer = setTimeout(() => watcher.finish({ accepted: false, reason: 'request-evidence-timeout' }), REQUEST_EVIDENCE_TIMEOUT_MS);
-    const watcher = {
-      tabId,
-      conversationId,
-      promise,
-      get requestId() { return requestId; },
-      setRequestId(value) { if (!requestId) requestId = String(value || ''); },
-      finish(result) {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        if (requestWatchers.get(tabId) === watcher) requestWatchers.delete(tabId);
-        resolvePromise({ requestId, ...(result || {}) });
-      }
-    };
-    requestWatchers.set(tabId, watcher);
-    return watcher;
-  }
-
-  chrome.webRequest.onBeforeRequest.addListener((details) => {
-    if (!isAnswerStreamRequest(details)) return;
-    const watcher = requestWatchers.get(details.tabId);
-    if (!watcher || watcher.requestId) return;
-    watcher.setRequestId(details.requestId);
-  }, REQUEST_FILTER);
-
-  chrome.webRequest.onHeadersReceived.addListener((details) => {
-    if (!isAnswerStreamRequest(details)) return;
-    const watcher = requestWatchers.get(details.tabId);
-    if (!watcher || !watcher.requestId || watcher.requestId !== String(details.requestId || '')) return;
-    const accepted = details.statusCode >= 200 && details.statusCode < 300;
-    watcher.finish({ accepted, statusCode: details.statusCode, reason: accepted ? 'request-accepted' : 'request-rejected' });
-  }, REQUEST_FILTER);
-
-  chrome.webRequest.onErrorOccurred.addListener((details) => {
-    if (!isAnswerStreamRequest(details)) return;
-    const watcher = requestWatchers.get(details.tabId);
-    if (!watcher || !watcher.requestId || watcher.requestId !== String(details.requestId || '')) return;
-    watcher.finish({ accepted: false, reason: 'request-error', error: String(details.error || '') });
-  }, REQUEST_FILTER);
 
   async function claimAction(kind, generation, incident, observation, options = {}) {
     const database = await openDatabase();
@@ -431,7 +370,7 @@
       await putRecord(INCIDENT_STORE, updated);
       if (result.uncertain) {
         const generation = await getRecord(GENERATION_STORE, updated.generationKey);
-        if (generation) await raiseAttention(generation, result.reason || 'action-outcome-uncertain');
+        if (generation) await stopForAttention(generation, result.reason || 'action-outcome-uncertain');
       }
     }
     await scheduleEarliestWake();
@@ -449,7 +388,7 @@
       return;
     }
     try {
-      await chrome.tabs.reload(generation.ownerTabId);
+      await chrome.tabs.reload(generation.ownerTabId, { bypassCache: true });
     } catch {
       await finishClaim(claim, incident, { uncertain: true, state: 'attention', reason: 'reload-call-failed' });
       return;
@@ -486,13 +425,18 @@
       await finishClaim(claim, incident, { state: 'observing', resolution: decision.reason });
       return;
     }
+    if (decision.state === 'waiting') {
+      await finishClaim(claim, incident, { state: 'waiting-watchdog', resolution: decision.reason });
+      return;
+    }
     if (decision.state === 'scheduled') {
-      await finishClaim(claim, incident, { state: 'scheduled', nextEligibleAt: Date.now() + model().thresholds.profileActionSpacingMs, resolution: decision.reason });
+      const nextEligibleAt = Date.now() + model().postReloadScheduleDelay(decision.reason, incident);
+      await finishClaim(claim, incident, { state: 'scheduled', nextEligibleAt, resolution: decision.reason });
       await putRecord(INCIDENT_STORE, {
         ...(await getRecord(INCIDENT_STORE, incident.incidentId)),
         reason: decision.reason,
         state: 'scheduled',
-        nextEligibleAt: Date.now() + model().thresholds.profileActionSpacingMs,
+        nextEligibleAt,
         updatedAt: Date.now()
       });
       return;
@@ -500,51 +444,11 @@
     await finishClaim(claim, incident, { uncertain: true, state: 'attention', reason: decision.reason });
   }
 
-  async function performMessageAction(kind, claim, generation, incident, observation) {
-    const watcher = requestWatch(generation.ownerTabId, generation.conversationId);
-    let result = null;
-    try {
-      result = await chrome.tabs.sendMessage(generation.ownerTabId, {
-        type: 'CHATGPT_BOUNDED_RECOVERY_COMMAND',
-        kind,
-        expected: {
-          conversationId: generation.conversationId,
-          documentId: String(observation.documentId || generation.ownerDocumentId || ''),
-          promptKey: generation.promptKey,
-          promptRevision: generation.promptRevision,
-          assistantKey: String(observation.assistantKey || ''),
-          assistantRevision: String(observation.assistantRevision || '')
-        }
-      });
-    } catch {}
-    if (!result?.clicked) watcher.finish({ accepted: false, reason: result?.reason || 'recovery-command-unreachable' });
-    const requestEvidence = await watcher.promise;
-    let currentIdentity = null;
-    try { currentIdentity = conversationFromUrl((await chrome.tabs.get(generation.ownerTabId))?.url); } catch {}
-    const confirmed = result?.ok === true && Boolean(result?.newPromptKey) && requestEvidence?.accepted === true && currentIdentity?.id === generation.conversationId;
-    if (!confirmed) {
-      await finishClaim(claim, incident, {
-        uncertain: result?.clicked === true,
-        state: 'attention',
-        reason: [result?.reason, requestEvidence?.reason, currentIdentity?.id === generation.conversationId ? '' : 'conversation-changed-after-action'].filter(Boolean).join('+') || 'recovery-message-unconfirmed'
-      });
-      return;
-    }
-    await registerAutomaticPrompt({
-      promptKey: result.newPromptKey,
-      conversationId: generation.conversationId,
-      humanRunId: generation.humanRunId,
-      parentGenerationKey: generation.generationKey,
-      actionId: claim.leaseId
-    });
-    await finishClaim(claim, incident, { state: 'resolved', resolution: `${kind}-confirmed` });
-  }
-
   async function processIncident(incidentId) {
     if (processingPromise) return await processingPromise;
     processingPromise = (async () => {
       const incident = await getRecord(INCIDENT_STORE, incidentId);
-      if (!incident || ['resolved', 'dismissed', 'attention'].includes(String(incident.state || ''))) return;
+      if (!incident || ['resolved', 'dismissed', 'attention', 'waiting-watchdog'].includes(String(incident.state || ''))) return;
       const generation = await getRecord(GENERATION_STORE, incident.generationKey);
       const humanRun = generation ? await getRecord(HUMAN_RUN_STORE, generation.humanRunId) : null;
       const profile = await readProfile();
@@ -558,7 +462,7 @@
         } else {
           await openBreaker('action-interrupted-uncertain');
           await putRecord(INCIDENT_STORE, { ...incident, state: 'attention', budget: { ...incident.budget, uncertainAction: true }, inFlight: null, nextEligibleAt: 0, updatedAt: Date.now() });
-          await raiseAttention(generation, 'action-interrupted-uncertain');
+          await stopForAttention(generation, 'action-interrupted-uncertain');
         }
         return;
       }
@@ -567,12 +471,12 @@
       const inspected = await queryTabSnapshot(generation.ownerTabId);
       if (!inspected.ok) {
         await putRecord(INCIDENT_STORE, { ...incident, state: 'attention', nextEligibleAt: 0, updatedAt: Date.now() });
-        await raiseAttention(generation, inspected.reason);
+        await stopForAttention(generation, inspected.reason);
         return;
       }
       if (inspected.snapshot.conversationId !== generation.conversationId || inspected.snapshot.promptKey !== generation.promptKey) {
         await putRecord(INCIDENT_STORE, { ...incident, state: 'attention', nextEligibleAt: 0, updatedAt: Date.now() });
-        await raiseAttention(generation, 'request-identity-changed-before-recovery');
+        await stopForAttention(generation, 'request-identity-changed-before-recovery');
         return;
       }
       const classification = policy()?.classifyObservation?.(inspected.snapshot) || generation.classification || {};
@@ -580,9 +484,11 @@
       if (!candidate.kind) {
         if (['coded-terminal', 'work-resumed-after-reload'].includes(candidate.reason) || classification.state === 'working') {
           await putRecord(INCIDENT_STORE, { ...incident, state: 'resolved', resolution: candidate.reason || 'work-resumed', nextEligibleAt: 0, updatedAt: Date.now() });
+        } else if (candidate.reason === model().watchdogWaitReason) {
+          await putRecord(INCIDENT_STORE, { ...incident, state: 'waiting-watchdog', resolution: candidate.reason, nextEligibleAt: 0, updatedAt: Date.now() });
         } else {
           await putRecord(INCIDENT_STORE, { ...incident, state: 'attention', nextEligibleAt: 0, updatedAt: Date.now() });
-          await raiseAttention(generation, candidate.reason || classification.reason || 'automation-stopped');
+          await stopForAttention(generation, candidate.reason || classification.reason || 'automation-stopped');
         }
         return;
       }
@@ -594,12 +500,11 @@
           await scheduleEarliestWake();
         } else {
           await putRecord(INCIDENT_STORE, { ...live, state: 'attention', nextEligibleAt: 0, updatedAt: Date.now() });
-          await raiseAttention(generation, claimed.reason);
+          await stopForAttention(generation, claimed.reason);
         }
         return;
       }
-      if (candidate.kind === 'reload') await performReload(claimed, generation, incident);
-      else await performMessageAction(candidate.kind, claimed, generation, incident, inspected.snapshot);
+      await performReload(claimed, generation, incident);
     })().finally(() => { processingPromise = null; scheduleEarliestWake().catch(() => {}); });
     return await processingPromise;
   }
@@ -624,18 +529,34 @@
 
     if (classification.openProfileBreaker) {
       await openBreaker(classification.reason);
-      await raiseAttention(updated, classification.reason);
+      await stopForAttention(updated, classification.reason);
       return;
     }
     if (classification.state === 'coded-terminal') {
       await resolveIncidents(updated.generationKey, `coded:${snapshot.statusCode}`);
       return;
     }
+
+    const existingIncident = await incidentForGeneration(updated.generationKey);
+    if (classification.state === 'working' && existingIncident) {
+      await putRecord(INCIDENT_STORE, { ...existingIncident, state: 'resolved', resolution: 'work-resumed', nextEligibleAt: 0, updatedAt: Date.now() });
+      await scheduleEarliestWake();
+      return;
+    }
     if (enrollment.recoveryEnabled !== true) return;
 
-    const provisional = model().recoveryCandidate(classification, snapshot, { budget: {} });
+    const provisional = model().recoveryCandidate(classification, snapshot, { budget: existingIncident?.budget || {} });
     if (!provisional.kind) return;
-    const incident = await ensureIncident(updated, classification);
+
+    if (updated.automatic === true) {
+      const incident = existingIncident || await ensureIncident(updated, classification);
+      await putRecord(INCIDENT_STORE, { ...incident, state: 'attention', resolution: 'stale-after-automatic-continue', nextEligibleAt: 0, updatedAt: Date.now() });
+      await stopForAttention(updated, 'stale-after-automatic-continue');
+      return;
+    }
+
+    const incident = existingIncident || await ensureIncident(updated, classification);
+    if (incident.state === 'waiting-watchdog') return;
     if (Number(incident.nextEligibleAt || 0) <= Date.now()) processIncident(incident.incidentId).catch(() => {});
     await scheduleEarliestWake();
   }
@@ -728,7 +649,7 @@
         if (incident) {
           const generation = await getRecord(GENERATION_STORE, incident.generationKey);
           await putRecord(INCIDENT_STORE, { ...incident, state: 'attention', budget: { ...incident.budget, uncertainAction: true }, inFlight: null, nextEligibleAt: 0, updatedAt: Date.now() });
-          if (generation) await raiseAttention(generation, 'action-interrupted-uncertain');
+          if (generation) await stopForAttention(generation, 'action-interrupted-uncertain');
         }
       }
     }
@@ -766,13 +687,8 @@
     })().catch(() => {});
   });
 
-  chrome.tabs.onRemoved.addListener((tabId) => {
-    const watcher = requestWatchers.get(tabId);
-    if (watcher) watcher.finish({ accepted: false, reason: 'owner-tab-closed' });
-  });
-
   globalThis.__chatgptNotifierBoundedRecovery = Object.freeze({
-    version: 1,
+    version: 2,
     openBreaker,
     registerAutomaticPrompt,
     admitNormalContinuation,
