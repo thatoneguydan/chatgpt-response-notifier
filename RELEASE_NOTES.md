@@ -1,4 +1,12 @@
-# ChatGPT Response Notifier 0.9.86
+# ChatGPT Response Notifier 0.9.87
+
+- Removes direct Continue authority from bounded stale/error recovery. Only the 30-minute watchdog may send automatic Continue messages, preventing recovery incidents from creating 30–60 second Continue cascades.
+- Changes stale-chat recovery to one cache-bypassing hard refresh (`bypassCache: true`, equivalent to a Ctrl+F5-style reload), then observes whether work resumes. If it remains stale, recovery yields to the existing watchdog instead of sending or scheduling another recovery Continue.
+- Keeps the watchdog timer authoritative across stale recovery: a successful automatic Continue remains followed by the normal 30-minute watchdog window rather than a recovery-owned short cadence.
+- After the watchdog retry budget is exhausted and a hard refresh still leaves the automatic generation stale, the watchdog is parked and a Needs attention notification is raised instead of continuing indefinitely.
+- Adds regression coverage proving stale recovery has no message-send command, performs only the hard-refresh path, and cannot admit a recovery Continue action.
+
+## Previous: 0.9.86
 
 - Adds a live rendered-footer authority that detects the final GitHub status from connected ChatGPT DOM instead of depending on detached-clone line breaks. This covers segmented/sibling footer markup that was visibly present but still reported as `terminal-code-not-observed`.
 - Routes a confirmed definitive rendered status directly to both watchdog parking and the durable notification outbox, so `PLANNING_ACTIVE`, `COMPLETE_APPLIED`, `COMPLETE_NO_CHANGES`, and `BLOCKED_HUMAN` no longer depend on a second fragile DOM query before stopping or notifying.

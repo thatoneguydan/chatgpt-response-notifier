@@ -181,10 +181,9 @@ test('missing footer stays passive after the ChatGPT request settles', () => {
   assert.equal(done.formatRepairCandidate, false);
 });
 
-test('explicit transport failures reload five times with five-minute surviving spacing, then continue once', () => {
+test('explicit transport failure hard-refreshes once then yields to the watchdog', () => {
   const context = loadRecoveryPolicyAndModel();
   const model = context.ChatGPTNotifierRecoveryModel;
-  const policy = context.ChatGPTNotifierContinuationPolicy;
   const classification = { state: 'attention', reason: 'timed-out' };
   const broken = recoveryObservation({
     explicitInterruption: true,
@@ -192,25 +191,21 @@ test('explicit transport failures reload five times with five-minute surviving s
     interruptionAttribution: 'current-request-global'
   });
 
-  assert.equal(policy.thresholds.explicitInterruptionReloadCap, 5);
-  assert.equal(policy.thresholds.explicitInterruptionRetryMs, 300_000);
-  assert.equal(policy.thresholds.silentStopReloadCap, 3);
+  assert.equal(model.thresholds.explicitInterruptionReloadCap, 1);
+  assert.equal(model.thresholds.silentStopReloadCap, 1);
   assert.equal(model.firstEligibleAt('timed-out', 1234, 1), 1234);
-  for (let reloads = 0; reloads < 5; reloads += 1) {
-    assert.equal(model.recoveryCandidate(classification, broken, { reason: reloads ? model.postReloadExplicitReason : 'timed-out', budget: { reloads, continuations: 0 } }).kind, 'reload', `reload budget ${reloads}`);
-  }
-  assert.equal(model.recoveryCandidate(classification, broken, { reason: model.postReloadExplicitReason, budget: { reloads: 5, continuations: 0 } }).kind, 'continue');
-  assert.equal(model.recoveryCandidate(classification, broken, { reason: model.postReloadExplicitReason, budget: { reloads: 5, continuations: 1 } }).kind, '');
-  assert.equal(model.postReloadScheduleDelay(model.postReloadExplicitReason, { reason: model.postReloadExplicitReason, budget: { reloads: 1 } }), 300_000);
-  assert.equal(model.postReloadScheduleDelay(model.postReloadExplicitReason, { reason: model.postReloadExplicitReason, budget: { reloads: 5 } }), 30_000);
+  assert.equal(model.recoveryCandidate(classification, broken, { reason: 'timed-out', budget: { reloads: 0, continuations: 0 } }).kind, 'reload');
+  const afterRefresh = model.recoveryCandidate(classification, broken, { reason: model.postReloadExplicitReason, budget: { reloads: 1, continuations: 0 } });
+  assert.deepEqual({ kind: afterRefresh.kind, reason: afterRefresh.reason }, { kind: '', reason: model.watchdogWaitReason });
+  assert.equal(Array.from(model.actionKinds).includes('continue'), false);
 
   const postReload = model.postReloadDecision(
     recoveryObservation({ documentId: 'document-2', explicitInterruption: true, interruptionKind: 'timed-out', interruptionAttribution: 'current-request-global' }),
     { conversationId: 'conversation-1', promptKey: 'conversation-1|user-1', documentId: 'document-1' }
   );
-  assert.equal(postReload.state, 'scheduled');
-  assert.equal(postReload.kind, 'reload');
-  assert.equal(postReload.reason, 'post-reload-explicit-interruption');
+  assert.equal(postReload.state, 'waiting');
+  assert.equal(postReload.kind, '');
+  assert.equal(postReload.reason, model.watchdogWaitReason);
 });
 
 test('tool failure coded completion is routed through the existing continuation handler instead of notification', async () => {

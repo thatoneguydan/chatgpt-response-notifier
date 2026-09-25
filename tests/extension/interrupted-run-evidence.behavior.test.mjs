@@ -138,65 +138,66 @@ test('current safety vetoes retain evidence but never reassert an interruption i
   }
 });
 
-test('durable explicit failure survives the bounded five-reload sequence and permits only one recovery Continue', () => {
+test('durable explicit failure survives one hard refresh then yields to the watchdog without recovery Continue', () => {
   const { continuation, recovery, evidence } = loadPolicies();
   const failed = failedObservation();
   const captured = evidence.fromObservation(failed, continuation.classifyObservation(failed), 10_000);
   let run = humanRun();
   let currentIncident = incident();
   let shared = profile();
-  let now = 10_000;
+  const now = 10_000;
 
-  for (let attempt = 1; attempt <= 5; attempt += 1) {
-    const afterReload = failedObservation({
-      documentId: `document-${attempt + 1}`,
-      explicitInterruption: false,
-      interruptionKind: '',
-      interruptionAttribution: '',
-      requestPhase: 'unknown',
-      requestStartedAt: 0,
-      requestSettledAt: 0
-    });
-    const durable = evidence.evaluate(afterReload, captured, now);
-    assert.equal(durable.action, 'patch', `durable patch ${attempt}`);
-    const inspected = { ...afterReload, ...durable.patch };
-    const classification = continuation.classifyObservation(inspected);
-    assert.equal(classification.reason, 'timed-out', `classification ${attempt}`);
-    assert.equal(recovery.recoveryCandidate(classification, inspected, currentIncident).kind, 'reload', `reload candidate ${attempt}`);
-    const claim = recovery.claimAction('reload', run, currentIncident, shared, inspected, {
-      now,
-      leaseId: `reload-${attempt}`,
-      recoveryEnabled: true
-    });
-    assert.equal(claim.allowed, true, `reload claim ${attempt}`);
-    assert.equal(claim.incident.budget.reloads, attempt, `reload budget ${attempt}`);
-    const finished = recovery.finishAction(claim.humanRun, claim.incident, claim.profile, {
-      leaseId: claim.leaseId,
-      state: 'scheduled'
-    }, { now: now + 1 });
-    run = finished.humanRun;
-    currentIncident = { ...finished.incident, reason: recovery.postReloadExplicitReason };
-    shared = finished.profile;
-    now = shared.nextProfileActionAt;
-  }
-
-  const finalReload = failedObservation({ documentId: 'document-final', explicitInterruption: false, interruptionKind: '', requestPhase: 'unknown', requestStartedAt: 0, requestSettledAt: 0 });
-  const durable = evidence.evaluate(finalReload, captured, now);
-  const inspected = { ...finalReload, ...durable.patch };
+  const afterReload = failedObservation({
+    documentId: 'document-2',
+    explicitInterruption: false,
+    interruptionKind: '',
+    interruptionAttribution: '',
+    requestPhase: 'unknown',
+    requestStartedAt: 0,
+    requestSettledAt: 0
+  });
+  const durable = evidence.evaluate(afterReload, captured, now);
+  assert.equal(durable.action, 'patch');
+  const inspected = { ...afterReload, ...durable.patch };
   const classification = continuation.classifyObservation(inspected);
-  assert.equal(recovery.recoveryCandidate(classification, inspected, currentIncident).kind, 'continue');
-  const continuationClaim = recovery.claimAction('continue', run, currentIncident, shared, inspected, {
+  assert.equal(classification.reason, 'timed-out');
+  assert.equal(recovery.recoveryCandidate(classification, inspected, currentIncident).kind, 'reload');
+
+  const claim = recovery.claimAction('reload', run, currentIncident, shared, inspected, {
     now,
-    leaseId: 'continue-1',
+    leaseId: 'reload-1',
     recoveryEnabled: true
   });
-  assert.equal(continuationClaim.allowed, true);
-  const finished = recovery.finishAction(continuationClaim.humanRun, continuationClaim.incident, continuationClaim.profile, {
-    leaseId: continuationClaim.leaseId,
-    state: 'resolved'
+  assert.equal(claim.allowed, true);
+  assert.equal(claim.incident.budget.reloads, 1);
+  const finished = recovery.finishAction(claim.humanRun, claim.incident, claim.profile, {
+    leaseId: claim.leaseId,
+    state: 'scheduled'
   }, { now: now + 1 });
-  assert.equal(finished.incident.budget.continuations, 1);
-  assert.equal(recovery.recoveryCandidate(classification, inspected, finished.incident).kind, '');
+  run = finished.humanRun;
+  currentIncident = { ...finished.incident, reason: recovery.postReloadExplicitReason };
+  shared = finished.profile;
+
+  const stillFailed = failedObservation({
+    documentId: 'document-3',
+    explicitInterruption: false,
+    interruptionKind: '',
+    interruptionAttribution: '',
+    requestPhase: 'unknown',
+    requestStartedAt: 0,
+    requestSettledAt: 0
+  });
+  const persisted = evidence.evaluate(stillFailed, captured, shared.nextProfileActionAt);
+  assert.equal(persisted.action, 'patch');
+  const stillInspected = { ...stillFailed, ...persisted.patch };
+  const stillClassification = continuation.classifyObservation(stillInspected);
+  const candidate = recovery.recoveryCandidate(stillClassification, stillInspected, currentIncident);
+  assert.deepEqual({ kind: candidate.kind, reason: candidate.reason }, { kind: '', reason: recovery.watchdogWaitReason });
+  assert.equal(recovery.admissionDecision('continue', run, currentIncident, shared, stillInspected, {
+    now: shared.nextProfileActionAt,
+    recoveryEnabled: true
+  }).reason, 'unknown-recovery-action');
+  assert.equal(Number(currentIncident.budget.continuations || 0), 0);
 });
 
 test('production background loads durable evidence before bounded recovery and persists it outside page session state', () => {
