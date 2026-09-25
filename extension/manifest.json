@@ -37,8 +37,7 @@
         "monitor-script.js",
         "bounded-recovery-script.js",
         "status-script.js",
-        "recovery-script.js",
-        "quick-continue-monitor-bridge.js"
+        "recovery-script.js"
       ],
       "run_at": "document_start"
     },
