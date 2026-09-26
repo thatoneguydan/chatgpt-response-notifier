@@ -30,7 +30,7 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'send-transaction.js', 'runtime-reset.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.21');
+  assert.equal(manifest.version, '1.2.22');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -133,6 +133,8 @@ test('shared send transaction crosses editor commit boundaries and owns the only
   assert.match(sendTransactionSource, /function afterCommitBoundary\(\)/);
   assert.match(sendTransactionSource, /raf\(\(\) => raf\(resolve\)\)/);
   assert.match(sendTransactionSource, /composerApi\.read\(composer\) !== expected/);
+  assert.match(sendTransactionSource, /function liveComposer\(previous = null\)/);
+  assert.match(sendTransactionSource, /settleExpectedComposer/);
   assert.equal((sendTransactionSource.match(/sendButton\.click\(\)/g) || []).length, 1);
   assert.doesNotMatch(contentSource, /sendButton\.click\(\)/);
   assert.doesNotMatch(hoverEditSource, /sendButton\.click\(\)/);
@@ -229,6 +231,7 @@ test('clock toggle atomically timestamps and sends only trusted manual sends', (
   assert.match(hoverEditSource, /manualTimestampText/);
   assert.match(hoverEditSource, /configApi\.subscribe/);
   assert.match(hoverEditSource, /function hasLeadingTimestamp\(text\)/);
+  assert.match(hoverEditSource, /function clockFromEvent\(event\)/);
   assert.match(hoverEditSource, /event\?\.isTrusted !== true/);
   assert.match(hoverEditSource, /event\.key !== 'Enter' \|\| event\.shiftKey \|\| event\.altKey/);
   assert.match(hoverEditSource, /event\.isComposing \|\| event\.keyCode === 229/);
