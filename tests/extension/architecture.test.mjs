@@ -691,7 +691,7 @@ test('terminal watchdog state is sticky and stale attachment generations cannot 
 
   assert.match(monitorPage, /stickyTerminalPromptKey/);
   assert.match(monitorPage, /stickyTerminalStatusCode/);
-  assert.match(statusPage, /RUNTIME_VERSION = 16/);
+  assert.match(statusPage, /RUNTIME_VERSION = 17/);
   assert.match(statusPage, /stickyTerminalPromptKey/);
   assert.match(statusPage, /stickyTerminalStatusCode/);
 
