@@ -1,4 +1,11 @@
-# ChatGPT Response Notifier 0.9.87
+# ChatGPT Response Notifier 0.9.88
+
+- Enforces one automatic Continue authority: only the 30-minute watchdog may send an automatic continuation. Legacy coded-completion and status-observer routes now hand recoverable statuses back to the watchdog instead of immediately sending another response.
+- Removes the watchdog persistence invariant's hidden 60-second `incomplete-awaiting-continuation` fallback alarm. The invariant may preserve state but can no longer invent a retry cadence or schedule alarms.
+- Migrates persisted 0.9.87 short-cadence watchdog records on worker startup, clearing the poisoned one-minute retry marker and restoring the correct 30-minute deadline when a prior automatic send timestamp is available.
+- Adds regression coverage that fails if the invariant creates an alarm again or if the legacy `CHATGPT_CONTINUE_COMMAND` path can send for an automatic work-status code.
+
+## Previous: 0.9.87
 
 - Removes direct Continue authority from bounded stale/error recovery. Only the 30-minute watchdog may send automatic Continue messages, preventing recovery incidents from creating 30–60 second Continue cascades.
 - Changes stale-chat recovery to one cache-bypassing hard refresh (`bypassCache: true`, equivalent to a Ctrl+F5-style reload), then observes whether work resumes. If it remains stale, recovery yields to the existing watchdog instead of sending or scheduling another recovery Continue.
