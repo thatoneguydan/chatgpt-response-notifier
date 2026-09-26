@@ -14,7 +14,7 @@ test('production loads request lifecycle correction after the canonical monitor 
   const lifecycleAt = bootstrap.indexOf("importScripts('watchdog-request-lifecycle-fix-background.js')");
   const quickBridgeAt = bootstrap.indexOf("importScripts('quick-continue-monitor-bridge-background.js')");
   assert.ok(backgroundAt >= 0 && lifecycleAt > backgroundAt && quickBridgeAt > lifecycleAt);
-  assert.match(source, /RUNTIME_VERSION = 2/);
+  assert.match(source, /RUNTIME_VERSION = 3/);
   assert.doesNotThrow(() => new vm.Script(source));
 });
 
@@ -26,6 +26,19 @@ test('a real conversation POST is the timer start boundary', () => {
   assert.match(source, /requestStartedAt:\s*Math\.max\(0, Number\(requestStartedAt/);
   assert.match(source, /chrome\.tabs\.onUpdated\.addListener/);
   assert.match(source, /ROUTE_BIND_RETRIES/);
+});
+
+test('fresh observed request releases only the prior terminal stop before starting a new timer', () => {
+  assert.match(source, /async function releaseTerminalStopForFreshRequest/);
+  assert.match(source, /current\?\.stopped/);
+  assert.match(source, /startsWith\('status:'\)/);
+  assert.match(source, /startedAt <= Math\.max\(0, Number\(current\.lastRequestStartedAt \|\| 0\)\)/);
+  assert.match(source, /operatorPromptArmedAt:\s*Math\.max\(startedAt, Number\(current\.operatorPromptArmedAt \|\| 0\) \+ 1\)/);
+  assert.match(source, /await releaseTerminalStopForFreshRequest\(identity\.id, requestStartedAt\)/);
+  assert.match(source, /stopped:\s*false/);
+  assert.match(source, /stopReason:\s*''/);
+  assert.match(source, /lastStatusCode:\s*''/);
+  assert.match(source, /sendCount:\s*0/);
 });
 
 test('manual Monitor enable is deferred until a later request instead of creating a countdown', () => {
