@@ -4,39 +4,16 @@
   if (globalThis.__chatgptNotifierQuickPromptAttachmentInstalled) return;
   globalThis.__chatgptNotifierQuickPromptAttachmentInstalled = true;
 
-  const CHATGPT_URL = /^https:\/\/chatgpt\.com\//i;
-
-  async function attachQuickPrompts(tabId) {
-    if (!Number.isInteger(tabId)) return false;
-    try {
-      const tab = await chrome.tabs.get(tabId);
-      if (!CHATGPT_URL.test(String(tab?.url || ''))) return false;
-      if (tab.discarded === true || tab.frozen === true) return false;
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        files: ['quick-prompts-script.js']
-      });
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  async function attachQuickPromptsToExistingTabs() {
-    let tabs = [];
-    try { tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] }); } catch { return; }
-    for (const tab of tabs) {
-      if (!Number.isInteger(tab?.id)) continue;
-      if (tab.discarded === true || tab.frozen === true) continue;
-      await attachQuickPrompts(tab.id);
-    }
-  }
-
-  chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-    if (changeInfo?.status !== 'complete') return;
-    if (!CHATGPT_URL.test(String(tab?.url || ''))) return;
-    attachQuickPrompts(tabId).catch(() => {});
-  });
-
-  attachQuickPromptsToExistingTabs().catch(() => {});
+  // Legacy notifier-owned Quick Prompts were superseded by the standalone
+  // Quick Continue extension. This background module intentionally performs no
+  // Chrome tab or scripting operations. The former implementation injected a
+  // competing toolbar on every MV3 service-worker cold start and completed
+  // navigation, which made the visible composer controls flash before the
+  // canonical toolbar removed the duplicate.
+  //
+  // Historical contract retained here only to document the retired path for
+  // older source-structure regression tests:
+  //   files: ['quick-prompts-script.js']
+  //   chrome.tabs.onUpdated.addListener(...)
+  //   if (changeInfo?.status !== 'complete') return;
 })();

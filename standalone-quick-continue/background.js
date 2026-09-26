@@ -85,17 +85,23 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 });
 
 chrome.runtime.onStartup.addListener(() => {
+  // Restored/new pages receive the declared content scripts from Chrome itself.
+  // Reinjecting here used to dispose and rebuild the live toolbar during startup.
   ensureUpdateAlarm();
-  injectCurrentRuntimeIntoOpenTabs().catch(() => {});
   checkManagedUpdate().catch(() => {});
 });
 
 chrome.runtime.onInstalled.addListener(() => {
+  // Existing ChatGPT tabs do need a one-time hot replacement after an actual
+  // extension install/update. This is the only lifecycle path allowed to run
+  // runtime-reset.js; ordinary MV3 service-worker wakes must never rebuild UI.
   ensureUpdateAlarm();
   injectCurrentRuntimeIntoOpenTabs().catch(() => {});
   checkManagedUpdate().catch(() => {});
 });
 
+// MV3 service workers are routinely stopped and restarted while Chrome remains
+// open. Keep cold-start work side-effect free with respect to page DOM/runtime
+// ownership: alarms/update checks are safe, content-script reinjection is not.
 ensureUpdateAlarm();
-injectCurrentRuntimeIntoOpenTabs().catch(() => {});
 checkManagedUpdate().catch(() => {});
