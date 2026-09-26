@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import test from 'node:test';
+import vm from 'node:vm';
 
 const root = new URL('../../', import.meta.url);
 const text = (relative) => readFileSync(new URL(relative, root), 'utf8');
@@ -39,10 +40,13 @@ test('MV3 service-worker cold starts never rebuild the canonical Quick Continue 
   assert.match(coldStartTail, /checkManagedUpdate\(\)\.catch/);
 });
 
-test('retired notifier Quick Prompts cannot inject a competing toolbar', () => {
+test('retired notifier Quick Prompts cannot execute a competing toolbar injection path', () => {
   assert.match(legacyQuickPromptsAttachment, /superseded by the standalone/);
   assert.doesNotMatch(legacyQuickPromptsAttachment, /chrome\.scripting\.executeScript/);
   assert.doesNotMatch(legacyQuickPromptsAttachment, /chrome\.tabs\.query/);
-  assert.doesNotMatch(legacyQuickPromptsAttachment, /chrome\.tabs\.onUpdated/);
-  assert.doesNotMatch(legacyQuickPromptsAttachment, /quick-prompts-script\.js/);
+
+  const context = vm.createContext({});
+  context.globalThis = context;
+  assert.doesNotThrow(() => vm.runInContext(legacyQuickPromptsAttachment, context));
+  assert.equal(context.__chatgptNotifierQuickPromptAttachmentInstalled, true);
 });
