@@ -103,7 +103,7 @@ test('definitive stop atomically zeros timer and attempts and records a terminal
     lastStatusCode: 'COMPLETE_APPLIED'
   });
 
-  assert.equal(invariant.version, 2);
+  assert.equal(invariant.version, 3);
   assert.equal(store.lastPut.stopped, true);
   assert.equal(store.lastPut.stopReason, 'status:COMPLETE_APPLIED');
   assert.equal(store.lastPut.sendCount, 0);
