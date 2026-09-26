@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const VERSION = 2;
+  const VERSION = 3;
   if (globalThis.ChatGPTQuickContinueSend?.version === VERSION) return;
 
   const composerApi = globalThis.ChatGPTQuickContinueComposer;
@@ -130,6 +130,30 @@
     });
   }
 
+  function submitThroughLiveForm(composer, sendButton) {
+    let form = null;
+    try {
+      form = sendButton?.form
+        || sendButton?.closest?.('form')
+        || composer?.closest?.('form')
+        || null;
+    } catch {}
+
+    if (form && typeof form.requestSubmit === 'function') {
+      try {
+        form.requestSubmit(sendButton);
+        return { ok: true, reason: 'sent', activation: 'request-submit' };
+      } catch {}
+    }
+
+    try {
+      sendButton.click();
+      return { ok: true, reason: 'sent', activation: 'click-fallback' };
+    } catch {
+      return { ok: false, reason: 'send-failed', activation: 'none' };
+    }
+  }
+
   async function submit(composer, text, { replace = true, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
     composer = liveComposer(composer);
     if (!composer) return { ok: false, reason: 'composer-not-found' };
@@ -148,9 +172,9 @@
     if (!ready) return { ok: false, reason: 'send-not-ready' };
 
     // ChatGPT can remount the Lexical composer while an edit is committing. Never
-    // validate a detached editor and then click Send for a different live editor.
+    // validate a detached editor and then activate Send for a different live editor.
     // Cross one more commit boundary, reacquire the current composer, and require
-    // the exact expected text on that live node immediately before the one click.
+    // the exact expected text on that live node immediately before submission.
     await afterCommitBoundary();
     composer = liveComposer(ready.composer);
     if (!composer || composerApi.read(composer) !== expected) {
@@ -159,12 +183,11 @@
     const sendButton = enabledSendButton(composer);
     if (!sendButton) return { ok: false, reason: 'send-not-ready' };
 
-    try {
-      sendButton.click();
-      return { ok: true, reason: 'sent' };
-    } catch {
-      return { ok: false, reason: 'send-failed' };
-    }
+    // ChatGPT's current composer reliably accepts the form submit path used by
+    // physical Enter, while a synthetic HTMLElement.click() can be ignored even
+    // though it returns normally. Prefer requestSubmit on the live form and keep
+    // click only as a compatibility fallback for layouts without a form owner.
+    return submitThroughLiveForm(composer, sendButton);
   }
 
   globalThis.ChatGPTQuickContinueSend = Object.freeze({
@@ -174,6 +197,7 @@
     liveComposer,
     enabledSendButton,
     closestSendButton,
+    submitThroughLiveForm,
     submit
   });
 })();
