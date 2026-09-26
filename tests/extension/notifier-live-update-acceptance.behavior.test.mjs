@@ -5,6 +5,9 @@ import test from 'node:test';
 const read = (relative) => readFileSync(new URL(`../../${relative}`, import.meta.url), 'utf8');
 const workflow = read('.github/workflows/release.yml');
 const script = read('tools/Invoke-NotifierManagedUpdateAcceptance.ps1');
+const updateService = read('src/ChatGPTResponseNotifier.Host/PublicUpdateService.cs');
+const application = read('src/ChatGPTResponseNotifier.Host/NativeHostApplication.cs');
+const runningIdentity = read('src/ChatGPTResponseNotifier.Host/RunningHostIdentity.cs');
 
 test('notifier release requires live Glass managed-update acceptance', () => {
   assert.match(workflow, /Install and verify released notifier on Glass/);
@@ -25,6 +28,7 @@ test('live acceptance uses only the pinned localhost bridge and explicit update 
   assert.match(script, /SetRequestHeader\('Origin', \$BridgeOrigin\)/);
   assert.match(script, /type = 'update\.check'/);
   assert.match(script, /installedExtensionVersion/);
+  assert.match(script, /runningHostVersion/);
   assert.doesNotMatch(script, /type -ne 'update\.result'/);
   assert.doesNotMatch(script, /\.updateStatus/);
   assert.doesNotMatch(script, /https?:\/\/(?!127\.0\.0\.1)/);
@@ -41,12 +45,34 @@ test('WebSocket data handoff bypasses the PowerShell output pipeline', () => {
   assert.doesNotMatch(script, /return \$message/);
 });
 
-test('live acceptance polls host.ready for the installed version and retries update requests at a bounded cadence', () => {
+test('live acceptance requires disk state and actual running helper generation to converge', () => {
   assert.match(script, /function Read-BridgeReady/);
   assert.match(script, /function Request-ManagedUpdate/);
   assert.match(script, /\$installed = \[string\]\$ready\.installedExtensionVersion/);
+  assert.match(script, /\$runningHost = \[string\]\$ready\.runningHostVersion/);
+  assert.match(script, /\$installed -ne \$ExpectedVersion -or \$runningHost -ne \$ExpectedVersion/);
   assert.match(script, /\(\(\$attempt - 1\) % 4 -eq 0\)/);
-  assert.match(script, /if \(\$installed -eq \$ExpectedVersion\) \{ break \}/);
+  assert.match(script, /\$installed -eq \$ExpectedVersion -and \$runningHost -eq \$ExpectedVersion/);
   assert.match(script, /Start-Sleep -Seconds \$RetryDelaySeconds/);
-  assert.match(script, /fresh Glass helper connection did not report that version/);
+  assert.match(script, /confirmed as the running helper generation/);
+});
+
+test('running helper identity comes from the process executable generation, not mutable extension files', () => {
+  assert.match(runningIdentity, /Environment\.ProcessPath/);
+  assert.match(runningIdentity, /Path\.GetDirectoryName\(Path\.GetFullPath\(processPath\)\)/);
+  assert.match(runningIdentity, /Path\.GetFileName\(directory\)/);
+  assert.match(runningIdentity, /PublicUpdateFeed\.CompareVersions\(version, "0\.0\.0"\)/);
+  assert.doesNotMatch(runningIdentity, /ReadInstalledExtensionVersion|InstallStatePath/);
+  assert.match(application, /runningHostVersion = RunningHostIdentity\.ReadVersion\(\)/);
+});
+
+test('notifier update checks serialize and stale helper processes self-heal from installed host state', () => {
+  assert.match(updateService, /await _gate\.WaitAsync\(cancellationToken\)\.ConfigureAwait\(false\)/);
+  assert.doesNotMatch(updateService, /WaitAsync\(0, cancellationToken\)/);
+  assert.match(application, /EnsureCurrentInstalledHostActivated\(\)/);
+  assert.match(application, /NativeHostInstaller\.HostExecutablePath\(installedVersion\)/);
+  assert.match(application, /StartupRegistration\.Register\(installedHostPath\)/);
+  assert.match(application, /ScheduleReplacementIfNeeded\(installedHostPath\)/);
+  assert.match(application, /startInfo\.ArgumentList\.Add\("--wait-for-pid"\)/);
+  assert.match(application, /Dispatcher\.BeginInvoke\(\(\) => Shutdown\(\)\)/);
 });
