@@ -143,7 +143,7 @@ test('rendered terminal authority is hot-bound and feeds both watchdog parking a
   const rebind = read('extension/page-runtime-rebind.js');
   const streamBridge = read('extension/response-stream-status-bridge.js');
 
-  assert.equal(manifest.version, '0.9.89');
+  assert.equal(manifest.version, '0.9.90');
   assert.ok(manifest.content_scripts[0].js.includes('rendered-terminal-status.js'));
   assert.ok(manifest.content_scripts[0].js.includes('terminal-status-live-observer.js'));
   assert.ok(manifest.content_scripts[0].js.indexOf('rendered-terminal-status.js') < manifest.content_scripts[0].js.indexOf('terminal-status-live-observer.js'));
