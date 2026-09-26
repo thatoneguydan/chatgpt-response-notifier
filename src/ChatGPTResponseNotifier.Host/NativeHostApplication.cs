@@ -38,7 +38,8 @@ internal sealed class NativeHostApplication : Application
                 source = "host",
                 status = "host-started",
                 observedAt = DateTimeOffset.UtcNow,
-                extensionVersion = BundleInstaller.ReadInstalledExtensionVersion()
+                extensionVersion = BundleInstaller.ReadInstalledExtensionVersion(),
+                runningHostVersion = RunningHostIdentity.ReadVersion()
             });
 
             var store = new NotificationStateStore(Path.Combine(NativeHostInstaller.DataRoot, "pending.json"));
@@ -75,6 +76,12 @@ internal sealed class NativeHostApplication : Application
             }
 
             _runtimeEvidencePublisher.Publish();
+
+            // Disk state and running helper state are distinct. If a prior update
+            // completed its file transaction but the old process survived, repair
+            // that mismatch immediately rather than waiting for another download.
+            if (EnsureCurrentInstalledHostActivated()) return;
+
             _updateLoop = RunUpdateLoopAsync();
         }
         catch (Exception error)
@@ -108,6 +115,8 @@ internal sealed class NativeHostApplication : Application
         restored = _toastManager?.Count ?? 0,
         installedExtensionVersion = BundleInstaller.ReadInstalledExtensionVersion(),
         installedSourceCommit = BundleInstaller.ReadInstalledSourceCommit(),
+        runningHostVersion = RunningHostIdentity.ReadVersion(),
+        hostProcessId = Environment.ProcessId,
         transport = "localhost-websocket",
         diagnosticsAvailable = true,
         updateStatus = _updateService?.Status
@@ -251,6 +260,8 @@ internal sealed class NativeHostApplication : Application
                     requestId = message.RequestId,
                     installedExtensionVersion = BundleInstaller.ReadInstalledExtensionVersion(),
                     installedSourceCommit = BundleInstaller.ReadInstalledSourceCommit(),
+                    runningHostVersion = RunningHostIdentity.ReadVersion(),
+                    hostProcessId = Environment.ProcessId,
                     transport = "localhost-websocket",
                     diagnosticsAvailable = true,
                     updateStatus = _updateService?.Status
@@ -304,6 +315,7 @@ internal sealed class NativeHostApplication : Application
             requestId,
             installedExtensionVersion = BundleInstaller.ReadInstalledExtensionVersion(),
             installedSourceCommit = BundleInstaller.ReadInstalledSourceCommit(),
+            runningHostVersion = RunningHostIdentity.ReadVersion(),
             hostProcessId = Environment.ProcessId,
             records
         }).ConfigureAwait(false);
@@ -402,12 +414,24 @@ internal sealed class NativeHostApplication : Application
             }).ConfigureAwait(false);
         }
 
-        if (result.InstalledBundle is null) return;
-
         try
         {
-            StartupRegistration.Register(result.InstalledBundle.HostExecutablePath);
-            ScheduleReplacementIfNeeded(result.InstalledBundle.HostExecutablePath);
+            var installedHostPath = result.InstalledBundle?.HostExecutablePath;
+            if (string.IsNullOrWhiteSpace(installedHostPath))
+            {
+                var installedVersion = BundleInstaller.ReadInstalledExtensionVersion();
+                if (!string.IsNullOrWhiteSpace(installedVersion))
+                {
+                    var candidate = NativeHostInstaller.HostExecutablePath(installedVersion);
+                    if (File.Exists(candidate)) installedHostPath = candidate;
+                }
+            }
+
+            if (!string.IsNullOrWhiteSpace(installedHostPath))
+            {
+                StartupRegistration.Register(installedHostPath);
+                ScheduleReplacementIfNeeded(installedHostPath);
+            }
         }
         catch (Exception error)
         {
@@ -415,11 +439,31 @@ internal sealed class NativeHostApplication : Application
         }
     }
 
-    private void ScheduleReplacementIfNeeded(string installedHostPath)
+    private bool EnsureCurrentInstalledHostActivated()
+    {
+        try
+        {
+            var installedVersion = BundleInstaller.ReadInstalledExtensionVersion();
+            if (string.IsNullOrWhiteSpace(installedVersion)) return false;
+
+            var installedHostPath = NativeHostInstaller.HostExecutablePath(installedVersion);
+            if (!File.Exists(installedHostPath)) return false;
+
+            StartupRegistration.Register(installedHostPath);
+            return ScheduleReplacementIfNeeded(installedHostPath);
+        }
+        catch (Exception error)
+        {
+            FileLog.Write("Could not reconcile installed notifier helper with running process", error);
+            return false;
+        }
+    }
+
+    private bool ScheduleReplacementIfNeeded(string installedHostPath)
     {
         var currentPath = Environment.ProcessPath;
-        if (string.IsNullOrWhiteSpace(currentPath)) return;
-        if (string.Equals(Path.GetFullPath(currentPath), Path.GetFullPath(installedHostPath), StringComparison.OrdinalIgnoreCase)) return;
+        if (string.IsNullOrWhiteSpace(currentPath)) return false;
+        if (string.Equals(Path.GetFullPath(currentPath), Path.GetFullPath(installedHostPath), StringComparison.OrdinalIgnoreCase)) return false;
 
         var startInfo = new ProcessStartInfo(installedHostPath)
         {
@@ -431,6 +475,7 @@ internal sealed class NativeHostApplication : Application
 
         Process.Start(startInfo);
         Dispatcher.BeginInvoke(() => Shutdown());
+        return true;
     }
 
     private async Task SendEventAsync(object message)
