@@ -1,22 +1,24 @@
-// Diagnostic reproduction for Notifier 0.9.88; no network or browser actions.
+// Safe watchdog-cadence acceptance reproductions for Notifier 0.9.89+.
+// No browser, network, ChatGPT, or real-message actions are performed.
 // Run: node tools/reproduce-watchdog-cadence-20260926.mjs
-// Assertions document the vulnerable baseline, not acceptance of the fix.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 
-
 const root = new URL('../', import.meta.url);
 const readText = (relative) => readFileSync(new URL(relative, root), 'utf8');
+const D = 30 * 60_000;
 
 function clone(value) {
   return value === undefined ? undefined : JSON.parse(JSON.stringify(value));
 }
 
 class FakeTransaction {
-  constructor(database, names) {
+  constructor(database, names, startPromise = Promise.resolve(), release = null) {
     this.database = database;
     this.names = Array.isArray(names) ? names : [names];
+    this.startPromise = startPromise;
+    this.release = release;
     this.pending = 0;
     this.finished = false;
     this.error = null;
@@ -33,18 +35,25 @@ class FakeTransaction {
   request(action) {
     this.pending += 1;
     const handlers = [];
-    const request = { result: undefined, error: null, onsuccess: null, onerror: null, addEventListener(kind, fn) { if (kind === 'success') handlers.push(fn); } };
-    queueMicrotask(() => {
+    const request = {
+      result: undefined,
+      error: null,
+      onsuccess: null,
+      onerror: null,
+      addEventListener(kind, fn) { if (kind === 'success') handlers.push(fn); }
+    };
+    this.startPromise.then(() => queueMicrotask(() => {
       if (this.finished) return;
       try {
         request.result = action();
-        handlers.forEach(fn => fn());
+        handlers.forEach((fn) => fn());
         request.onsuccess?.();
       } catch (error) {
         request.error = error;
         this.error = error;
         request.onerror?.();
         this.finished = true;
+        this.release?.();
         this.onerror?.();
         this.onabort?.();
         return;
@@ -52,7 +61,7 @@ class FakeTransaction {
         this.pending -= 1;
       }
       this.maybeComplete();
-    });
+    }));
     return request;
   }
 
@@ -61,6 +70,7 @@ class FakeTransaction {
     setTimeout(() => {
       if (this.finished || this.pending !== 0) return;
       this.finished = true;
+      this.release?.();
       this.oncomplete?.();
     }, 0);
   }
@@ -73,18 +83,9 @@ class FakeStore {
     this.definition = definition;
   }
 
-  keyOf(value) {
-    return value?.[this.definition.keyPath];
-  }
-
-  get(key) {
-    return this.transaction.request(() => clone(this.definition.records.get(key)));
-  }
-
-  getAll() {
-    return this.transaction.request(() => Array.from(this.definition.records.values(), clone));
-  }
-
+  keyOf(value) { return value?.[this.definition.keyPath]; }
+  get(key) { return this.transaction.request(() => clone(this.definition.records.get(key))); }
+  getAll() { return this.transaction.request(() => Array.from(this.definition.records.values(), clone)); }
   put(value) {
     return this.transaction.request(() => {
       const key = this.keyOf(value);
@@ -92,10 +93,7 @@ class FakeStore {
       return key;
     });
   }
-
-  delete(key) {
-    return this.transaction.request(() => this.definition.records.delete(key));
-  }
+  delete(key) { return this.transaction.request(() => this.definition.records.delete(key)); }
 }
 
 class FakeDatabase {
@@ -103,6 +101,7 @@ class FakeDatabase {
   constructor() {
     this.stores = new Map();
     this.objectStoreNames = { contains: (name) => this.stores.has(name) };
+    this.writeTail = Promise.resolve();
   }
 
   createObjectStore(name, options) {
@@ -110,8 +109,17 @@ class FakeDatabase {
     return this.stores.get(name);
   }
 
-  transaction(names) {
-    const transaction = new FakeTransaction(this, names);
+  transaction(names, mode = 'readonly') {
+    let startPromise = Promise.resolve();
+    let release = null;
+    if (mode === 'readwrite') {
+      startPromise = this.writeTail;
+      let unlock;
+      const held = new Promise((resolve) => { unlock = resolve; });
+      this.writeTail = startPromise.then(() => held);
+      release = unlock;
+    }
+    const transaction = new FakeTransaction(this, names, startPromise, release);
     queueMicrotask(() => transaction.maybeComplete());
     return transaction;
   }
@@ -137,56 +145,20 @@ function fakeIndexedDb() {
 
 function eventHub() {
   const listeners = [];
-  return {
-    listeners,
-    addListener(listener) { listeners.push(listener); }
-  };
-}
-
-function baseSnapshot(overrides = {}) {
-  return {
-    monitorRuntimeVersion: 2,
-    policyVersion: 3,
-    conversationId: 'conversation-1',
-    conversationUrl: 'https://chatgpt.com/c/conversation-1',
-    documentId: 'document-1',
-    promptKey: 'conversation-1|user-1',
-    promptRevision: '1:a',
-    assistantKey: 'assistant-1',
-    assistantRevision: '1:b',
-    statusCode: '',
-    workStartSignal: false,
-    projectStartSignal: false,
-    observable: true,
-    online: true,
-    manualStopped: false,
-    hasDraft: false,
-    hasUpload: false,
-    stopGenerating: false,
-    toolActivity: false,
-    stableTerminal: false,
-    silentIdleConfirmations: 0,
-    requestPhase: 'started',
-    requestId: 'request-1',
-    requestStartedAt: 1_000,
-    requestSettledAt: 0,
-    workingDurationMs: 1_000,
-    rateLimited: false,
-    authRequired: false,
-    approvalRequired: false,
-    explicitInterruption: false,
-    interruptionKind: '',
-    ...overrides
-  };
+  return { listeners, addListener(listener) { listeners.push(listener); }, removeListener(listener) {
+    const index = listeners.indexOf(listener);
+    if (index >= 0) listeners.splice(index, 1);
+  } };
 }
 
 async function tick(count = 3) {
   for (let index = 0; index < count; index += 1) await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
-function loadMonitor({ initialTabs = [{ id: 1, url: 'https://chatgpt.com/c/conversation-1', title: 'Build chat', discarded: false, frozen: false, active: true }], sendMessage = null } = {}) {
-  let tabs = initialTabs.map(clone);
-  let activeTabId = tabs.find((tab) => tab.active)?.id ?? tabs[0]?.id ?? null;
+let now = 10_000_000;
+class Clock extends Date { static now() { return now; } }
+
+function loadHarness() {
   let uuid = 0;
   const runtimeOnMessage = eventHub();
   const tabsOnUpdated = eventHub();
@@ -197,36 +169,33 @@ function loadMonitor({ initialTabs = [{ id: 1, url: 'https://chatgpt.com/c/conve
   const alarmsOnAlarm = eventHub();
   const alarmState = new Map();
   const indexedDB = fakeIndexedDb();
+  const tabs = [{ id: 1, url: 'https://chatgpt.com/c/bootstrap', title: 'Build chat', discarded: false, frozen: false, active: true }];
 
   const chrome = {
-    runtime: { onMessage: runtimeOnMessage, getManifest: () => ({version: '0.9.88'}) },
+    runtime: {
+      onMessage: runtimeOnMessage,
+      getManifest: () => ({ version: '0.9.89' })
+    },
     alarms: {
       onAlarm: alarmsOnAlarm,
       create(name, info = {}) { alarmState.set(String(name), clone(info)); },
       async clear(name) { return alarmState.delete(String(name)); }
     },
-    webRequest: {
-      onBeforeRequest: webBefore,
-      onCompleted: webCompleted,
-      onErrorOccurred: webError
-    },
+    webRequest: { onBeforeRequest: webBefore, onCompleted: webCompleted, onErrorOccurred: webError },
     tabs: {
       onUpdated: tabsOnUpdated,
       onRemoved: tabsOnRemoved,
-      async query(query = {}) {
-        let result = tabs;
-        if (query.active === true) result = result.filter((tab) => tab.id === activeTabId);
-        if (query.currentWindow === true) result = result.filter((tab) => tab.currentWindow !== false);
-        if (query.url) result = result.filter((tab) => String(tab.url || '').startsWith('https://chatgpt.com/'));
-        return result.map(clone);
-      },
+      async query() { return tabs.map(clone); },
       async get(tabId) {
-        const tab = tabs.find((item) => item.id === tabId);
+        const tab = tabs.find((entry) => entry.id === tabId);
         if (!tab) throw new Error('No tab');
         return clone(tab);
       },
-      async sendMessage(...args) {
-        if (typeof sendMessage === 'function') return await sendMessage(...args);
+      async sendMessage(_tabId, message) {
+        if (message?.type === 'CHATGPT_MONITOR_QUERY') return { snapshot: null };
+        if (message?.type === 'CHATGPT_NOTIFIER_ATTACHMENT_PING') return { ok: true, runtimeVersion: 99, extensionVersion: '0.9.89' };
+        if (message?.type === 'CHATGPT_STATUS_RUNTIME_PING') return { ok: true, runtimeVersion: 99 };
+        if (message?.type === 'CHATGPT_BOUNDED_RECOVERY_PING') return { ok: true, runtimeVersion: 99 };
         return { ok: true };
       }
     },
@@ -256,84 +225,143 @@ function loadMonitor({ initialTabs = [{ id: 1, url: 'https://chatgpt.com/c/conve
   vm.runInContext(readText('extension/status-policy.js'), context);
   vm.runInContext(readText('extension/monitor-background.js'), context);
   vm.runInContext(readText('extension/watchdog-continuation-invariant-background.js'), context);
-  vm.runInContext(readText('extension/watchdog-sole-continuation-authority-background.js'), context);
-  vm.runInContext(readText('extension/watchdog-authority-v3-background.js'), context);
-
-  async function message(message, sender = {}) {
-    for (const listener of runtimeOnMessage.listeners) {
-      let settled = false;
-      let response;
-      let resolveResponse;
-      const responsePromise = new Promise((resolve) => { resolveResponse = resolve; });
-      const returned = listener(message, sender, (value) => {
-        settled = true;
-        response = value;
-        resolveResponse(value);
-      });
-      if (returned === true) {
-        if (!settled) response = await responsePromise;
-        return clone(response);
-      }
-      if (settled) return clone(response);
-    }
-    return undefined;
-  }
-
-  async function emit(event, ...args) {
-    for (const listener of event.listeners) listener(...args);
-    await tick();
-  }
-
   return {
-    context, indexedDB, alarmState,
-    api: context.__chatgptNotifierMonitorBackground,
-    message,
-    emit,
-    events: { tabsOnUpdated, tabsOnRemoved, webBefore, webCompleted, webError, alarmsOnAlarm },
-    getTabs: () => tabs.map(clone),
-    setTabs(next) { tabs = next.map(clone); },
-    setActive(tabId) { activeTabId = tabId; }
+    context,
+    indexedDB,
+    alarmState,
+    monitor: context.__chatgptNotifierMonitorBackground,
+    cadence: context.__chatgptNotifierWatchdogContinuationInvariant
   };
 }
 
-
-let now = 10_000_000;
-class Clock extends Date { static now() { return now; } }
-const D = 30 * 60_000;
-const sender = {tab:{id:1,url:'https://chatgpt.com/c/conversation-1'}};
-async function scenario({name, confirmed=true, duplicate=false, future=false, dropped=false}) {
-  now = 10_000_000;
-  let dispatches=0;
-  const snapshot=baseSnapshot({requestStartedAt: now-D, promptKey:'conversation-1|user-1'});
-  const monitor=loadMonitor({sendMessage: async (_,m)=>{
-    if(m.type==='CHATGPT_MONITOR_QUERY') return {snapshot};
-    if(m.type==='CHATGPT_STATUS_FOR_PROMPT_QUERY') return {ok:true,conversationId:'conversation-1',promptKey:snapshot.promptKey,statusCode:''};
-    if(m.type==='CHATGPT_WATCHDOG_CONTINUE_COMMAND') {
-      dispatches++;
-      if(dropped && dispatches===1) throw new Error('response port closed after click');
-      return confirmed ? {ok:true,clicked:true,continuationUserKey:'conversation-1|auto-'+dispatches} : {ok:false,clicked:true,reason:'continuation-user-turn-not-confirmed'};
-    }
-    return {ok:true,runtimeVersion:99};
-  }});
-  await tick(5);
-  await monitor.api.setEnrollment({id:'conversation-1',url:sender.tab.url},true,'operator');
-  const db=monitor.indexedDB.databases.get('chatgpt-response-notifier-monitor');
-  const state={key:'code-watchdog:conversation-1',conversationId:'conversation-1',conversationUrl:sender.tab.url,ownerTabId:1,sendCount:0,stopped:false,lastRequestStartedAt:snapshot.requestStartedAt,lastPromptKey:snapshot.promptKey,deadlineAt:future?now+D:now,retryAt:0,retryReason:''};
-  const tx=db.transaction('profile');tx.objectStore('profile').put(state);await tick();
-  if(duplicate) await Promise.all([monitor.context.__chatgptNotifierWatchdogAuthorityV3.runDueWatchdogNow({conversationId:'conversation-1'},sender), monitor.context.__chatgptNotifierWatchdogAuthorityV3.runDueWatchdogNow({conversationId:'conversation-1'},sender)]);
-  else await monitor.api.handleCodeWatchdogAlarm('conversation-1');
-  const first=await monitor.api.readCodeWatchdog('conversation-1');
-  if(!confirmed) {now+=60_000;await monitor.api.handleCodeWatchdogAlarm('conversation-1');}
-  const final=await monitor.api.readCodeWatchdog('conversation-1');
-  console.log(JSON.stringify({name,dispatches,sendCount:final.sendCount,deadlineAt:final.deadlineAt,retryAt:final.retryAt,lastAutomaticSentAt:final.lastAutomaticSentAt||0,now}));
-  return {dispatches,first,final};
+async function putRecord(database, storeName, record) {
+  await new Promise((resolve, reject) => {
+    const transaction = database.transaction(storeName, 'readwrite');
+    transaction.objectStore(storeName).put(record);
+    transaction.oncomplete = resolve;
+    transaction.onerror = () => reject(transaction.error || new Error('write failed'));
+    transaction.onabort = () => reject(transaction.error || new Error('write aborted'));
+  });
 }
-const early=await scenario({name:'future-deadline stale alarm',future:true});
-assert.equal(early.dispatches,1,'reproduces forbidden early dispatch');
-const dup=await scenario({name:'two page-authority due signals before serialized queue executes',duplicate:true});
-assert.equal(dup.dispatches,2,'reproduces duplicate dispatch within same deadline');
-const uncertain=await scenario({name:'clicked but unconfirmed, minute retry',confirmed:false});
-assert.equal(uncertain.dispatches,2,'reproduces second dispatch after 60 seconds');
-assert.equal(uncertain.final.sendCount,0,'unconfirmed clicks do not consume send budget');
-const lost=await scenario({name:'response-port failure after first click',dropped:true});
-assert.equal(lost.dispatches,2,'reproduces immediate command replay after transport loss');
+
+async function seedConversation(harness, id, recordPatch = {}) {
+  const url = `https://chatgpt.com/c/${id}`;
+  await harness.monitor.setEnrollment({ id, url }, true, 'operator');
+  const database = harness.indexedDB.databases.get('chatgpt-response-notifier-monitor');
+  const promptKey = `${id}|user-1`;
+  const record = {
+    key: `code-watchdog:${id}`,
+    conversationId: id,
+    conversationUrl: url,
+    ownerTabId: 1,
+    sendCount: 0,
+    stopped: false,
+    stopReason: '',
+    waitingForRequestStart: false,
+    lastRequestStartedAt: now - D,
+    lastPromptKey: promptKey,
+    lastStatusCode: '',
+    deadlineAt: now,
+    retryAt: 0,
+    retryReason: '',
+    ...recordPatch
+  };
+  await putRecord(database, 'profile', record);
+  await tick();
+  return { url, promptKey, sender: { tab: { id: 1, url } } };
+}
+
+function dueCadencePatch() {
+  return {
+    cadenceSchemaVersion: 1,
+    cadenceEpoch: 1,
+    cadenceSendCount: 0,
+    cadenceAttempt: null,
+    nextSendEligibleAt: 0
+  };
+}
+
+const harness = loadHarness();
+await tick(6);
+assert.equal(harness.cadence.version, 4, 'cadence owner v4 must be loaded');
+
+// 1. A stale alarm cannot authorize a click before the persisted deadline.
+now = 10_000_000;
+{
+  const target = await seedConversation(harness, 'future-deadline', { deadlineAt: now + D });
+  const auth = await harness.cadence.authorizePageDispatch({
+    conversationId: 'future-deadline', promptKey: target.promptKey, documentId: 'document-future'
+  }, target.sender);
+  assert.equal(auth.granted, false, 'future deadline must not authorize a watchdog click');
+  const state = await harness.cadence.readWatchdog('future-deadline');
+  assert.ok(state.nextSendEligibleAt >= now + D, 'migration preserves the future 30-minute floor');
+  console.log(JSON.stringify({ scenario: 'future-deadline stale alarm', clicks: 0, granted: auth.granted, nextSendEligibleAt: state.nextSendEligibleAt }));
+}
+
+// 2. Two concurrent wake signals serialize on one durable reservation.
+now = 20_000_000;
+{
+  const target = await seedConversation(harness, 'concurrent-due', dueCadencePatch());
+  const request = () => harness.cadence.authorizePageDispatch({
+    conversationId: 'concurrent-due', promptKey: target.promptKey, documentId: 'document-concurrent'
+  }, target.sender);
+  const results = await Promise.all([request(), request()]);
+  const granted = results.filter((entry) => entry.granted === true);
+  assert.equal(granted.length, 1, 'exactly one concurrent wake may reserve the interval');
+  assert.equal(results.filter((entry) => entry.syntheticSuccess === true).length, 1, 'the losing wake must observe the consumed reservation');
+  const state = await harness.cadence.readWatchdog('concurrent-due');
+  assert.equal(state.sendCount, 1, 'attempt budget is consumed before page dispatch');
+  assert.equal(state.cadenceSendCount, 1, 'cadence budget is durable before page dispatch');
+  console.log(JSON.stringify({ scenario: 'concurrent due signals', reservations: granted.length, sendCount: state.sendCount, nextSendEligibleAt: state.nextSendEligibleAt }));
+}
+
+// 3. clicked=true with no confirmation becomes unknown and cannot retry after 60 seconds.
+now = 30_000_000;
+{
+  const target = await seedConversation(harness, 'clicked-unconfirmed', dueCadencePatch());
+  const auth = await harness.cadence.authorizePageDispatch({
+    conversationId: 'clicked-unconfirmed', promptKey: target.promptKey, documentId: 'document-unknown'
+  }, target.sender);
+  assert.equal(auth.granted, true, 'due interval must reserve once');
+  const clickedAt = now + 100;
+  const finalized = await harness.cadence.finalizePageDispatch({
+    conversationId: 'clicked-unconfirmed', promptKey: target.promptKey, documentId: 'document-unknown',
+    attemptId: auth.attemptId, clicked: true, clickedAt, ok: false, reason: 'continuation-user-turn-not-confirmed'
+  }, target.sender);
+  assert.equal(finalized.outcome, 'unknown', 'unconfirmed click must remain an unknown side effect');
+  now += 60_000;
+  const retry = await harness.cadence.authorizePageDispatch({
+    conversationId: 'clicked-unconfirmed', promptKey: target.promptKey, documentId: 'document-unknown'
+  }, target.sender);
+  assert.equal(retry.granted, false, 'unknown side effect must not authorize a one-minute replay');
+  assert.equal(retry.syntheticSuccess, true, 'legacy caller gets a consumed-attempt acknowledgement instead of replay authority');
+  const state = await harness.cadence.readWatchdog('clicked-unconfirmed');
+  assert.equal(state.sendCount, 1, 'unknown click consumes exactly one attempt');
+  assert.equal(state.retryAt, 0, 'unknown click cannot create a one-minute send retry');
+  assert.ok(state.deadlineAt >= auth.authorizationExpiresAt + D, 'unknown outcome keeps a conservative full 30-minute floor');
+  console.log(JSON.stringify({ scenario: 'clicked but unconfirmed', clicks: 1, replayGranted: retry.granted, sendCount: state.sendCount, deadlineAt: state.deadlineAt }));
+}
+
+// 4. Losing the response port after a possible click cannot replay the command immediately.
+now = 40_000_000;
+{
+  const target = await seedConversation(harness, 'transport-loss', dueCadencePatch());
+  const first = await harness.cadence.authorizePageDispatch({
+    conversationId: 'transport-loss', promptKey: target.promptKey, documentId: 'document-loss'
+  }, target.sender);
+  assert.equal(first.granted, true, 'first command reserves the interval');
+  // Simulate the page click happening and the reply port disappearing before finalization.
+  const clicks = 1;
+  const replay = await harness.cadence.authorizePageDispatch({
+    conversationId: 'transport-loss', promptKey: target.promptKey, documentId: 'document-loss'
+  }, target.sender);
+  assert.equal(replay.granted, false, 'lost acknowledgement must not authorize immediate replay');
+  assert.equal(replay.syntheticSuccess, true, 'duplicate command is acknowledged as already consumed');
+  assert.equal(replay.attemptId, first.attemptId, 'duplicate command resolves against the durable reservation');
+  const state = await harness.cadence.readWatchdog('transport-loss');
+  assert.equal(state.sendCount, 1, 'transport uncertainty consumes one attempt before any reply');
+  assert.ok(state.deadlineAt >= first.authorizationExpiresAt + D, 'transport uncertainty reserves the next full interval');
+  console.log(JSON.stringify({ scenario: 'response-port loss after possible click', clicks, replayGranted: replay.granted, sendCount: state.sendCount, deadlineAt: state.deadlineAt }));
+}
+
+console.log('watchdog cadence acceptance reproductions passed');
