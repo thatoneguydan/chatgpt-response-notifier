@@ -416,22 +416,27 @@ internal sealed class NativeHostApplication : Application
 
         try
         {
-            var installedHostPath = result.InstalledBundle?.HostExecutablePath;
-            if (string.IsNullOrWhiteSpace(installedHostPath))
+            // Preserve the direct normal activation path for a bundle installed by
+            // this check: the exact versioned host emitted by that transaction is
+            // authoritative and should replace this process immediately.
+            if (result.InstalledBundle is not null)
             {
-                var installedVersion = BundleInstaller.ReadInstalledExtensionVersion();
-                if (!string.IsNullOrWhiteSpace(installedVersion))
-                {
-                    var candidate = NativeHostInstaller.HostExecutablePath(installedVersion);
-                    if (File.Exists(candidate)) installedHostPath = candidate;
-                }
+                StartupRegistration.Register(result.InstalledBundle.HostExecutablePath);
+                ScheduleReplacementIfNeeded(result.InstalledBundle.HostExecutablePath);
+                return;
             }
 
-            if (!string.IsNullOrWhiteSpace(installedHostPath))
-            {
-                StartupRegistration.Register(installedHostPath);
-                ScheduleReplacementIfNeeded(installedHostPath);
-            }
+            // A previous process may already have completed the disk transaction
+            // while this stale helper survived. Reconcile from installed state so
+            // "current on disk" can never strand an old localhost helper process.
+            var installedVersion = BundleInstaller.ReadInstalledExtensionVersion();
+            if (string.IsNullOrWhiteSpace(installedVersion)) return;
+
+            var installedHostPath = NativeHostInstaller.HostExecutablePath(installedVersion);
+            if (!File.Exists(installedHostPath)) return;
+
+            StartupRegistration.Register(installedHostPath);
+            ScheduleReplacementIfNeeded(installedHostPath);
         }
         catch (Exception error)
         {
