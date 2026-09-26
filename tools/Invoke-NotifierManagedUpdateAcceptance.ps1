@@ -143,6 +143,7 @@ if ($RetryDelaySeconds -lt 1 -or $RetryDelaySeconds -gt 60) {
 }
 
 $installed = ''
+$runningHost = ''
 $lastError = ''
 for ($attempt = 1; $attempt -le $Attempts; $attempt += 1) {
     $requested = $false
@@ -150,14 +151,15 @@ for ($attempt = 1; $attempt -le $Attempts; $attempt += 1) {
         $ready = $null
         Read-BridgeReady -Ready ([ref]$ready)
         $installed = [string]$ready.installedExtensionVersion
+        $runningHost = [string]$ready.runningHostVersion
 
-        if ($installed -ne $ExpectedVersion -and (($attempt - 1) % 4 -eq 0)) {
+        if (($installed -ne $ExpectedVersion -or $runningHost -ne $ExpectedVersion) -and (($attempt - 1) % 4 -eq 0)) {
             Request-ManagedUpdate
             $requested = $true
         }
 
-        Write-Host "Notifier live-update acceptance attempt $attempt`: expected=$ExpectedVersion installed=$installed updateRequested=$requested"
-        if ($installed -eq $ExpectedVersion) { break }
+        Write-Host "Notifier live-update acceptance attempt $attempt`: expected=$ExpectedVersion installed=$installed runningHost=$runningHost updateRequested=$requested"
+        if ($installed -eq $ExpectedVersion -and $runningHost -eq $ExpectedVersion) { break }
     }
     catch {
         $lastError = $_.Exception.Message
@@ -167,32 +169,36 @@ for ($attempt = 1; $attempt -le $Attempts; $attempt += 1) {
     if ($attempt -lt $Attempts) { Start-Sleep -Seconds $RetryDelaySeconds }
 }
 
-if ($installed -ne $ExpectedVersion) {
-    throw "Notifier $ExpectedVersion was published but the Glass helper did not report it installed. Last result: installed=$installed error=$lastError"
+if ($installed -ne $ExpectedVersion -or $runningHost -ne $ExpectedVersion) {
+    throw "Notifier $ExpectedVersion was published but Glass did not converge disk and running helper state. Last result: installed=$installed runningHost=$runningHost error=$lastError"
 }
 
-# Give a replacement helper time to take over the loopback endpoint, then
-# confirm a fresh host.ready still sees the installed release.
+# Open another socket after convergence. The runningHostVersion is derived from
+# the actual helper process executable path, not the mutable extension files, so
+# this proves the endpoint is owned by the expected helper generation.
 $verifiedHost = $false
 $hostVersion = ''
+$hostInstalled = ''
 for ($attempt = 1; $attempt -le 30; $attempt += 1) {
     try {
         $ready = $null
         Read-BridgeReady -Ready ([ref]$ready)
-        $hostVersion = [string]$ready.installedExtensionVersion
-        if ($hostVersion -eq $ExpectedVersion) {
+        $hostInstalled = [string]$ready.installedExtensionVersion
+        $hostVersion = [string]$ready.runningHostVersion
+        if ($hostInstalled -eq $ExpectedVersion -and $hostVersion -eq $ExpectedVersion) {
             $verifiedHost = $true
             break
         }
     }
     catch {
         $hostVersion = ''
+        $hostInstalled = ''
     }
     Start-Sleep -Seconds 2
 }
 
 if (-not $verifiedHost) {
-    throw "Notifier $ExpectedVersion installed, but a fresh Glass helper connection did not report that version. Last helper version: $hostVersion"
+    throw "Notifier $ExpectedVersion installed, but a fresh Glass helper connection did not prove that helper generation. Last disk version: $hostInstalled; running helper version: $hostVersion"
 }
 
-Write-Host "Notifier $ExpectedVersion is installed on Glass and confirmed through a fresh local helper connection."
+Write-Host "Notifier $ExpectedVersion is installed on Glass and confirmed as the running helper generation."
