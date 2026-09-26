@@ -85,7 +85,7 @@ test('work status defaults to continue unless the code is an explicit stop', () 
   }
 });
 
-test('INCOMPLETE_CONTINUE cannot erase existing watchdog attempts or countdown', () => {
+test('INCOMPLETE_CONTINUE preserves existing watchdog attempts and countdown without scheduling from the invariant', () => {
   const { Store, alarms } = loadInvariant();
   const store = new Store();
   const key = 'code-watchdog:conversation-1';
@@ -115,14 +115,11 @@ test('INCOMPLETE_CONTINUE cannot erase existing watchdog attempts or countdown',
   assert.equal(store.lastPut.sendCount, 2);
   assert.equal(store.lastPut.deadlineAt, 2_000_000);
   assert.equal(store.lastPut.retryAt, 0);
-  assert.equal(alarms.length, 1);
-  assert.equal(alarms[0].name, 'chatgpt-notifier-code-watchdog:conversation-1');
-  assert.equal(alarms[0].options.when, 2_000_000);
+  assert.equal(alarms.length, 0);
 });
 
-test('an incomplete status with no surviving timer repairs itself with a bounded retry', () => {
-  const now = 1_000_000;
-  const { Store, alarms } = loadInvariant(now);
+test('an incomplete status with no surviving timer does not invent a one-minute continuation retry', () => {
+  const { Store, alarms } = loadInvariant(1_000_000);
   const store = new Store();
   const key = 'code-watchdog:conversation-1';
   prime(store, {
@@ -147,9 +144,9 @@ test('an incomplete status with no surviving timer repairs itself with a bounded
   });
 
   assert.equal(store.lastPut.sendCount, 1);
-  assert.equal(store.lastPut.retryAt, now + 60_000);
-  assert.equal(store.lastPut.retryReason, 'incomplete-awaiting-continuation');
-  assert.equal(alarms[0].options.when, now + 60_000);
+  assert.equal(store.lastPut.retryAt, 0);
+  assert.ok(!store.lastPut.retryReason);
+  assert.equal(alarms.length, 0);
 });
 
 test('the automatic request that follows an incomplete code preserves attempts already used', () => {

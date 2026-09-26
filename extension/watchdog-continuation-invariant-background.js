@@ -3,11 +3,11 @@
 (() => {
   if (globalThis.__chatgptNotifierWatchdogContinuationInvariant) return;
 
-  const VERSION = 2;
+  const VERSION = 3;
   const PROFILE_STORE = 'profile';
   const RECORD_PREFIX = 'code-watchdog:';
   const ALARM_PREFIX = 'chatgpt-notifier-code-watchdog:';
-  const FALLBACK_RETRY_MS = 60_000;
+  const RETIRED_SHORT_RETRY_REASON = 'incomplete-awaiting-continuation';
   const shadow = new Map();
 
   const originalGet = IDBObjectStore.prototype.get;
@@ -100,37 +100,35 @@
     return autoStatus || automaticRequestStarted;
   }
 
+  function clearRetiredShortRetry(record) {
+    if (!record || String(record.retryReason || '') !== RETIRED_SHORT_RETRY_REASON) return record;
+    record.retryAt = 0;
+    record.retryReason = '';
+    return record;
+  }
+
   function preserveContinuationState(previous, next) {
+    clearRetiredShortRetry(next);
     if (!shouldPreserve(previous, next)) return next;
 
     next.sendCount = Math.max(number(next.sendCount), number(previous.sendCount));
 
-    let deadlineAt = number(next.deadlineAt);
-    let retryAt = number(next.retryAt);
+    const deadlineAt = number(next.deadlineAt);
+    const retryAt = number(next.retryAt);
     if (deadlineAt <= 0 && retryAt <= 0) {
       const previousDeadlineAt = number(previous.deadlineAt);
       const previousRetryAt = number(previous.retryAt);
+      const previousRetryReason = String(previous.retryReason || '');
       if (previousDeadlineAt > 0) {
-        deadlineAt = previousDeadlineAt;
         next.deadlineAt = previousDeadlineAt;
-      } else if (previousRetryAt > 0) {
-        retryAt = previousRetryAt;
+      } else if (previousRetryAt > 0 && previousRetryReason !== RETIRED_SHORT_RETRY_REASON) {
         next.retryAt = previousRetryAt;
-        next.retryReason = String(previous.retryReason || '');
-      } else {
-        retryAt = Date.now() + FALLBACK_RETRY_MS;
-        next.retryAt = retryAt;
-        next.retryReason = 'incomplete-awaiting-continuation';
+        next.retryReason = previousRetryReason;
       }
     }
 
-    const when = deadlineAt > 0 ? deadlineAt : retryAt;
-    if (when > 0) {
-      const conversationId = String(next.conversationId || conversationIdFromKey(recordKey(next)));
-      if (conversationId) {
-        try { chrome.alarms.create(alarmName(conversationId), { when: Math.max(Date.now() + 1000, when) }); } catch {}
-      }
-    }
+    // This layer protects persisted state only. It must never create alarms or
+    // invent a retry cadence; monitor-background owns all watchdog scheduling.
     return next;
   }
 
