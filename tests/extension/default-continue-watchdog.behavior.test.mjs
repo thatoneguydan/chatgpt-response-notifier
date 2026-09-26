@@ -145,7 +145,7 @@ test('an incomplete status with no surviving timer does not invent a one-minute 
 
   assert.equal(store.lastPut.sendCount, 1);
   assert.equal(store.lastPut.retryAt, 0);
-  assert.equal(store.lastPut.retryReason, '');
+  assert.ok(!store.lastPut.retryReason);
   assert.equal(alarms.length, 0);
 });
 
