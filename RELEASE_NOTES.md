@@ -1,4 +1,10 @@
-# ChatGPT Response Notifier 0.9.90
+# ChatGPT Response Notifier 0.9.91
+
+- Removes MV3 service-worker cold-start page mutations from both extensions. Quick Continue no longer reinjects `runtime-reset.js` merely because its background worker wakes, so the canonical toolbar is not disposed and rebuilt during normal browsing.
+- Retires the notifier-owned legacy Quick Prompts injector. Notifier worker restarts and completed navigations can no longer create a competing toolbar that briefly appears before the standalone Quick Continue surface suppresses it.
+- Pairs with Quick Continue 1.2.24 and adds regression coverage requiring routine worker wakes to remain page-DOM side-effect free while reserving destructive runtime replacement for actual extension install/update events.
+
+## Previous: 0.9.90
 
 - Restores watchdog restart after a definitive terminal status. A real extension-observed ChatGPT conversation POST now establishes a new operator-prompt boundary before watchdog reconciliation, so the previous response's `COMPLETE_*`, `BLOCKED_HUMAN`, or `PLANNING_ACTIVE` stop cannot remain permanently sticky across a new user interaction.
 - Keeps stale same-turn DOM writes unable to reopen a stopped watchdog; only a genuinely newer request boundary releases the prior terminal stop.
