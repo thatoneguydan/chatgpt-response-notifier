@@ -37,10 +37,12 @@ internal sealed class PublicUpdateService : IDisposable
 
     public async Task<UpdateCheckResult> CheckAndInstallAsync(CancellationToken cancellationToken)
     {
-        if (!await _gate.WaitAsync(0, cancellationToken).ConfigureAwait(false))
-        {
-            return new UpdateCheckResult(_status);
-        }
+        // Explicit release-acceptance checks and the periodic updater share this
+        // service. Returning an in-flight snapshot lets a caller observe new files
+        // on disk without receiving the InstalledBundle that activates the matching
+        // helper process. Serialize instead: every caller gets a fresh cache-busted
+        // feed read after the preceding check completes.
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         string? archivePath = null;
         try
