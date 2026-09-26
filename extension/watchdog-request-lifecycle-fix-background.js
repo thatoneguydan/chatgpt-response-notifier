@@ -3,7 +3,7 @@
 (() => {
   if (globalThis.__chatgptNotifierWatchdogRequestLifecycleFix) return;
 
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
   const DB_NAME = 'chatgpt-response-notifier-monitor';
   const DB_VERSION = 1;
   const PROFILE_STORE = 'profile';
@@ -208,6 +208,33 @@
     terminalReassertionsByConversation.set(id, promise);
   }
 
+  async function releaseTerminalStopForFreshRequest(conversationId, requestStartedAt) {
+    const id = String(conversationId || '');
+    const startedAt = Math.max(0, Number(requestStartedAt || 0));
+    if (!id || !startedAt) return null;
+
+    const current = await readWatchdog(id).catch(() => null);
+    if (!current?.stopped || !String(current.stopReason || '').startsWith('status:')) return current;
+    if (startedAt <= Math.max(0, Number(current.lastRequestStartedAt || 0))) return current;
+
+    // The network request is extension-observed proof of a new interaction. Mark
+    // that request as the operator prompt boundary before normal reconciliation so
+    // the terminal-storage invariant may release only the old response's stop.
+    return await writeWatchdog({
+      ...current,
+      stopped: false,
+      stopReason: '',
+      lastStatusCode: '',
+      sendCount: 0,
+      waitingForRequestStart: false,
+      lastRequestStartedAt: startedAt,
+      operatorPromptArmedAt: Math.max(startedAt, Number(current.operatorPromptArmedAt || 0) + 1),
+      deadlineAt: 0,
+      retryAt: 0,
+      retryReason: ''
+    }).catch(() => current);
+  }
+
   async function armRequestStartForTab(tabId, requestId, requestStartedAt, attempt = 0) {
     const monitor = globalThis.__chatgptNotifierMonitorBackground;
     if (typeof monitor?.reconcileCodeWatchdog !== 'function' || typeof monitor?.monitorOverview !== 'function') return false;
@@ -230,6 +257,7 @@
     }
 
     try {
+      await releaseTerminalStopForFreshRequest(identity.id, requestStartedAt);
       await monitor.reconcileCodeWatchdog({
         conversationId: identity.id,
         conversationUrl: identity.url,
@@ -428,6 +456,7 @@
     requestStartsByTab,
     terminalLatchesByConversation,
     armRequestStartForTab,
+    releaseTerminalStopForFreshRequest,
     deferManualEnableTimer,
     resolveManualEnableTabId,
     parkTerminalStatusForSender,
