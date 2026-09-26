@@ -24,7 +24,9 @@
   function usableComposer(node) {
     if (!node || node.isConnected === false) return false;
     if (node.disabled || node.getAttribute?.('aria-disabled') === 'true') return false;
-    return Boolean(node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement || node.isContentEditable);
+    const isTextarea = typeof HTMLTextAreaElement !== 'undefined' && node instanceof HTMLTextAreaElement;
+    const isInput = typeof HTMLInputElement !== 'undefined' && node instanceof HTMLInputElement;
+    return Boolean(isTextarea || isInput || node.isContentEditable || typeof node.closest === 'function');
   }
 
   function liveComposer(previous = null) {
@@ -142,7 +144,7 @@
       return { ok: false, reason: 'composer-mismatch' };
     }
 
-    let ready = await waitForReady(composer, expected, originalText, replace, timeoutMs);
+    const ready = await waitForReady(composer, expected, originalText, replace, timeoutMs);
     if (!ready) return { ok: false, reason: 'send-not-ready' };
 
     // ChatGPT can remount the Lexical composer while an edit is committing. Never
