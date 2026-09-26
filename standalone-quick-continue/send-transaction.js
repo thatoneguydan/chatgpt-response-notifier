@@ -1,12 +1,17 @@
 'use strict';
 
 (() => {
-  const VERSION = 1;
+  const VERSION = 2;
   if (globalThis.ChatGPTQuickContinueSend?.version === VERSION) return;
 
   const composerApi = globalThis.ChatGPTQuickContinueComposer;
   if (!composerApi) return;
 
+  const COMPOSER_SELECTORS = Object.freeze([
+    '#prompt-textarea',
+    'textarea[data-testid="prompt-textarea"]',
+    '[contenteditable="true"][data-testid="prompt-textarea"]'
+  ]);
   const SEND_BUTTON_SELECTOR = [
     'button[data-testid="send-button"]',
     'button[aria-label="Send prompt"]',
@@ -16,6 +21,21 @@
 
   const DEFAULT_TIMEOUT_MS = 1800;
 
+  function usableComposer(node) {
+    if (!node || node.isConnected === false) return false;
+    if (node.disabled || node.getAttribute?.('aria-disabled') === 'true') return false;
+    return Boolean(node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement || node.isContentEditable);
+  }
+
+  function liveComposer(previous = null) {
+    for (const selector of COMPOSER_SELECTORS) {
+      let candidate = null;
+      try { candidate = document.querySelector(selector); } catch {}
+      if (usableComposer(candidate)) return candidate;
+    }
+    return usableComposer(previous) ? previous : null;
+  }
+
   function enabledSendButton(composer) {
     const root = composer?.closest?.('form') || document;
     let button = null;
@@ -23,7 +43,7 @@
       button = root.querySelector(SEND_BUTTON_SELECTOR)
         || (root !== document ? document.querySelector(SEND_BUTTON_SELECTOR) : null);
     } catch {}
-    if (!button || button.disabled || button.getAttribute?.('aria-disabled') === 'true') return null;
+    if (!button || button.isConnected === false || button.disabled || button.getAttribute?.('aria-disabled') === 'true') return null;
     return button;
   }
 
@@ -31,7 +51,7 @@
     if (!(node instanceof Element)) return null;
     let button = null;
     try { button = node.closest(SEND_BUTTON_SELECTOR); } catch {}
-    if (!button || button.disabled || button.getAttribute?.('aria-disabled') === 'true') return null;
+    if (!button || button.isConnected === false || button.disabled || button.getAttribute?.('aria-disabled') === 'true') return null;
     return button;
   }
 
@@ -46,70 +66,95 @@
     });
   }
 
-  async function waitForReady(composer, expectedText, timeoutMs = DEFAULT_TIMEOUT_MS) {
-    const expected = composerApi.normalize(expectedText);
+  async function settleExpectedComposer(previous, expected, originalText, allowReapply) {
     await afterCommitBoundary();
+    let composer = liveComposer(previous);
+    if (!composer) return null;
+    if (composerApi.read(composer) === expected) return composer;
 
-    const immediate = enabledSendButton(composer);
-    if (immediate && composerApi.read(composer) === expected) return immediate;
+    if (!allowReapply || composerApi.read(composer) !== originalText) return null;
+    if (!composerApi.replace(composer, expected)) return null;
+
+    await afterCommitBoundary();
+    composer = liveComposer(composer);
+    if (!composer || composerApi.read(composer) !== expected) return null;
+    return composer;
+  }
+
+  function waitForReady(previous, expectedText, originalText, allowReapply, timeoutMs = DEFAULT_TIMEOUT_MS) {
+    const expected = composerApi.normalize(expectedText);
 
     return new Promise((resolve) => {
       let settled = false;
       let observer = null;
-      const root = composer?.closest?.('form') || document.body || document.documentElement;
+      let timer = null;
+      let inspecting = false;
 
-      const finish = (button) => {
+      const finish = (result) => {
         if (settled) return;
         settled = true;
         try { observer?.disconnect(); } catch {}
-        clearTimeout(timer);
-        resolve(button || null);
+        if (timer !== null) clearTimeout(timer);
+        resolve(result || null);
       };
 
-      const inspect = () => {
-        if (composerApi.read(composer) !== expected) return;
-        const button = enabledSendButton(composer);
-        if (button) finish(button);
+      const inspect = async () => {
+        if (settled || inspecting) return;
+        inspecting = true;
+        try {
+          const composer = await settleExpectedComposer(previous, expected, originalText, allowReapply);
+          if (!composer) return;
+          previous = composer;
+          const button = enabledSendButton(composer);
+          if (button) finish({ composer, button });
+        } finally {
+          inspecting = false;
+        }
       };
 
+      const root = document.body || document.documentElement;
       if (root && typeof MutationObserver === 'function') {
-        observer = new MutationObserver(inspect);
+        observer = new MutationObserver(() => { void inspect(); });
         observer.observe(root, {
           childList: true,
           subtree: true,
           attributes: true,
-          attributeFilter: ['disabled', 'aria-disabled', 'data-testid', 'aria-label']
+          attributeFilter: ['disabled', 'aria-disabled', 'data-testid', 'aria-label', 'contenteditable']
         });
       }
 
-      const timer = setTimeout(() => finish(null), Math.max(0, Number(timeoutMs) || DEFAULT_TIMEOUT_MS));
-      inspect();
+      timer = setTimeout(() => finish(null), Math.max(0, Number(timeoutMs) || DEFAULT_TIMEOUT_MS));
+      void inspect();
     });
   }
 
   async function submit(composer, text, { replace = true, timeoutMs = DEFAULT_TIMEOUT_MS } = {}) {
+    composer = liveComposer(composer);
     if (!composer) return { ok: false, reason: 'composer-not-found' };
     const expected = composerApi.normalize(text);
     if (!expected) return { ok: false, reason: 'empty-text' };
+    const originalText = composerApi.read(composer);
 
     if (replace && !composerApi.replace(composer, expected)) {
       return { ok: false, reason: 'write-failed' };
     }
-    if (composerApi.read(composer) !== expected) {
+    if (!replace && originalText !== expected) {
       return { ok: false, reason: 'composer-mismatch' };
     }
 
-    let sendButton = await waitForReady(composer, expected, timeoutMs);
-    if (!sendButton) return { ok: false, reason: 'send-not-ready' };
+    let ready = await waitForReady(composer, expected, originalText, replace, timeoutMs);
+    if (!ready) return { ok: false, reason: 'send-not-ready' };
 
-    // The editor DOM and the send button can update before ChatGPT's React/Lexical
-    // state has finished committing. Cross one more browser commit boundary, then
-    // reacquire and revalidate both before issuing the one programmatic submit.
+    // ChatGPT can remount the Lexical composer while an edit is committing. Never
+    // validate a detached editor and then click Send for a different live editor.
+    // Cross one more commit boundary, reacquire the current composer, and require
+    // the exact expected text on that live node immediately before the one click.
     await afterCommitBoundary();
-    if (composerApi.read(composer) !== expected) {
+    composer = liveComposer(ready.composer);
+    if (!composer || composerApi.read(composer) !== expected) {
       return { ok: false, reason: 'composer-mismatch' };
     }
-    sendButton = enabledSendButton(composer);
+    const sendButton = enabledSendButton(composer);
     if (!sendButton) return { ok: false, reason: 'send-not-ready' };
 
     try {
@@ -123,6 +168,8 @@
   globalThis.ChatGPTQuickContinueSend = Object.freeze({
     version: VERSION,
     selector: SEND_BUTTON_SELECTOR,
+    composerSelectors: COMPOSER_SELECTORS,
+    liveComposer,
     enabledSendButton,
     closestSendButton,
     submit
