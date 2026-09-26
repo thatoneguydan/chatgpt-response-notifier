@@ -1,4 +1,10 @@
-# ChatGPT Response Notifier 0.9.89
+# ChatGPT Response Notifier 0.9.90
+
+- Restores watchdog restart after a definitive terminal status. A real extension-observed ChatGPT conversation POST now establishes a new operator-prompt boundary before watchdog reconciliation, so the previous response's `COMPLETE_*`, `BLOCKED_HUMAN`, or `PLANNING_ACTIVE` stop cannot remain permanently sticky across a new user interaction.
+- Keeps stale same-turn DOM writes unable to reopen a stopped watchdog; only a genuinely newer request boundary releases the prior terminal stop.
+- Pairs with Quick Continue 1.2.23, which submits through the live composer form path used by Enter instead of relying on a synthetic Send-button click that current ChatGPT can ignore.
+
+## Previous: 0.9.89
 
 - Makes the watchdog send interval crash-safe and duplicate-safe by reserving each automatic Continue durably before the page click, so concurrent wakeups, lost response ports, and unconfirmed sends cannot replay within the same 30-minute interval.
 - Binds each reservation to the exact conversation, prompt, tab, and document, consumes the retry budget before dispatch, and treats uncertain click outcomes as consumed attempts with a conservative full 30-minute floor.
@@ -34,7 +40,7 @@
 - Moves the live timer into a new DOM namespace that the stale 0.9.84-and-earlier timer code cannot delete or repaint, while statically hiding those legacy timer rows so they cannot flicker back into view.
 - Adds a document-level timer ownership lease. Future timer runtimes detect when a newer owner has claimed the page and relinquish their intervals, listeners, and row instead of competing for the toolbar.
 - Requires timer runtime v8 from both Quick Continue and watchdog authority bootstrap paths, so already-open tabs cannot be treated as healthy while a stale v7 timer surface is still present.
-- Preserves the existing backend behavior where Pause clears the active watchdog and Stop cancels only the current timer while monitoring remains enabled.
+- Preserves the existing backend behavior where Pause clears the active watchdog and Stop cancels only the current timer while Monitor stays enabled.
 
 ## Previous: 0.9.84
 
