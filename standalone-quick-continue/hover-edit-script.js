@@ -115,7 +115,23 @@
     }
   }
 
+  function clockFromEvent(event) {
+    const target = event?.target;
+    if (!(target instanceof Element)) return null;
+    try { return target.closest(CLOCK_SELECTOR); } catch { return null; }
+  }
+
   function handleManualSendClick(event) {
+    // Own the clock at document scope rather than binding behavior to one span.
+    // The toolbar is intentionally replaceable, so a remounted clock must become
+    // interactive immediately without waiting for an element-specific listener.
+    if (clockFromEvent(event)) {
+      event.preventDefault();
+      event.stopPropagation();
+      setManualTimestampEnabled(!manualTimestampEnabled);
+      return;
+    }
+
     if (!manualTimestampEnabled || event?.isTrusted !== true) return;
     const sendButton = sendApi.closestSendButton(event.target);
     if (!sendButton) return;
@@ -132,6 +148,13 @@
   }
 
   function handleManualSendKeydown(event) {
+    if (clockFromEvent(event) && (event.key === 'Enter' || event.key === ' ')) {
+      event.preventDefault();
+      event.stopPropagation();
+      setManualTimestampEnabled(!manualTimestampEnabled);
+      return;
+    }
+
     if (!manualTimestampEnabled || event?.isTrusted !== true) return;
     if (event.defaultPrevented || event.isComposing || event.keyCode === 229) return;
     if (event.key !== 'Enter' || event.shiftKey || event.altKey) return;
@@ -172,23 +195,8 @@
     updateClockToggleStyle();
   }
 
-  function handleClockClick(event) {
-    event.preventDefault();
-    event.stopPropagation();
-    setManualTimestampEnabled(!manualTimestampEnabled);
-  }
-
-  function handleClockKeydown(event) {
-    if (event.key !== 'Enter' && event.key !== ' ') return;
-    event.preventDefault();
-    event.stopPropagation();
-    setManualTimestampEnabled(!manualTimestampEnabled);
-  }
-
   function detachClockToggle() {
     if (!clockToggle) return;
-    try { clockToggle.removeEventListener('click', handleClockClick); } catch {}
-    try { clockToggle.removeEventListener('keydown', handleClockKeydown); } catch {}
     try {
       clockToggle.removeAttribute('role');
       clockToggle.removeAttribute('tabindex');
@@ -213,8 +221,6 @@
     detachClockToggle();
     if (!nextClock) return;
     clockToggle = nextClock;
-    clockToggle.addEventListener('click', handleClockClick);
-    clockToggle.addEventListener('keydown', handleClockKeydown);
     updateClockToggleStyle();
   }
 
