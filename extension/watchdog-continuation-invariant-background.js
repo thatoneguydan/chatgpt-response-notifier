@@ -223,6 +223,19 @@
     const previous = previousValue ? migrateCadenceRecord(previousValue, now) : null;
     if (!next) return next;
 
+    if (next.stopped === true) {
+      const stopChanged = previous?.stopped !== true || String(previous?.stopReason || '') !== String(next.stopReason || '');
+      next.cadenceEpoch = Math.max(1, number(next.cadenceEpoch), number(previous?.cadenceEpoch)) + (stopChanged ? 1 : 0);
+      next.sendCount = 0;
+      next.cadenceSendCount = 0;
+      next.cadenceAttempt = null;
+      next.nextSendEligibleAt = 0;
+      next.deadlineAt = 0;
+      next.retryAt = 0;
+      next.retryReason = '';
+      return next;
+    }
+
     if (cadenceBudgetReset(previous, next)) {
       next.cadenceSendCount = number(next.sendCount);
       next.cadenceEpoch = Math.max(1, number(previous?.cadenceEpoch), number(next.cadenceEpoch)) + 1;
@@ -233,17 +246,6 @@
       next.cadenceEpoch = Math.max(1, number(next.cadenceEpoch), number(previous?.cadenceEpoch));
       if (!next.cadenceAttempt && previous?.cadenceAttempt) next.cadenceAttempt = clone(previous.cadenceAttempt);
       next.nextSendEligibleAt = Math.max(number(next.nextSendEligibleAt), number(previous?.nextSendEligibleAt));
-    }
-
-    if (next.stopped === true) {
-      const stopChanged = previous?.stopped !== true || String(previous?.stopReason || '') !== String(next.stopReason || '');
-      if (stopChanged) next.cadenceEpoch = Math.max(1, number(next.cadenceEpoch)) + 1;
-      next.cadenceAttempt = null;
-      next.nextSendEligibleAt = 0;
-      next.deadlineAt = 0;
-      next.retryAt = 0;
-      next.retryReason = '';
-      return next;
     }
 
     const floor = number(next.nextSendEligibleAt);
