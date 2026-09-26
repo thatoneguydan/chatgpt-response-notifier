@@ -1,4 +1,11 @@
-# ChatGPT Response Notifier 0.9.88
+# ChatGPT Response Notifier 0.9.89
+
+- Makes the watchdog send interval crash-safe and duplicate-safe by reserving each automatic Continue durably before the page click, so concurrent wakeups, lost response ports, and unconfirmed sends cannot replay within the same 30-minute interval.
+- Binds each reservation to the exact conversation, prompt, tab, and document, consumes the retry budget before dispatch, and treats uncertain click outcomes as consumed attempts with a conservative full 30-minute floor.
+- Migrates prior watchdog cadence state without granting immediate send authority, preserves definitive stop states, and fixes terminal-stop ordering so stopped watchdogs cannot inherit an old send count or timer.
+- Adds runnable acceptance regressions for stale alarms, concurrent wakes, unconfirmed clicks, and response-port loss; all assert that at most one Continue can be sent per interval.
+
+## Previous: 0.9.88
 
 - Enforces one automatic Continue authority: only the 30-minute watchdog may send an automatic continuation. Legacy coded-completion and status-observer routes now hand recoverable statuses back to the watchdog instead of immediately sending another response.
 - Removes the watchdog persistence invariant's hidden 60-second `incomplete-awaiting-continuation` fallback alarm. The invariant may preserve state but can no longer invent a retry cadence or schedule alarms.
