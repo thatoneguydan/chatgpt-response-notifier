@@ -1,11 +1,12 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 7;
+  const RUNTIME_VERSION = 8;
   const prompts = globalThis.ChatGPTQuickContinuePrompts;
   const configApi = globalThis.ChatGPTQuickContinueConfig;
   const composerApi = globalThis.ChatGPTQuickContinueComposer;
-  if (!prompts || !configApi || !composerApi) return;
+  const sendApi = globalThis.ChatGPTQuickContinueSend;
+  if (!prompts || !configApi || !composerApi || !sendApi) return;
 
   const previousRuntime = globalThis.__chatgptQuickContinueRuntime;
   if (Number(previousRuntime?.version || 0) === RUNTIME_VERSION) return;
@@ -198,29 +199,19 @@
     busy = true;
     updateAvailability(composer);
     try {
-      if (!writeComposer(composer, text)) {
-        setStatus('Could not write the prompt.');
-        return false;
-      }
-
-      const sendButton = await waitForSendButton(composer);
-      if (!sendButton) {
-        setStatus('Send not ready; prompt left in composer.');
-        return false;
-      }
-      if (composerText(composer) !== composerApi.normalize(text)) {
-        setStatus('Composer changed; nothing sent.');
-        return false;
-      }
-
-      try {
-        sendButton.click();
+      const result = await sendApi.submit(composer, text, {
+        replace: true,
+        timeoutMs: SEND_READY_TIMEOUT_MS
+      });
+      if (result?.ok) {
         setStatus('Sent.');
         return true;
-      } catch {
-        setStatus('Send failed; prompt left in composer.');
-        return false;
       }
+      if (result?.reason === 'write-failed') setStatus('Could not write the prompt.');
+      else if (result?.reason === 'composer-mismatch') setStatus('Composer changed; nothing sent.');
+      else if (result?.reason === 'send-not-ready') setStatus('Send not ready; prompt left in composer.');
+      else setStatus('Send failed; prompt left in composer.');
+      return false;
     } finally {
       busy = false;
       scheduleSync();

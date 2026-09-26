@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 8;
+  const RUNTIME_VERSION = 9;
   const previousRuntime = globalThis.__chatgptQuickContinueHoverEditRuntime;
   if (Number(previousRuntime?.version || 0) === RUNTIME_VERSION) return;
   const restoredTimestampState = Boolean(previousRuntime?.manualTimestampEnabled);
@@ -10,14 +10,11 @@
   const prompts = globalThis.ChatGPTQuickContinuePrompts;
   const configApi = globalThis.ChatGPTQuickContinueConfig;
   const composerApi = globalThis.ChatGPTQuickContinueComposer;
+  const sendApi = globalThis.ChatGPTQuickContinueSend;
+  if (!prompts || !configApi || !composerApi || !sendApi) return;
+
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const CLOCK_SELECTOR = '[aria-label="Current local time"]';
-  const SEND_BUTTON_SELECTOR = [
-    'button[data-testid="send-button"]',
-    'button[aria-label="Send prompt"]',
-    'button[aria-label="Send message"]',
-    'button[aria-label="Send"]'
-  ].join(',');
   const DEFAULT_MANUAL_TIMESTAMP_TEXT = '[{time}] {message}';
 
   let observer = null;
@@ -25,6 +22,7 @@
   let clockToggle = null;
   let manualTimestampEnabled = restoredTimestampState;
   let manualTimestampText = DEFAULT_MANUAL_TIMESTAMP_TEXT;
+  let manualSendInFlight = false;
   let unsubscribeConfig = null;
   let scheduledSync = null;
   let scheduledWithAnimationFrame = false;
@@ -53,7 +51,7 @@
   }
 
   function rawComposerText(node) {
-    return composerApi?.read(node) || '';
+    return composerApi.read(node) || '';
   }
 
   function normalizedComposerText(value) {
@@ -62,7 +60,7 @@
 
   function formatPromptTimestamp(date = new Date()) {
     try {
-      const formatter = prompts?.formatTimestamp;
+      const formatter = prompts.formatTimestamp;
       if (typeof formatter === 'function') return formatter(date);
     } catch {}
     try {
@@ -79,7 +77,7 @@
 
   function renderManualMessage(message, date = new Date()) {
     try {
-      const renderer = prompts?.renderManualMessage;
+      const renderer = prompts.renderManualMessage;
       if (typeof renderer === 'function') {
         const rendered = String(renderer(manualTimestampText, message, date) || '');
         if (rendered) return rendered;
@@ -93,41 +91,44 @@
     return /^\[[^\]\r\n]{0,80}\d{1,2}:\d{2}(?:\s*[AP]M)?[^\]\r\n]{0,80}\](?:\s|$)/i.test(value);
   }
 
-  function replaceComposerText(node, text) {
-    return composerApi?.replace(node, text) === true;
-  }
-
-  function enabledSendButton(composer) {
-    const root = composer?.closest?.('form') || document;
-    let button = null;
-    try {
-      button = root.querySelector(SEND_BUTTON_SELECTOR)
-        || (root !== document ? document.querySelector(SEND_BUTTON_SELECTOR) : null);
-    } catch {}
-    if (!button || button.disabled || button.getAttribute?.('aria-disabled') === 'true') return null;
-    return button;
-  }
-
-  function stampManualMessage() {
-    if (!manualTimestampEnabled) return false;
+  async function submitManualMessage() {
+    if (manualSendInFlight) return false;
     const composer = composerElement();
     if (!composer) return false;
+
     const before = rawComposerText(composer);
     if (!before.trim()) return false;
-    if (hasLeadingTimestamp(before)) return true;
-    return replaceComposerText(composer, renderManualMessage(before, new Date()));
+    const normalizedBefore = normalizedComposerText(before);
+    const alreadyStamped = hasLeadingTimestamp(normalizedBefore);
+    const expected = alreadyStamped
+      ? normalizedBefore
+      : renderManualMessage(normalizedBefore, new Date());
+
+    manualSendInFlight = true;
+    try {
+      const result = await sendApi.submit(composer, expected, {
+        replace: !alreadyStamped
+      });
+      return result?.ok === true;
+    } finally {
+      manualSendInFlight = false;
+    }
   }
 
   function handleManualSendClick(event) {
     if (!manualTimestampEnabled || event?.isTrusted !== true) return;
-    const node = event.target;
-    if (!(node instanceof Element)) return;
-    const sendButton = node.closest(SEND_BUTTON_SELECTOR);
-    if (!sendButton || sendButton.disabled || sendButton.getAttribute?.('aria-disabled') === 'true') return;
-    if (!stampManualMessage()) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-    }
+    const sendButton = sendApi.closestSendButton(event.target);
+    if (!sendButton) return;
+
+    const composer = composerElement();
+    if (!composer || !rawComposerText(composer).trim()) return;
+
+    // Never let ChatGPT consume the trusted click that existed before the
+    // timestamp edit. Commit the final text first, then the shared transaction
+    // issues exactly one fresh send against that committed editor state.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (!manualSendInFlight) void submitManualMessage();
   }
 
   function handleManualSendKeydown(event) {
@@ -136,13 +137,16 @@
     if (event.key !== 'Enter' || event.shiftKey || event.altKey) return;
 
     const composer = composerElement();
-    if (!composer || !enabledSendButton(composer)) return;
+    if (!composer || !sendApi.enabledSendButton(composer) || !rawComposerText(composer).trim()) return;
     const target = event.target;
     if (target !== composer && !(target instanceof Node && composer.contains(target))) return;
-    if (!stampManualMessage()) {
-      event.preventDefault();
-      event.stopImmediatePropagation();
-    }
+
+    // The original keydown is deliberately consumed. Allowing it to continue
+    // after replacing Lexical's contents is what made the first Enter only add
+    // the timestamp and the second Enter actually submit.
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (!manualSendInFlight) void submitManualMessage();
   }
 
   function updateClockToggleStyle() {
@@ -257,8 +261,8 @@
   }
 
   try {
-    unsubscribeConfig = configApi?.subscribe?.(applyManualTimestampConfig) || null;
-    configApi?.load?.().then(applyManualTimestampConfig).catch(() => {});
+    unsubscribeConfig = configApi.subscribe(applyManualTimestampConfig) || null;
+    configApi.load().then(applyManualTimestampConfig).catch(() => {});
   } catch {}
 
   observer = new MutationObserver(scheduleToolbarSync);

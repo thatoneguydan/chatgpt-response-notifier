@@ -14,6 +14,7 @@ const domCompatSource = fs.readFileSync(path.join(extensionRoot, 'dom-compat.js'
 const backgroundSource = fs.readFileSync(path.join(extensionRoot, 'background.js'), 'utf8');
 const promptSource = fs.readFileSync(path.join(extensionRoot, 'prompt-format.js'), 'utf8');
 const composerSource = fs.readFileSync(path.join(extensionRoot, 'composer-text.js'), 'utf8');
+const sendTransactionSource = fs.readFileSync(path.join(extensionRoot, 'send-transaction.js'), 'utf8');
 const configSource = fs.readFileSync(path.join(extensionRoot, 'config.js'), 'utf8');
 const runtimeResetSource = fs.readFileSync(path.join(extensionRoot, 'runtime-reset.js'), 'utf8');
 const contentSource = fs.readFileSync(path.join(extensionRoot, 'content-script.js'), 'utf8');
@@ -28,8 +29,8 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.permissions].sort(), ['alarms', 'scripting', 'storage', 'tabs'].sort());
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
-  assert.deepEqual(manifest.content_scripts[0].js, ['dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'runtime-reset.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.20');
+  assert.deepEqual(manifest.content_scripts[0].js, ['dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'send-transaction.js', 'runtime-reset.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
+  assert.equal(manifest.version, '1.2.21');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -44,6 +45,7 @@ test('managed updater talks only to loopback, reloads itself, and reinjects curr
   assert.match(backgroundSource, /'dom-compat\.js'/);
   assert.match(backgroundSource, /'runtime-reset\.js'/);
   assert.match(backgroundSource, /'composer-text\.js'/);
+  assert.match(backgroundSource, /'send-transaction\.js'/);
   assert.match(backgroundSource, /'conversation-state\.js'/);
   assert.doesNotMatch(backgroundSource, /github\.com|raw\.githubusercontent\.com|backend-api|XMLHttpRequest|WebSocket/);
 });
@@ -126,15 +128,73 @@ test('prompt formatter places configurable time, project, and message placeholde
   assert.equal(api.projectContinuePrompt('campaign desk', 'No placeholder here.', date), '');
 });
 
-test('send path clicks the real ChatGPT Send button at most once and verifies exact multiline content', () => {
-  assert.match(contentSource, /button\[data-testid="send-button"\]/);
-  assert.match(contentSource, /sendButton\.click\(\)/);
-  assert.equal((contentSource.match(/sendButton\.click\(\)/g) || []).length, 1);
-  assert.match(contentSource, /composerApi\.replace\(node, text\)/);
-  assert.doesNotMatch(contentSource, /document\.createElement\('br'\)/);
-  assert.doesNotMatch(contentSource, /XMLHttpRequest/);
-  assert.doesNotMatch(contentSource, /WebSocket/);
-  assert.match(contentSource, /chatgpt-notifier-quick-prompts/);
+test('shared send transaction crosses editor commit boundaries and owns the only programmatic Send click', async () => {
+  assert.doesNotThrow(() => new vm.Script(sendTransactionSource));
+  assert.match(sendTransactionSource, /function afterCommitBoundary\(\)/);
+  assert.match(sendTransactionSource, /raf\(\(\) => raf\(resolve\)\)/);
+  assert.match(sendTransactionSource, /composerApi\.read\(composer\) !== expected/);
+  assert.equal((sendTransactionSource.match(/sendButton\.click\(\)/g) || []).length, 1);
+  assert.doesNotMatch(contentSource, /sendButton\.click\(\)/);
+  assert.doesNotMatch(hoverEditSource, /sendButton\.click\(\)/);
+  assert.match(contentSource, /sendApi\.submit\(composer, text/);
+  assert.match(hoverEditSource, /sendApi\.submit\(composer, expected/);
+
+  let currentText = '';
+  let clicks = 0;
+  class Element {}
+  const button = {
+    disabled: false,
+    getAttribute: () => null,
+    click: () => { clicks += 1; }
+  };
+  const root = {
+    querySelector: () => button
+  };
+  const composer = {
+    closest: () => root
+  };
+  const composerApi = {
+    normalize: (value) => String(value ?? '').replace(/\r\n?/g, '\n'),
+    read: () => currentText,
+    replace: (_node, value) => {
+      currentText = String(value ?? '').replace(/\r\n?/g, '\n');
+      return true;
+    }
+  };
+  const context = {
+    globalThis: null,
+    Element,
+    Promise,
+    Number,
+    String,
+    Object,
+    setTimeout,
+    clearTimeout,
+    requestAnimationFrame: (callback) => callback(),
+    MutationObserver: class {
+      observe() {}
+      disconnect() {}
+    },
+    document: {
+      visibilityState: 'visible',
+      body: root,
+      documentElement: root,
+      querySelector: () => button
+    },
+    ChatGPTQuickContinueComposer: composerApi
+  };
+  context.globalThis = context;
+  vm.runInNewContext(sendTransactionSource, context);
+
+  const result = await context.ChatGPTQuickContinueSend.submit(composer, 'one\ntwo');
+  assert.equal(result.ok, true);
+  assert.equal(currentText, 'one\ntwo');
+  assert.equal(clicks, 1, 'one transaction must issue exactly one Send click');
+
+  currentText = '[Sep 26, 9:20 AM] already stamped';
+  const second = await context.ChatGPTQuickContinueSend.submit(composer, currentText, { replace: false });
+  assert.equal(second.ok, true);
+  assert.equal(clicks, 2, 'already-stamped retry still issues only one Send click');
 });
 
 test('project picker is non-modal, exposes Edit, and never auto-focuses', () => {
@@ -160,19 +220,21 @@ test('inline pencil controls are removed while Project Edit remains the JSON edi
   assert.doesNotMatch(hoverEditSource, /XMLHttpRequest|WebSocket|fetch\(/);
 });
 
-test('clock toggle renders the configured manual-message template only for trusted manual sends', () => {
+test('clock toggle atomically timestamps and sends only trusted manual sends', () => {
   assert.match(hoverEditSource, /const CLOCK_SELECTOR = '\[aria-label="Current local time"\]'/);
   assert.match(hoverEditSource, /setAttribute\('aria-pressed', String\(manualTimestampEnabled\)\)/);
   assert.match(hoverEditSource, /outline: manualTimestampEnabled \? '1px solid currentColor' : '1px solid transparent'/);
-  assert.match(hoverEditSource, /prompts\?\.formatTimestamp/);
-  assert.match(hoverEditSource, /prompts\?\.renderManualMessage/);
+  assert.match(hoverEditSource, /prompts\.formatTimestamp/);
+  assert.match(hoverEditSource, /prompts\.renderManualMessage/);
   assert.match(hoverEditSource, /manualTimestampText/);
-  assert.match(hoverEditSource, /configApi\?\.subscribe/);
+  assert.match(hoverEditSource, /configApi\.subscribe/);
   assert.match(hoverEditSource, /function hasLeadingTimestamp\(text\)/);
   assert.match(hoverEditSource, /event\?\.isTrusted !== true/);
   assert.match(hoverEditSource, /event\.key !== 'Enter' \|\| event\.shiftKey \|\| event\.altKey/);
   assert.match(hoverEditSource, /event\.isComposing \|\| event\.keyCode === 229/);
-  assert.match(hoverEditSource, /composerApi\?\.replace\(node, text\)/);
+  assert.match(hoverEditSource, /let manualSendInFlight = false/);
+  assert.match(hoverEditSource, /event\.preventDefault\(\);\s+event\.stopImmediatePropagation\(\);\s+if \(!manualSendInFlight\) void submitManualMessage\(\);/);
+  assert.match(hoverEditSource, /replace: !alreadyStamped/);
   assert.doesNotMatch(hoverEditSource, /document\.createElement\('br'\)|node\.replaceChildren\(fragment\)/);
   assert.match(hoverEditSource, /document\.addEventListener\('click', handleManualSendClick, true\)/);
   assert.match(hoverEditSource, /document\.addEventListener\('keydown', handleManualSendKeydown, true\)/);
@@ -246,7 +308,8 @@ test('prompt and config APIs are versioned so reinjection cannot retain stale gl
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
   assert.match(configSource, /chrome\.storage\.onChanged\.removeListener\(handleStorageChanged\)/);
-  assert.match(hoverEditSource, /const RUNTIME_VERSION = 8/);
+  assert.match(contentSource, /const RUNTIME_VERSION = 8/);
+  assert.match(hoverEditSource, /const RUNTIME_VERSION = 9/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
   assert.match(conversationStateSource, /const RUNTIME_VERSION = 1/);
@@ -396,6 +459,7 @@ test('installer copies managed worker/config files and removes the legacy projec
   assert.match(installerSource, /'config\.js'/);
   assert.match(installerSource, /'config\.json'/);
   assert.match(installerSource, /'composer-text\.js'/);
+  assert.match(installerSource, /'send-transaction\.js'/);
   assert.match(installerSource, /'runtime-reset\.js'/);
   assert.match(installerSource, /'conversation-state\.js'/);
   assert.match(installerSource, /'projects\.json'/);
@@ -443,7 +507,7 @@ test('toolbar self-heals missing core controls and recovers from transient compo
 });
 
 test('standalone runtime hot-replaces stale generations, restores a detached toolbar, and ignores notifier-only churn', () => {
-  assert.match(contentSource, /const RUNTIME_VERSION = 7/);
+  assert.match(contentSource, /const RUNTIME_VERSION = 8/);
   assert.match(contentSource, /const previousRuntime = globalThis\.__chatgptQuickContinueRuntime/);
   assert.match(contentSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.doesNotMatch(contentSource, /__chatgptQuickContinueInstalled/);
