@@ -1,4 +1,11 @@
-# ChatGPT Response Notifier 0.9.91
+# ChatGPT Response Notifier 0.9.92
+
+- Makes managed notifier updates converge the actual running helper process as well as the files on disk. Update checks are now serialized, and any stale helper generation self-heals to the versioned host executable that matches the installed extension state.
+- Adds `runningHostVersion` to the localhost helper handshake, derived from the helper process executable generation rather than mutable extension files.
+- Strengthens release acceptance so a release cannot pass merely because the new extension manifest is present on disk; both the installed extension and the helper process serving the bridge must report the expected version.
+- Unblocks the already-published Quick Continue 1.2.24 deployment after the 0.9.91 release exposed that the previous acceptance could mistake updated disk state for updated helper code.
+
+## Previous: 0.9.91
 
 - Removes MV3 service-worker cold-start page mutations from both extensions. Quick Continue no longer reinjects `runtime-reset.js` merely because its background worker wakes, so the canonical toolbar is not disposed and rebuilt during normal browsing.
 - Retires the notifier-owned legacy Quick Prompts injector. Notifier worker restarts and completed navigations can no longer create a competing toolbar that briefly appears before the standalone Quick Continue surface suppresses it.
