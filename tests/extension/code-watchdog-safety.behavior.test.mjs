@@ -231,7 +231,7 @@ test('30-minute no-code deadline is authoritative even while generation is activ
 });
 
 test('status runtime generation advances for the semantic-turn page behavior', () => {
-  assert.match(statusSource, /const RUNTIME_VERSION = 16/);
+  assert.match(statusSource, /const RUNTIME_VERSION = 17/);
   assert.match(monitorPageSource, /const RUNTIME_VERSION = 13/);
 });
 
