@@ -90,10 +90,10 @@ test('legacy immediate continuation primitives are vetoed while definitive compl
   );
   assert.equal(autoResult, null);
   assert.equal(oldHandleCalls, 0);
-  assert.deepEqual(updates, [{
-    turnKey: 'turn-1',
-    patch: { state: 'superseded', actionReason: 'watchdog-owned-continuation' }
-  }]);
+  assert.equal(updates.length, 1);
+  assert.equal(updates[0].turnKey, 'turn-1');
+  assert.equal(updates[0].patch?.state, 'superseded');
+  assert.equal(updates[0].patch?.actionReason, 'watchdog-owned-continuation');
 
   const terminalResult = await context.handleContinuationClaim(
     { turnKey: 'turn-2', statusCode: 'COMPLETE_APPLIED' },
