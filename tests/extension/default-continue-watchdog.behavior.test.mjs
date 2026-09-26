@@ -55,7 +55,10 @@ function loadInvariant(now = 1_000_000) {
     Object,
     Date: { now: () => now },
     encodeURIComponent,
-    chrome: { alarms: { create: (name, options) => alarms.push({ name, options }) } },
+    chrome: {
+      alarms: { create: (name, options) => alarms.push({ name, options }) },
+      runtime: { onMessage: { addListener() {} } }
+    },
     ChatGPTNotifierContinuationPolicy: loadPolicy(),
     globalThis: null
   });

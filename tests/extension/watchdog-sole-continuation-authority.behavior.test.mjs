@@ -18,13 +18,18 @@ test('production installs the watchdog-only gate after background construction a
   assert.doesNotThrow(() => new vm.Script(authoritySource));
 });
 
-test('continuation invariant preserves state but never creates a scheduler or short retry cadence', () => {
-  assert.match(invariantSource, /const VERSION = 3/);
+test('durable cadence owner reserves before dispatch and never authorizes a short retry cadence', () => {
+  assert.match(invariantSource, /const VERSION = 4/);
+  assert.match(invariantSource, /const CADENCE_SCHEMA_VERSION = 1/);
+  assert.match(invariantSource, /const WATCHDOG_DELAY_MS = 30 \* 60_000/);
   assert.match(invariantSource, /RETIRED_SHORT_RETRY_REASON = 'incomplete-awaiting-continuation'/);
-  assert.match(invariantSource, /clearRetiredShortRetry/);
+  assert.match(invariantSource, /function authorizePageDispatch/);
+  assert.match(invariantSource, /database\.transaction\(\[PROFILE_STORE, ENROLLMENT_STORE\], 'readwrite'\)/);
+  assert.match(invariantSource, /cadenceSendCount: nextCount/);
+  assert.match(invariantSource, /nextSendEligibleAt: conservativeFloor/);
+  assert.match(invariantSource, /function finalizePageDispatch/);
+  assert.match(invariantSource, /chrome\.alarms\.create/);
   assert.doesNotMatch(invariantSource, /FALLBACK_RETRY_MS/);
-  assert.doesNotMatch(invariantSource, /chrome\.alarms\.create/);
-  assert.match(invariantSource, /must never create alarms or[\s\S]*invent a retry cadence/);
 });
 
 test('legacy immediate continuation primitives are vetoed while definitive completions retain their original handler', async () => {
