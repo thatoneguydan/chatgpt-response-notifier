@@ -1,4 +1,11 @@
-# ChatGPT Response Notifier 0.9.89
+# ChatGPT Response Notifier 0.9.90
+
+- Fixes a 0.9.89 regression where a definitive terminal footer could leave the watchdog permanently stopped on the next user message. A real ChatGPT conversation POST now creates a fresh watchdog epoch immediately, before the new user turn has rendered.
+- Routes that request-start rearm through the existing durable watchdog arm path, preserving the prior terminal stop for the old request while creating a new full 30-minute deadline and fresh three-attempt budget for the new request.
+- Uses a temporary request identity only until the normal monitor snapshot observes the rendered user turn, then replaces it with the real prompt identity without reopening the previous terminal state.
+- Adds an executable acceptance regression for terminal stop → real request start → rendered new prompt while retaining all 0.9.89 stale-alarm, concurrency, uncertain-click, and transport-loss cadence protections.
+
+## Previous: 0.9.89
 
 - Makes the watchdog send interval crash-safe and duplicate-safe by reserving each automatic Continue durably before the page click, so concurrent wakeups, lost response ports, and unconfirmed sends cannot replay within the same 30-minute interval.
 - Binds each reservation to the exact conversation, prompt, tab, and document, consumes the retry budget before dispatch, and treats uncertain click outcomes as consumed attempts with a conservative full 30-minute floor.
