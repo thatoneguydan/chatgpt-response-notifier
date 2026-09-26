@@ -1,4 +1,4 @@
-// Safe watchdog-cadence acceptance reproductions for Notifier 0.9.89+.
+// Safe watchdog-cadence acceptance reproductions for Notifier 0.9.90+.
 // No browser, network, ChatGPT, or real-message actions are performed.
 // Run: node tools/reproduce-watchdog-cadence-20260926.mjs
 import assert from 'node:assert/strict';
@@ -145,10 +145,14 @@ function fakeIndexedDb() {
 
 function eventHub() {
   const listeners = [];
-  return { listeners, addListener(listener) { listeners.push(listener); }, removeListener(listener) {
-    const index = listeners.indexOf(listener);
-    if (index >= 0) listeners.splice(index, 1);
-  } };
+  return {
+    listeners,
+    addListener(listener) { listeners.push(listener); },
+    removeListener(listener) {
+      const index = listeners.indexOf(listener);
+      if (index >= 0) listeners.splice(index, 1);
+    }
+  };
 }
 
 async function tick(count = 3) {
@@ -174,7 +178,7 @@ function loadHarness() {
   const chrome = {
     runtime: {
       onMessage: runtimeOnMessage,
-      getManifest: () => ({ version: '0.9.89' })
+      getManifest: () => ({ version: '0.9.90' })
     },
     alarms: {
       onAlarm: alarmsOnAlarm,
@@ -193,7 +197,7 @@ function loadHarness() {
       },
       async sendMessage(_tabId, message) {
         if (message?.type === 'CHATGPT_MONITOR_QUERY') return { snapshot: null };
-        if (message?.type === 'CHATGPT_NOTIFIER_ATTACHMENT_PING') return { ok: true, runtimeVersion: 99, extensionVersion: '0.9.89' };
+        if (message?.type === 'CHATGPT_NOTIFIER_ATTACHMENT_PING') return { ok: true, runtimeVersion: 99, extensionVersion: '0.9.90' };
         if (message?.type === 'CHATGPT_STATUS_RUNTIME_PING') return { ok: true, runtimeVersion: 99 };
         if (message?.type === 'CHATGPT_BOUNDED_RECOVERY_PING') return { ok: true, runtimeVersion: 99 };
         return { ok: true };
@@ -225,12 +229,16 @@ function loadHarness() {
   vm.runInContext(readText('extension/status-policy.js'), context);
   vm.runInContext(readText('extension/monitor-background.js'), context);
   vm.runInContext(readText('extension/watchdog-continuation-invariant-background.js'), context);
+  vm.runInContext(readText('extension/watchdog-request-start-rearm-background.js'), context);
   return {
     context,
     indexedDB,
     alarmState,
+    webBefore,
+    tabs,
     monitor: context.__chatgptNotifierMonitorBackground,
-    cadence: context.__chatgptNotifierWatchdogContinuationInvariant
+    cadence: context.__chatgptNotifierWatchdogContinuationInvariant,
+    requestStartRearm: context.__chatgptNotifierWatchdogRequestStartRearm
   };
 }
 
@@ -284,6 +292,7 @@ function dueCadencePatch() {
 const harness = loadHarness();
 await tick(6);
 assert.equal(harness.cadence.version, 4, 'cadence owner v4 must be loaded');
+assert.equal(harness.requestStartRearm.version, 1, 'request-start terminal rearm v1 must be loaded');
 
 // 1. A stale alarm cannot authorize a click before the persisted deadline.
 now = 10_000_000;
@@ -362,6 +371,59 @@ now = 40_000_000;
   assert.equal(state.sendCount, 1, 'transport uncertainty consumes one attempt before any reply');
   assert.ok(state.deadlineAt >= first.authorizationExpiresAt + D, 'transport uncertainty reserves the next full interval');
   console.log(JSON.stringify({ scenario: 'response-port loss after possible click', clicks, replayGranted: replay.granted, sendCount: state.sendCount, deadlineAt: state.deadlineAt }));
+}
+
+// 5. A real request after a terminal stop must create a fresh 30-minute epoch
+// immediately, before ChatGPT renders the new user turn. The rendered prompt then
+// replaces the temporary request identity without resurrecting the old terminal.
+now = 50_000_000;
+{
+  const target = await seedConversation(harness, 'bootstrap', {
+    ...dueCadencePatch(),
+    stopped: true,
+    stopReason: 'status:COMPLETE_APPLIED',
+    lastStatusCode: 'COMPLETE_APPLIED',
+    lastRequestStartedAt: now - 10_000,
+    deadlineAt: 0
+  });
+  harness.tabs[0].url = target.url;
+  const oldState = await harness.cadence.readWatchdog('bootstrap');
+  const oldEpoch = Number(oldState.cadenceEpoch || 0);
+  assert.equal(oldState.stopped, true, 'terminal fixture must begin stopped');
+
+  const rearmed = await harness.requestStartRearm.rearmFromRequestStart({
+    tabId: 1,
+    method: 'POST',
+    url: 'https://chatgpt.com/backend-api/f/conversation',
+    requestId: 'new-human-request',
+    timeStamp: now
+  });
+  assert.equal(rearmed, true, 'real request start must rearm a stopped terminal watchdog');
+  const requestState = await harness.cadence.readWatchdog('bootstrap');
+  assert.equal(requestState.stopped, false, 'request-start rearm clears the prior terminal stop');
+  assert.equal(requestState.stopReason, '', 'request-start rearm clears terminal stop reason');
+  assert.equal(requestState.sendCount, 0, 'fresh request starts with a fresh retry budget');
+  assert.ok(requestState.deadlineAt >= now + D, 'fresh request gets a full 30-minute deadline immediately');
+  assert.ok(Number(requestState.cadenceEpoch || 0) > oldEpoch, 'fresh request starts a new cadence epoch');
+  assert.match(String(requestState.lastPromptKey || ''), /request-start:new-human-request$/, 'pre-DOM request identity is explicit and temporary');
+
+  const renderedPromptKey = 'bootstrap|user-2';
+  await harness.monitor.reconcileCodeWatchdog({
+    conversationId: 'bootstrap',
+    conversationUrl: target.url,
+    requestStartedAt: now,
+    requestPhase: 'started',
+    promptKey: renderedPromptKey,
+    statusCode: '',
+    previousPromptKey: target.promptKey,
+    previousStatusCode: 'COMPLETE_APPLIED'
+  }, target.sender);
+  const renderedState = await harness.cadence.readWatchdog('bootstrap');
+  assert.equal(renderedState.stopped, false, 'stale prior terminal evidence must not stop the fresh request');
+  assert.equal(renderedState.lastPromptKey, renderedPromptKey, 'rendered user turn replaces temporary request identity');
+  assert.equal(renderedState.lastRequestStartedAt, now, 'fresh request start timestamp becomes authoritative');
+  assert.ok(renderedState.deadlineAt >= now + D, 'rendered reconciliation preserves the full 30-minute floor');
+  console.log(JSON.stringify({ scenario: 'terminal stop then real request start', rearmed, stopped: renderedState.stopped, cadenceEpoch: renderedState.cadenceEpoch, deadlineAt: renderedState.deadlineAt }));
 }
 
 console.log('watchdog cadence acceptance reproductions passed');
