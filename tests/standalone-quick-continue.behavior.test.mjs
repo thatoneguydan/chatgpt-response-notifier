@@ -128,32 +128,57 @@ test('prompt formatter places configurable time, project, and message placeholde
   assert.equal(api.projectContinuePrompt('campaign desk', 'No placeholder here.', date), '');
 });
 
-test('shared send transaction crosses editor commit boundaries and owns the only programmatic Send click', async () => {
+test('shared send transaction selects live authority and proves submission acceptance', async () => {
   assert.doesNotThrow(() => new vm.Script(sendTransactionSource));
+  assert.match(sendTransactionSource, /const VERSION = 3/);
   assert.match(sendTransactionSource, /function afterCommitBoundary\(\)/);
   assert.match(sendTransactionSource, /raf\(\(\) => raf\(resolve\)\)/);
-  assert.match(sendTransactionSource, /composerApi\.read\(composer\) !== expected/);
   assert.match(sendTransactionSource, /function liveComposer\(previous = null\)/);
-  assert.match(sendTransactionSource, /settleExpectedComposer/);
-  assert.equal((sendTransactionSource.match(/sendButton\.click\(\)/g) || []).length, 1);
+  assert.match(sendTransactionSource, /root\?\.querySelectorAll\?\.\(SEND_BUTTON_SELECTOR\)/);
+  assert.match(sendTransactionSource, /fallbackSend\?\.\(root\)/);
+  assert.match(sendTransactionSource, /form\.requestSubmit\(sendButton\)/);
+  assert.match(sendTransactionSource, /waitForSendAccepted/);
+  assert.match(sendTransactionSource, /reason: 'send-not-confirmed'/);
   assert.doesNotMatch(contentSource, /sendButton\.click\(\)/);
   assert.doesNotMatch(hoverEditSource, /sendButton\.click\(\)/);
   assert.match(contentSource, /sendApi\.submit\(composer, text/);
   assert.match(hoverEditSource, /sendApi\.submit\(composer, expected/);
 
   let currentText = '';
-  let clicks = 0;
+  let submits = 0;
+  let decoyClicks = 0;
   class Element {}
-  const button = {
-    disabled: false,
+  const decoy = {
+    isConnected: true,
+    disabled: true,
+    hidden: false,
     getAttribute: () => null,
-    click: () => { clicks += 1; }
+    closest: () => null,
+    click: () => { decoyClicks += 1; }
   };
-  const root = {
-    querySelector: () => button
+  const form = {
+    querySelectorAll: () => [decoy, liveButton],
+    requestSubmit(button) {
+      assert.equal(button, liveButton);
+      submits += 1;
+      currentText = '';
+    }
+  };
+  const liveButton = {
+    isConnected: true,
+    disabled: false,
+    hidden: false,
+    type: 'submit',
+    form,
+    getAttribute: (name) => name === 'type' ? 'submit' : null,
+    closest: () => null,
+    click: () => { throw new Error('requestSubmit should own accepted form submission'); }
   };
   const composer = {
-    closest: () => root
+    isConnected: true,
+    isContentEditable: true,
+    parentElement: form,
+    closest: (selector) => selector === 'form' ? form : null
   };
   const composerApi = {
     normalize: (value) => String(value ?? '').replace(/\r\n?/g, '\n'),
@@ -179,9 +204,10 @@ test('shared send transaction crosses editor commit boundaries and owns the only
     },
     document: {
       visibilityState: 'visible',
-      body: root,
-      documentElement: root,
-      querySelector: () => button
+      body: form,
+      documentElement: form,
+      querySelector: () => composer,
+      querySelectorAll: () => []
     },
     ChatGPTQuickContinueComposer: composerApi
   };
@@ -190,13 +216,17 @@ test('shared send transaction crosses editor commit boundaries and owns the only
 
   const result = await context.ChatGPTQuickContinueSend.submit(composer, 'one\ntwo');
   assert.equal(result.ok, true);
-  assert.equal(currentText, 'one\ntwo');
-  assert.equal(clicks, 1, 'one transaction must issue exactly one Send click');
+  assert.equal(result.activationMethod, 'request-submit');
+  assert.equal(currentText, '');
+  assert.equal(submits, 1, 'one transaction must create exactly one accepted form submission');
+  assert.equal(decoyClicks, 0, 'disabled decoy Send must never mask or receive activation');
 
   currentText = '[Sep 26, 9:20 AM] already stamped';
   const second = await context.ChatGPTQuickContinueSend.submit(composer, currentText, { replace: false });
   assert.equal(second.ok, true);
-  assert.equal(clicks, 2, 'already-stamped retry still issues only one Send click');
+  assert.equal(second.activationMethod, 'request-submit');
+  assert.equal(submits, 2, 'already-stamped retry also creates one accepted submission');
+  assert.equal(decoyClicks, 0);
 });
 
 test('project picker is non-modal, exposes Edit, and never auto-focuses', () => {
