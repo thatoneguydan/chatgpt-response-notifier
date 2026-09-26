@@ -7,6 +7,7 @@ const CONTENT_FILES = [
   'prompt-format.js',
   'config.js',
   'composer-text.js',
+  'send-transaction.js',
   'runtime-reset.js',
   'content-script.js',
   'hover-edit-script.js',
