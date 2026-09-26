@@ -1,13 +1,14 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 16;
+  const RUNTIME_VERSION = 17;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me.';
   const DEFAULT_WAIT_MS = 30000;
   const READY_WAIT_MS = 5000;
   const USER_TURN_WAIT_MS = 3500;
   const ACTIVE_GUARD_MS = 3000;
+  const WATCHDOG_ATTEMPT_CACHE_MAX = 12;
 
   try { globalThis.__chatgptNotifierStatusRuntime?.dispose?.(); } catch {}
   const abortController = new AbortController();
@@ -15,6 +16,8 @@
   let lastTrustedInteractionAt = 0;
   let stickyTerminalPromptKey = '';
   let stickyTerminalStatusCode = '';
+  const watchdogAttemptResults = new Map();
+  const watchdogAttemptInflight = new Map();
 
   const inline = (value) => String(value || '').replace(/\s+/g, ' ').trim();
   const cleanComposer = (value) => inline(String(value || '').replace(/[\u200B-\u200D\uFEFF]/g, ''));
@@ -421,12 +424,23 @@
     return { ok: true, clicked: true, reason: 'continuation-user-turn-confirmed', documentId, continuationUserKey: observed.userTurn.key };
   }
 
-  async function performWatchdogContinuation(expectedConversationId = '', expectedPromptKey = '') {
+  function watchdogAuthorizationStillValid(authorization) {
+    return Boolean(
+      authorization?.granted === true
+      && String(authorization.attemptId || '')
+      && Number(authorization.authorizationExpiresAt || 0) >= Date.now()
+    );
+  }
+
+  async function performWatchdogContinuationRaw(expectedConversationId = '', expectedPromptKey = '', authorization = null) {
     const expectedId = String(expectedConversationId || '');
     const expectedPrompt = String(expectedPromptKey || '');
     const identity = conversationIdentity();
     if (!identity?.id || (expectedId && identity.id !== expectedId)) {
       return { ok: false, clicked: false, reason: 'watchdog-conversation-changed', documentId };
+    }
+    if (authorization && (!watchdogAuthorizationStillValid(authorization) || String(authorization.documentId || documentId) !== documentId)) {
+      return { ok: false, clicked: false, reason: 'watchdog-authorization-expired', documentId };
     }
     const initialPromptKey = latestAssistantSnapshot()?.promptKey || latestUserSnapshot()?.key || '';
     if (expectedPrompt && initialPromptKey !== expectedPrompt) {
@@ -491,6 +505,10 @@
       watchdogStatusCode = beforeSendStatusCode;
     }
 
+    if (authorization && !watchdogAuthorizationStillValid(authorization)) {
+      if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
+      return { ok: false, clicked: false, reason: 'watchdog-authorization-expired-before-send', documentId };
+    }
     if (composerText(composer) !== cleanComposer(text)) return { ok: false, clicked: false, reason: 'composer-changed-before-send', documentId };
     const beforeSendBlock = activeUserBlockReason(composer);
     if (beforeSendBlock && beforeSendBlock !== 'composer-not-empty') {
@@ -498,8 +516,10 @@
       return { ok: false, clicked: false, reason: `${beforeSendBlock}-before-send`, documentId };
     }
 
+    let clickedAt = 0;
     try {
       sendButton.click();
+      clickedAt = Date.now();
     } catch {
       if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
       return { ok: false, clicked: false, reason: 'send-click-failed', documentId };
@@ -508,11 +528,11 @@
     const sent = await waitForContinuationUserTurn(previousUserKey, text);
     if (sent.errorText) {
       if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
-      return { ok: false, clicked: true, reason: 'page-send-error', pageError: sent.errorText, documentId };
+      return { ok: false, clicked: true, clickedAt, reason: 'page-send-error', pageError: sent.errorText, documentId };
     }
     if (!sent.userTurn) {
       if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
-      return { ok: false, clicked: true, reason: 'continuation-user-turn-not-confirmed', documentId };
+      return { ok: false, clicked: true, clickedAt, reason: 'continuation-user-turn-not-confirmed', documentId };
     }
 
     const postSendStatusCode = expectedPrompt ? terminalStatusForPromptKey(expectedPrompt) : '';
@@ -522,12 +542,110 @@
     return {
       ok: true,
       clicked: true,
+      clickedAt,
       reason: terminalAfterSend ? 'terminal-status-observed-after-send' : 'watchdog-continuation-user-turn-confirmed',
       statusCode: watchdogStatusCode,
       watchdogDisposition: terminalAfterSend ? 'stop' : (watchdogStatusCode ? 'incomplete-reset' : 'retry-sent'),
       documentId,
       continuationUserKey: sent.userTurn.key
     };
+  }
+
+  function trimWatchdogAttemptCache() {
+    while (watchdogAttemptResults.size > WATCHDOG_ATTEMPT_CACHE_MAX) {
+      watchdogAttemptResults.delete(watchdogAttemptResults.keys().next().value);
+    }
+  }
+
+  async function requestWatchdogAuthorization(expectedConversationId, expectedPromptKey) {
+    const identity = conversationIdentity();
+    const conversationId = String(expectedConversationId || identity?.id || '');
+    const promptKey = String(expectedPromptKey || latestAssistantSnapshot()?.promptKey || latestUserSnapshot()?.key || '');
+    if (!conversationId || !promptKey) return { ok: false, granted: false, reason: 'cadence-page-identity-missing' };
+    try {
+      return await chrome.runtime.sendMessage({
+        type: 'AUTHORIZE_WATCHDOG_DISPATCH_V1',
+        conversationId,
+        promptKey,
+        documentId
+      }) || { ok: false, granted: false, reason: 'cadence-owner-no-response' };
+    } catch (error) {
+      return { ok: false, granted: false, reason: 'cadence-owner-unavailable', error: String(error?.message || error) };
+    }
+  }
+
+  async function finalizeWatchdogAuthorization(expectedConversationId, expectedPromptKey, authorization, result) {
+    try {
+      return await chrome.runtime.sendMessage({
+        type: 'FINALIZE_WATCHDOG_DISPATCH_V1',
+        conversationId: String(expectedConversationId || conversationIdentity()?.id || ''),
+        promptKey: String(expectedPromptKey || ''),
+        documentId,
+        attemptId: String(authorization?.attemptId || ''),
+        clicked: result?.clicked === true,
+        clickedAt: Math.max(0, Number(result?.clickedAt || 0)),
+        ok: result?.ok === true,
+        reason: String(result?.reason || ''),
+        continuationUserKey: String(result?.continuationUserKey || '')
+      }) || null;
+    } catch {
+      return null;
+    }
+  }
+
+  async function performWatchdogContinuation(expectedConversationId = '', expectedPromptKey = '') {
+    const authorization = await requestWatchdogAuthorization(expectedConversationId, expectedPromptKey);
+    if (authorization?.granted !== true) {
+      if (authorization?.syntheticSuccess === true) {
+        return {
+          ok: true,
+          clicked: false,
+          reason: String(authorization.reason || 'watchdog-cadence-attempt-already-consumed'),
+          documentId,
+          attemptId: String(authorization.attemptId || ''),
+          watchdogAttemptConsumed: true,
+          nextSendEligibleAt: Math.max(0, Number(authorization.nextSendEligibleAt || 0))
+        };
+      }
+      return {
+        ok: false,
+        clicked: false,
+        reason: String(authorization?.reason || 'watchdog-cadence-not-authorized'),
+        documentId,
+        nextSendEligibleAt: Math.max(0, Number(authorization?.nextSendEligibleAt || 0))
+      };
+    }
+
+    const attemptId = String(authorization.attemptId || '');
+    const cached = watchdogAttemptResults.get(attemptId);
+    if (cached) return { ...cached, deduplicated: true };
+    if (watchdogAttemptInflight.has(attemptId)) return await watchdogAttemptInflight.get(attemptId);
+
+    const execution = (async () => {
+      const raw = await performWatchdogContinuationRaw(expectedConversationId, expectedPromptKey, {
+        ...authorization,
+        documentId
+      });
+      const finalized = await finalizeWatchdogAuthorization(expectedConversationId, expectedPromptKey, authorization, raw);
+      const terminalStatus = String(raw?.statusCode || '');
+      const definitiveTerminal = terminalStatus
+        && globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(terminalStatus) !== true;
+      const result = definitiveTerminal
+        ? { ...raw, attemptId, nextSendEligibleAt: Math.max(0, Number(finalized?.nextSendEligibleAt || authorization.nextSendEligibleAt || 0)) }
+        : {
+            ...raw,
+            ok: true,
+            originalOk: raw?.ok === true,
+            attemptId,
+            watchdogAttemptConsumed: true,
+            nextSendEligibleAt: Math.max(0, Number(finalized?.nextSendEligibleAt || authorization.nextSendEligibleAt || 0))
+          };
+      watchdogAttemptResults.set(attemptId, result);
+      trimWatchdogAttemptCache();
+      return result;
+    })().finally(() => watchdogAttemptInflight.delete(attemptId));
+    watchdogAttemptInflight.set(attemptId, execution);
+    return await execution;
   }
 
   async function waitForTerminalStatus(timeoutMs = DEFAULT_WAIT_MS) {
