@@ -120,6 +120,24 @@ test('live terminal parser recovers a segmented footer even when parent innerTex
   assert.equal(detector.detect(assistant), 'COMPLETE_APPLIED');
 });
 
+test('terminal parser follows a semantic assistant marker to its same-turn wrapper footer', () => {
+  const detector = loadDetector();
+  assert.equal(detector.version, 2);
+
+  const semanticAssistant = new FakeNode('div', 'Finished successfully.', [], { 'data-turn': 'assistant' });
+  const footer = new FakeNode('p', '[GITHUB_STATUS: COMPLETE_APPLIED]');
+  const action = new FakeNode('button', 'Copy');
+  const wrapper = new FakeNode('article', '', [semanticAssistant, footer, action]);
+  wrapper.innerText = 'Finished successfully.\n[GITHUB_STATUS: COMPLETE_APPLIED]\nCopy';
+
+  assert.equal(detector.detect(semanticAssistant), 'COMPLETE_APPLIED');
+
+  const neighboringUser = new FakeNode('div', 'New request', [], { 'data-turn': 'user' });
+  const outer = new FakeNode('section', '', [wrapper, neighboringUser]);
+  outer.innerText = 'Finished successfully.\n[GITHUB_STATUS: COMPLETE_APPLIED]\nCopy\nNew request';
+  assert.equal(detector.detect(semanticAssistant), 'COMPLETE_APPLIED');
+});
+
 test('live terminal parser rejects quoted/code examples and non-terminal standalone status paragraphs', () => {
   const detector = loadDetector();
   const codeExample = new FakeNode('pre', '', [new FakeNode('code', '[GITHUB_STATUS: COMPLETE_APPLIED]')]);
@@ -143,7 +161,7 @@ test('rendered terminal authority is hot-bound and feeds both watchdog parking a
   const rebind = read('extension/page-runtime-rebind.js');
   const streamBridge = read('extension/response-stream-status-bridge.js');
 
-  assert.equal(manifest.version, '0.9.94');
+  assert.equal(manifest.version, '0.9.95');
   assert.ok(manifest.content_scripts[0].js.includes('rendered-terminal-status.js'));
   assert.ok(manifest.content_scripts[0].js.includes('terminal-status-live-observer.js'));
   assert.ok(manifest.content_scripts[0].js.indexOf('rendered-terminal-status.js') < manifest.content_scripts[0].js.indexOf('terminal-status-live-observer.js'));
