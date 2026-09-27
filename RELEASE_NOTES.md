@@ -1,4 +1,11 @@
-# ChatGPT Response Notifier 0.9.94
+# ChatGPT Response Notifier 0.9.95
+
+- Fixes the live `COMPLETE_APPLIED` miss reproduced on Glass with notifier 0.9.94: the current ChatGPT DOM can render the final status footer as a sibling of the semantic assistant marker, while the rendered-terminal detector was scanning only inside that marker.
+- Expands terminal detection only through ancestors that still belong to the same assistant turn, so a visible sibling footer is recognized without allowing a neighboring user or assistant turn to supply the status.
+- Preserves exact status grammar, code/quote/list/tool exclusions, conflicting-code rejection, and the existing identity-bound watchdog parking and notification authority.
+- Adds a regression for the current semantic-wrapper shape with a sibling `COMPLETE_APPLIED` footer, trailing action chrome, and a neighboring user turn.
+
+## Previous: 0.9.94
 
 - Fixes the watchdog getting stuck at zero with `cadence-page-identity-missing` when ChatGPT temporarily stops exposing the current turn identity even though the conversation URL and composer are still usable.
 - Falls back to the durable watchdog record's prompt identity only when the sender is still attached to the same conversation and that watchdog remains active; a conflicting live page prompt still fails closed before any send.
