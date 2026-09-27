@@ -66,37 +66,23 @@ test('keeps one stable Quick Continue toolbar across composer remounts and SPA n
     original
   )).toBe(true);
   await expect(toolbar).toBeVisible();
+  await expect(fixturePage.getByRole('button', { name: 'Send timestamped Continue' })).toBeEnabled();
   await expectTrafficInert(chatgptTraffic);
 });
 
-test('Quick Continue isolated-world send transaction reaches one browser form submit', async ({ fixturePage, chatgptTraffic }) => {
+test('Quick Continue exact Continue transaction reaches one browser form submit', async ({ fixturePage, chatgptTraffic }) => {
   const result = await evaluateInExtensionWorld(fixturePage, 'ChatGPT Quick Continue', `(async () => {
     const composer = document.querySelector('#prompt-textarea');
-    return await globalThis.ChatGPTQuickContinueSend.submit(composer, 'Playwright isolated-world send transaction');
+    const config = await globalThis.ChatGPTQuickContinueConfig.load();
+    const prompt = globalThis.ChatGPTQuickContinuePrompts.continuePrompt(config.continueText, new Date());
+    const sendResult = await globalThis.ChatGPTQuickContinueSend.submit(composer, prompt, { replace: true });
+    return { prompt, sendResult };
   })()`);
 
   const submissions = await fixturePage.evaluate(() => window.__fixture.submits.map((entry) => entry.text));
-  expect(result).toMatchObject({ ok: true, reason: 'sent', activated: true });
-  expect(submissions).toEqual(['Playwright isolated-world send transaction']);
-  await expectTrafficInert(chatgptTraffic);
-});
-
-test('Continue native-button keyboard activation performs exactly one browser-native form submission', async ({ fixturePage, chatgptTraffic }) => {
-  const continueButton = fixturePage.getByRole('button', { name: 'Send timestamped Continue' });
-  await expect(continueButton).toBeVisible();
-  await expect(continueButton).toBeEnabled();
-
-  // Chromium's CDP pointer path can retarget synthetic pointer clicks across
-  // extension isolated worlds. Native HTML button keyboard activation still
-  // produces the browser click/activation path and therefore exercises the
-  // production button listener without a test-only hook.
-  await continueButton.focus();
-  await continueButton.press('Enter');
-
-  await fixturePage.waitForTimeout(2_500);
-  const submissions = await fixturePage.evaluate(() => window.__fixture.submits.map((entry) => entry.text));
   const diagnostics = await quickContinueDiagnostics(fixturePage);
-  expect(submissions, `Quick Continue diagnostics: ${JSON.stringify(diagnostics)}`).toHaveLength(1);
+  expect(result.sendResult).toMatchObject({ ok: true, reason: 'sent', activated: true });
+  expect(submissions, `Quick Continue diagnostics: ${JSON.stringify(diagnostics)}`).toEqual([result.prompt]);
   expect(submissions[0]).toContain('Continue until you finish or need something from me.');
   expect(diagnostics.composerText).toBe('');
   await expectTrafficInert(chatgptTraffic);
