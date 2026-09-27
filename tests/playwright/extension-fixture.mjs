@@ -64,8 +64,25 @@ const fixtureHtml = String.raw`<!doctype html>
         submittedTurns: 0
       };
 
+      function readNode(node) {
+        if (!node) return '';
+        if (node.nodeType === Node.TEXT_NODE) return String(node.nodeValue || '');
+        if (node.nodeType !== Node.ELEMENT_NODE) return '';
+        if (node.tagName === 'BR') return '\n';
+        return Array.from(node.childNodes || []).map(readNode).join('');
+      }
+
       function readComposer(node) {
-        return String(node?.innerText || node?.textContent || '').replace(/\r\n?/g, '\n');
+        if (!node) return '';
+        const children = Array.from(node.children || []);
+        const paragraphChildren = children.length > 0 && children.every((child) => child.tagName === 'P');
+        if (paragraphChildren) {
+          return children.map((child) => {
+            const text = readNode(child);
+            return /^\n+$/.test(text) ? '' : text;
+          }).join('\n').replace(/\r\n?/g, '\n');
+        }
+        return readNode(node).replace(/\r\n?/g, '\n');
       }
 
       function clearComposer(editor) {
@@ -313,6 +330,12 @@ export const test = base.extend({
       ]
     });
     try {
+      // A fresh unpacked MV3 install legitimately runs Quick Continue's one-time
+      // onInstalled hot-replacement path. Keep only a neutral about:blank tab
+      // open until that startup work has had time to query existing tabs, so the
+      // browser fixture cannot be mistaken for a pre-existing ChatGPT tab and
+      // reinjected underneath the first assertion.
+      await new Promise((resolve) => setTimeout(resolve, 1500));
       await use(context);
     } finally {
       await context.close();
