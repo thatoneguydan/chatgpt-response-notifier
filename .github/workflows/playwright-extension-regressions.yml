@@ -1,0 +1,74 @@
+name: Playwright extension regressions
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  browser-regressions:
+    # Glass may execute only trusted same-repository source.
+    if: >-
+      ${{ github.event_name == 'workflow_dispatch' ||
+          (github.event.pull_request.head.repo.full_name == github.repository &&
+           github.event.pull_request.head.repo.owner.login == github.repository_owner) }}
+    runs-on: [self-hosted, Windows, X64, glass-builder]
+    timeout-minutes: 20
+    env:
+      SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+    steps:
+      - name: Checkout exact source head
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify exact source identity
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $actual = (git rev-parse HEAD).Trim()
+          if ($actual -ne $env:SOURCE_SHA) {
+            throw "Exact-source checkout mismatch: expected $env:SOURCE_SHA, got $actual."
+          }
+          Write-Host "Exact source head: $actual"
+
+      - name: Install pinned Playwright test dependency
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location .\tests\playwright
+          try {
+            npm install --no-audit --no-fund
+            if ($LASTEXITCODE -ne 0) { throw 'npm install failed.' }
+            npx playwright install chromium
+            if ($LASTEXITCODE -ne 0) { throw 'Playwright Chromium install failed.' }
+          }
+          finally {
+            Pop-Location
+          }
+
+      - name: Run traffic-inert MV3 browser regressions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Push-Location .\tests\playwright
+          try {
+            npm test
+            if ($LASTEXITCODE -ne 0) { throw 'Playwright extension regressions failed.' }
+          }
+          finally {
+            Pop-Location
+          }
+
+      - name: Upload Playwright failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-extension-regression-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: tests/playwright/test-results/
+          if-no-files-found: ignore
+          retention-days: 7
