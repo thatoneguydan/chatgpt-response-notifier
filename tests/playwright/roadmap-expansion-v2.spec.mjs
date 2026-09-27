@@ -2,88 +2,40 @@ import {
   test,
   expect,
   evaluateInExtensionWorld
-} from './extension-fixture.mjs';
+} from './wrapped-extension-fixture.mjs';
 
 const toolbarSelector = '#chatgpt-quick-continue-toolbar';
 const fixtureConversationId = 'playwright-browser-regression';
-const watchdogDelayMs = 30 * 60_000;
-const extensionWorkerPaths = Object.freeze({
-  'ChatGPT Quick Continue': 'background.js',
-  'ChatGPT Response Notifier': 'diagnostics-bootstrap.js'
-});
 
 async function expectTrafficInert(traffic) {
   const blocked = traffic.filter((entry) => entry.kind === 'blocked');
   expect(blocked, `Unexpected ChatGPT network attempts: ${JSON.stringify(blocked)}`).toEqual([]);
 }
 
-async function extensionDescriptor(page, extensionName) {
-  const workerPath = extensionWorkerPaths[extensionName];
-  if (!workerPath) throw new Error(`Unknown extension worker path: ${extensionName}`);
-  const extensionId = await evaluateInExtensionWorld(
-    page,
-    extensionName,
-    `String(globalThis.chrome?.runtime?.id || '')`
-  );
-  if (!extensionId) throw new Error(`Could not resolve extension ID: ${extensionName}`);
-  return {
-    extensionName,
-    extensionId,
-    workerPath,
-    scriptUrl: `chrome-extension://${extensionId}/${workerPath}`
-  };
-}
-
-async function extensionServiceWorker(page, extensionName) {
-  const descriptor = await extensionDescriptor(page, extensionName);
-  const context = page.context();
-  let worker = context.serviceWorkers().find((candidate) => candidate.url() === descriptor.scriptUrl) || null;
-  if (!worker) {
-    worker = await context.waitForEvent('serviceworker', {
-      timeout: 10_000,
-      predicate: (candidate) => candidate.url() === descriptor.scriptUrl
-    });
-  }
-  if (!worker) throw new Error(`Could not resolve extension service worker: ${extensionName}`);
-  return { worker, descriptor };
-}
-
-async function notifierWorker(page) {
-  return (await extensionServiceWorker(page, 'ChatGPT Response Notifier')).worker;
-}
-
-async function notifierMessage(page, message) {
+async function extensionMessage(page, extensionName, message) {
   const payload = JSON.stringify(message);
-  return evaluateInExtensionWorld(page, 'ChatGPT Response Notifier', `(async () => {
+  return evaluateInExtensionWorld(page, extensionName, `(async () => {
     return await chrome.runtime.sendMessage(${payload});
   })()`);
 }
 
-async function notifierWatchdog(page, conversationId = fixtureConversationId) {
-  const worker = await notifierWorker(page);
-  return worker.evaluate(async (id) => {
-    const monitor = globalThis.__chatgptNotifierMonitorBackground;
-    if (typeof monitor?.readCodeWatchdog !== 'function') {
-      throw new Error('Notifier watchdog runtime unavailable in service worker.');
-    }
-    return await monitor.readCodeWatchdog(id);
-  }, conversationId);
+async function notifierMessage(page, message) {
+  return extensionMessage(page, 'ChatGPT Response Notifier', message);
 }
 
-async function fixtureTargetFromWorker(worker, conversationId) {
-  return worker.evaluate(async (id) => {
-    const tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] });
-    const target = tabs.find((tab) => {
-      try { return new URL(String(tab.url || '')).pathname === `/c/${id}`; }
-      catch { return false; }
-    });
-    if (!Number.isInteger(target?.id)) throw new Error('Playwright ChatGPT fixture tab not found.');
-    return {
-      id: target.id,
-      url: String(target.url || `https://chatgpt.com/c/${id}`),
-      title: String(target.title || 'ChatGPT extension Playwright fixture')
-    };
-  }, conversationId);
+async function testControl(page, extensionName, message) {
+  const response = await extensionMessage(page, extensionName, message);
+  if (response?.ok !== true) {
+    throw new Error(`Playwright worker control failed: ${String(response?.error || response?.reason || 'unknown')}`);
+  }
+  return Object.prototype.hasOwnProperty.call(response, 'result') ? response.result : response;
+}
+
+async function notifierWatchdog(page, conversationId = fixtureConversationId) {
+  return testControl(page, 'ChatGPT Response Notifier', {
+    type: 'PLAYWRIGHT_TEST_READ_WATCHDOG',
+    conversationId
+  });
 }
 
 async function prepareNonTerminalNotifier(page) {
@@ -94,14 +46,10 @@ async function prepareNonTerminalNotifier(page) {
     if (markdown) markdown.textContent = 'Browser-level work is still in progress.';
   });
 
-  const worker = await notifierWorker(page);
-  const target = await fixtureTargetFromWorker(worker, fixtureConversationId);
-  await worker.evaluate(async ({ tabId }) => {
-    await chrome.scripting.executeScript({
-      target: { tabId },
-      files: ['status-code.js', 'status-policy.js', 'status-script.js']
-    });
-  }, { tabId: target.id });
+  await testControl(page, 'ChatGPT Response Notifier', {
+    type: 'PLAYWRIGHT_TEST_INJECT_STATUS_RUNTIME',
+    conversationId: fixtureConversationId
+  });
 
   let promptKey = '';
   await expect.poll(async () => {
@@ -122,90 +70,11 @@ async function prepareNonTerminalNotifier(page) {
 }
 
 async function seedEnabledWatchdog(page, promptKey, { due = false } = {}) {
-  const worker = await notifierWorker(page);
-  return worker.evaluate(async ({ conversationId, promptKeyValue, makeDue, delayMs }) => {
-    const monitor = globalThis.__chatgptNotifierMonitorBackground;
-    if (
-      typeof monitor?.setEnrollment !== 'function'
-      || typeof monitor?.armCodeWatchdogForTarget !== 'function'
-      || typeof monitor?.readCodeWatchdog !== 'function'
-    ) {
-      throw new Error('Notifier monitor runtime unavailable in service worker.');
-    }
-
-    const tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] });
-    const tab = tabs.find((candidate) => {
-      try { return new URL(String(candidate.url || '')).pathname === `/c/${conversationId}`; }
-      catch { return false; }
-    });
-    if (!Number.isInteger(tab?.id)) throw new Error('Playwright ChatGPT fixture tab not found for watchdog seed.');
-
-    const target = {
-      id: conversationId,
-      url: String(tab.url || `https://chatgpt.com/c/${conversationId}`),
-      tab
-    };
-    await monitor.setEnrollment(target, true, 'playwright-browser-regression');
-    const armed = await monitor.armCodeWatchdogForTarget({
-      conversationId,
-      promptKey: String(promptKeyValue || ''),
-      source: 'playwright-browser-regression',
-      requestId: 'playwright-watchdog-seed'
-    }, target);
-    if (armed?.ok !== true) {
-      throw new Error(`Could not arm notifier watchdog: ${String(armed?.reason || armed?.error || 'unknown')}`);
-    }
-
-    if (makeDue) {
-      const key = `code-watchdog:${conversationId}`;
-      const database = await new Promise((resolve, reject) => {
-        const request = indexedDB.open('chatgpt-response-notifier-monitor', 1);
-        request.onsuccess = () => resolve(request.result);
-        request.onerror = () => reject(request.error || new Error('Could not open notifier watchdog database in worker.'));
-      });
-      try {
-        await new Promise((resolve, reject) => {
-          const transaction = database.transaction('profile', 'readwrite');
-          const store = transaction.objectStore('profile');
-          const request = store.get(key);
-          request.onsuccess = () => {
-            const current = request.result || null;
-            if (!current) {
-              transaction.abort();
-              return;
-            }
-            store.put({
-              ...current,
-              deadlineAt: Date.now() - 1000,
-              retryAt: 0,
-              retryReason: '',
-              stopped: false,
-              stopReason: '',
-              watchdogRevision: Math.max(0, Number(current.watchdogRevision || 0)) + 1,
-              updatedAt: Date.now()
-            });
-          };
-          request.onerror = () => reject(request.error || new Error('Could not read notifier watchdog record.'));
-          transaction.oncomplete = resolve;
-          transaction.onerror = () => reject(transaction.error || new Error('Could not seed due notifier watchdog record.'));
-          transaction.onabort = () => reject(transaction.error || new Error('Due notifier watchdog seed was aborted.'));
-        });
-      } finally {
-        try { database.close(); } catch {}
-      }
-    }
-
-    const record = await monitor.readCodeWatchdog(conversationId);
-    if (!record) throw new Error('Notifier watchdog record missing after seed.');
-    if (!makeDue && Number(record.deadlineAt || 0) < Date.now() + Math.max(1, Number(delayMs || 0)) - 5_000) {
-      throw new Error('Notifier watchdog seed did not retain the expected future cadence.');
-    }
-    return record;
-  }, {
+  return testControl(page, 'ChatGPT Response Notifier', {
+    type: 'PLAYWRIGHT_TEST_SEED_WATCHDOG',
     conversationId: fixtureConversationId,
-    promptKeyValue: promptKey,
-    makeDue: due,
-    delayMs: watchdogDelayMs
+    promptKey,
+    due
   });
 }
 
@@ -297,38 +166,32 @@ test('terminal detector remains same-turn bounded after assistant wrapper replac
 });
 
 test('Quick Continue MV3 worker naturally suspends and wakes without rebuilding live page UI', async ({ fixturePage, chatgptTraffic }) => {
-  test.setTimeout(60_000);
+  test.setTimeout(75_000);
   const toolbar = fixturePage.locator(toolbarSelector);
   await expect(toolbar).toBeVisible();
   const original = await fixturePage.evaluateHandle(() => document.getElementById('chatgpt-quick-continue-toolbar'));
-  const before = await evaluateInExtensionWorld(fixturePage, 'ChatGPT Quick Continue', `(() => ({
+  const beforeRuntime = await evaluateInExtensionWorld(fixturePage, 'ChatGPT Quick Continue', `(() => ({
     runtimeVersion: Number(globalThis.__chatgptQuickContinueRuntime?.version || 0),
     hoverVersion: Number(globalThis.__chatgptQuickContinueHoverEditRuntime?.version || 0)
   }))()`);
-
-  const { worker, descriptor } = await extensionServiceWorker(fixturePage, 'ChatGPT Quick Continue');
-  const sentinel = await worker.evaluate(() => {
-    const value = crypto.randomUUID();
-    globalThis.__playwrightMv3IdleSentinel = value;
-    return value;
+  const beforeWorker = await testControl(fixturePage, 'ChatGPT Quick Continue', {
+    type: 'PLAYWRIGHT_TEST_WORKER_GENERATION'
   });
-  expect(sentinel).not.toBe('');
+  expect(beforeWorker.extensionName).toBe('ChatGPT Quick Continue');
+  expect(String(beforeWorker.generation || '')).not.toBe('');
 
-  // Chromium terminates idle MV3 extension workers after roughly 30 seconds.
-  // Playwright keeps the Worker handle valid across that restart, so the next
-  // evaluate wakes the worker and lets us prove that worker-global state was lost.
-  await fixturePage.waitForTimeout(35_000);
-  const wake = await worker.evaluate(() => ({
-    sentinel: String(globalThis.__playwrightMv3IdleSentinel || ''),
-    name: String(chrome.runtime.getManifest().name || ''),
-    workerUrl: String(globalThis.location?.href || '')
-  }));
-  expect(wake.sentinel).toBe('');
-  expect(wake.name).toBe('ChatGPT Quick Continue');
-  expect(wake.workerUrl).toBe(descriptor.scriptUrl);
+  // Chrome terminates idle MV3 extension workers after roughly 30 seconds.
+  // The next extension message wakes it; the wrapper generation changes only
+  // when the worker global was actually recreated.
+  await fixturePage.waitForTimeout(40_000);
+  const afterWorker = await testControl(fixturePage, 'ChatGPT Quick Continue', {
+    type: 'PLAYWRIGHT_TEST_WORKER_GENERATION'
+  });
+  expect(afterWorker.extensionName).toBe('ChatGPT Quick Continue');
+  expect(afterWorker.generation).not.toBe(beforeWorker.generation);
 
   await fixturePage.waitForTimeout(500);
-  const after = await evaluateInExtensionWorld(fixturePage, 'ChatGPT Quick Continue', `(() => ({
+  const afterRuntime = await evaluateInExtensionWorld(fixturePage, 'ChatGPT Quick Continue', `(() => ({
     runtimeVersion: Number(globalThis.__chatgptQuickContinueRuntime?.version || 0),
     hoverVersion: Number(globalThis.__chatgptQuickContinueHoverEditRuntime?.version || 0)
   }))()`);
@@ -336,7 +199,7 @@ test('Quick Continue MV3 worker naturally suspends and wakes without rebuilding 
     (node) => node === document.getElementById('chatgpt-quick-continue-toolbar') && node?.isConnected === true,
     original
   )).toBe(true);
-  expect(after).toEqual(before);
+  expect(afterRuntime).toEqual(beforeRuntime);
   await expect(toolbar).toHaveCount(1);
   await expect(toolbar).toBeVisible();
   await expectTrafficInert(chatgptTraffic);
