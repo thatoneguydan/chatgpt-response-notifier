@@ -12,6 +12,25 @@ async function expectTrafficInert(traffic) {
   expect(blocked, `Unexpected ChatGPT network attempts: ${JSON.stringify(blocked)}`).toEqual([]);
 }
 
+async function armQuickContinueEventProbe(page) {
+  await evaluateInExtensionWorld(page, 'ChatGPT Quick Continue', `(() => {
+    const events = [];
+    globalThis.__playwrightQuickContinueEvents = events;
+    const summarize = (event) => ({
+      type: event.type,
+      key: String(event.key || ''),
+      isTrusted: event.isTrusted === true,
+      defaultPrevented: event.defaultPrevented === true,
+      targetId: String(event.target?.id || ''),
+      targetLabel: String(event.target?.getAttribute?.('aria-label') || ''),
+      targetTag: String(event.target?.tagName || '')
+    });
+    window.addEventListener('click', (event) => events.push(summarize(event)), true);
+    window.addEventListener('keydown', (event) => events.push(summarize(event)), true);
+    return true;
+  })()`);
+}
+
 async function quickContinueDiagnostics(page) {
   return evaluateInExtensionWorld(page, 'ChatGPT Quick Continue', `(async () => {
     const composer = document.querySelector('#prompt-textarea');
@@ -22,11 +41,15 @@ async function quickContinueDiagnostics(page) {
     catch (error) { configError = String(error?.message || error || ''); }
     return {
       runtimeVersion: Number(globalThis.__chatgptQuickContinueRuntime?.version || 0),
+      hoverVersion: Number(globalThis.__chatgptQuickContinueHoverEditRuntime?.version || 0),
+      manualTimestampEnabled: globalThis.__chatgptQuickContinueHoverEditRuntime?.manualTimestampEnabled === true,
       sendVersion: Number(globalThis.ChatGPTQuickContinueSend?.version || 0),
       composerVersion: Number(globalThis.ChatGPTQuickContinueComposer?.version || 0),
       composerText: String(globalThis.ChatGPTQuickContinueComposer?.read?.(composer) || ''),
       sendDisabled: Boolean(sendButton?.disabled),
       toolbarPresent: Boolean(document.getElementById('chatgpt-quick-continue-toolbar')),
+      toolbarStatus: String(document.querySelector('#chatgpt-quick-continue-toolbar [role="status"]')?.textContent || ''),
+      events: Array.from(globalThis.__playwrightQuickContinueEvents || []),
       configLoaded: Boolean(config),
       configError
     };
@@ -81,6 +104,7 @@ test('Quick Continue isolated-world send transaction reaches one browser form su
 
 test('Continue performs exactly one browser-native form submission', async ({ fixturePage, chatgptTraffic }) => {
   await expect(fixturePage.locator(toolbarSelector)).toBeVisible();
+  await armQuickContinueEventProbe(fixturePage);
   await fixturePage.getByRole('button', { name: 'Send timestamped Continue' }).click();
 
   await fixturePage.waitForTimeout(4_000);
@@ -95,6 +119,7 @@ test('Continue performs exactly one browser-native form submission', async ({ fi
 test('manual timestamp submission preserves one exact logical newline and sends once', async ({ fixturePage, chatgptTraffic }) => {
   const toolbar = fixturePage.locator(toolbarSelector);
   await expect(toolbar).toBeVisible();
+  await armQuickContinueEventProbe(fixturePage);
 
   const clock = fixturePage.getByLabel('Current local time');
   await clock.click();
