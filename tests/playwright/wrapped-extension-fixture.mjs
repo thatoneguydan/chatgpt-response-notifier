@@ -22,6 +22,11 @@ async function prepareWrappedExtension(sourcePath, destinationPath, wrapperName)
   const serviceWorker = String(manifest?.background?.service_worker || '').trim();
   if (!serviceWorker) throw new Error(`Missing production MV3 service worker in ${manifestPath}.`);
 
+  // Storage is added only to the disposable test copy as the harness mailbox.
+  // The checked-in production manifests and runtime permissions remain unchanged.
+  manifest.permissions = Array.from(new Set([...(manifest.permissions || []), 'storage']));
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+
   const workerPath = path.join(destinationPath, serviceWorker);
   const productionWorker = await fs.readFile(workerPath, 'utf8');
   const rawHook = await fs.readFile(path.join(wrapperRoot, wrapperName), 'utf8');
@@ -32,8 +37,8 @@ async function prepareWrappedExtension(sourcePath, destinationPath, wrapperName)
     .trim();
   if (!hook) throw new Error(`Empty Playwright worker hook: ${wrapperName}`);
 
-  // Preserve the production manifest and production worker entrypoint exactly.
-  // Only the temporary test copy receives an appended observer/control hook.
+  // Preserve the production worker entrypoint. Only the temporary copy receives
+  // the test transport hook; neither production extension contains these hooks.
   await fs.writeFile(
     workerPath,
     `${productionWorker.trimEnd()}\n\n// Playwright test-only hook; never packaged with the extension.\n${hook}\n`,
