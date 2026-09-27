@@ -13,16 +13,22 @@ async function expectTrafficInert(traffic) {
 }
 
 async function quickContinueDiagnostics(page) {
-  return evaluateInExtensionWorld(page, 'ChatGPT Quick Continue', `(() => {
+  return evaluateInExtensionWorld(page, 'ChatGPT Quick Continue', `(async () => {
     const composer = document.querySelector('#prompt-textarea');
     const sendButton = document.querySelector('button[data-testid="send-button"]');
+    let config = null;
+    let configError = '';
+    try { config = await globalThis.ChatGPTQuickContinueConfig?.load?.(); }
+    catch (error) { configError = String(error?.message || error || ''); }
     return {
       runtimeVersion: Number(globalThis.__chatgptQuickContinueRuntime?.version || 0),
       sendVersion: Number(globalThis.ChatGPTQuickContinueSend?.version || 0),
       composerVersion: Number(globalThis.ChatGPTQuickContinueComposer?.version || 0),
       composerText: String(globalThis.ChatGPTQuickContinueComposer?.read?.(composer) || ''),
       sendDisabled: Boolean(sendButton?.disabled),
-      toolbarPresent: Boolean(document.getElementById('chatgpt-quick-continue-toolbar'))
+      toolbarPresent: Boolean(document.getElementById('chatgpt-quick-continue-toolbar')),
+      configLoaded: Boolean(config),
+      configError
     };
   })()`);
 }
@@ -61,12 +67,23 @@ test('keeps one stable Quick Continue toolbar across composer remounts and SPA n
   await expectTrafficInert(chatgptTraffic);
 });
 
+test('Quick Continue isolated-world send transaction reaches one browser form submit', async ({ fixturePage, chatgptTraffic }) => {
+  const result = await evaluateInExtensionWorld(fixturePage, 'ChatGPT Quick Continue', `(async () => {
+    const composer = document.querySelector('#prompt-textarea');
+    return await globalThis.ChatGPTQuickContinueSend.submit(composer, 'Playwright isolated-world send transaction');
+  })()`);
+
+  const submissions = await fixturePage.evaluate(() => window.__fixture.submits.map((entry) => entry.text));
+  expect(result).toMatchObject({ ok: true, reason: 'sent', activated: true });
+  expect(submissions).toEqual(['Playwright isolated-world send transaction']);
+  await expectTrafficInert(chatgptTraffic);
+});
+
 test('Continue performs exactly one browser-native form submission', async ({ fixturePage, chatgptTraffic }) => {
   await expect(fixturePage.locator(toolbarSelector)).toBeVisible();
   await fixturePage.getByRole('button', { name: 'Send timestamped Continue' }).click();
 
-  await expect.poll(() => fixturePage.evaluate(() => window.__fixture.submits.length), { timeout: 5_000 }).toBe(1);
-  await fixturePage.waitForTimeout(300);
+  await fixturePage.waitForTimeout(4_000);
   const submissions = await fixturePage.evaluate(() => window.__fixture.submits.map((entry) => entry.text));
   const diagnostics = await quickContinueDiagnostics(fixturePage);
   expect(submissions, `Quick Continue diagnostics: ${JSON.stringify(diagnostics)}`).toHaveLength(1);
@@ -87,8 +104,7 @@ test('manual timestamp submission preserves one exact logical newline and sends 
   await composer.fill('first line\nsecond line');
   await composer.press('Enter');
 
-  await expect.poll(() => fixturePage.evaluate(() => window.__fixture.submits.length), { timeout: 5_000 }).toBe(1);
-  await fixturePage.waitForTimeout(300);
+  await fixturePage.waitForTimeout(4_000);
   const submissions = await fixturePage.evaluate(() => window.__fixture.submits.map((entry) => entry.text));
   const diagnostics = await quickContinueDiagnostics(fixturePage);
   expect(submissions, `Quick Continue diagnostics: ${JSON.stringify(diagnostics)}`).toHaveLength(1);
