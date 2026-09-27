@@ -3,7 +3,7 @@
 (() => {
   if (globalThis.__chatgptNotifierTerminalWatchdogAuthority) return;
 
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
   const DB_NAME = 'chatgpt-response-notifier-monitor';
   const DB_VERSION = 1;
   const PROFILE_STORE = 'profile';
@@ -122,9 +122,10 @@
     const result = await lifecycle.parkTerminalStatusForSender({
       conversationId: target.id,
       promptKey: String(message?.snapshot?.promptKey || message?.promptKey || ''),
+      requestStartedAt: Math.max(0, Number(message?.snapshot?.requestStartedAt || message?.requestStartedAt || 0)),
       statusCode
     }, sender);
-    if (result?.ok !== true) return false;
+    if (result?.ok !== true || result?.stopped !== true) return false;
     await resetStoppedAttempts(target.id, statusCode).catch(() => null);
     await publishOverview(target);
     return true;
@@ -267,7 +268,9 @@
       queueRenderedNotification(message, sender, target, statusCode, 'rendered-terminal-authority').catch(() => false)
     ]);
     await publishOverview(target);
-    return { ok: stopped || notified, stopped, notified, statusCode };
+    // A notification is not proof that the watchdog alarm/timer was parked.
+    // The content observer may retire its retries only after stopped=true.
+    return { ok: stopped, stopped, notified, statusCode };
   }
 
   async function stopFromStream(message, sender) {
