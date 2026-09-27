@@ -166,29 +166,98 @@ async function discoverExtensionWorlds(page) {
   session.on('Runtime.executionContextCreated', ({ context }) => {
     contexts.set(context.id, context);
   });
-  await session.send('Runtime.enable');
+  session.on('Runtime.executionContextDestroyed', ({ executionContextId }) => {
+    contexts.delete(executionContextId);
+  });
+  session.on('Runtime.executionContextsCleared', () => {
+    contexts.clear();
+  });
 
-  const names = new Map();
+  await session.send('Page.enable');
+  await session.send('Runtime.enable');
+  const frameTree = await session.send('Page.getFrameTree');
+  const mainFrameId = String(frameTree?.frameTree?.frame?.id || '');
+  if (!mainFrameId) {
+    await session.detach().catch(() => {});
+    throw new Error('Could not resolve Playwright fixture main-frame identity.');
+  }
+
+  const selected = new Map();
+  let diagnostics = [];
   await expect.poll(async () => {
-    names.clear();
+    const candidates = [];
     for (const context of contexts.values()) {
+      if (String(context?.auxData?.frameId || '') !== mainFrameId) continue;
       try {
         const evaluated = await session.send('Runtime.evaluate', {
           contextId: context.id,
-          expression: 'globalThis.chrome?.runtime?.getManifest?.().name || ""',
+          expression: `(() => ({
+            extensionName: globalThis.chrome?.runtime?.getManifest?.().name || '',
+            href: String(globalThis.location?.href || ''),
+            hasComposer: Boolean(document?.querySelector?.('#prompt-textarea')),
+            hasToolbar: Boolean(document?.getElementById?.('chatgpt-quick-continue-toolbar')),
+            quickContinueRuntime: Number(globalThis.__chatgptQuickContinueRuntime?.version || 0),
+            hoverRuntime: Number(globalThis.__chatgptQuickContinueHoverEditRuntime?.version || 0)
+          }))()`,
           returnByValue: true
         });
-        const name = String(evaluated?.result?.value || '');
-        if (name) names.set(name, context.id);
+        const value = evaluated?.result?.value || {};
+        const extensionName = String(value.extensionName || '');
+        if (!extensionName) continue;
+        candidates.push({
+          id: context.id,
+          extensionName,
+          href: String(value.href || ''),
+          hasComposer: value.hasComposer === true,
+          hasToolbar: value.hasToolbar === true,
+          quickContinueRuntime: Number(value.quickContinueRuntime || 0),
+          hoverRuntime: Number(value.hoverRuntime || 0),
+          contextName: String(context.name || ''),
+          origin: String(context.origin || ''),
+          auxType: String(context?.auxData?.type || ''),
+          auxIsDefault: context?.auxData?.isDefault === true,
+          frameId: String(context?.auxData?.frameId || '')
+        });
       } catch {}
     }
-    return [...names.keys()].sort();
-  }, { timeout: 10_000 }).toEqual([
+
+    diagnostics = candidates;
+    selected.clear();
+    for (const extensionName of ['ChatGPT Quick Continue', 'ChatGPT Response Notifier']) {
+      const matches = candidates.filter((candidate) =>
+        candidate.extensionName === extensionName
+        && candidate.href.startsWith('https://chatgpt.com/c/playwright-browser-regression')
+        && candidate.hasComposer
+      );
+      if (matches.length === 1) selected.set(extensionName, matches[0]);
+    }
+    return [...selected.keys()].sort();
+  }, {
+    timeout: 10_000,
+    message: `Current-main-frame extension worlds were not unique. Last candidates: ${JSON.stringify(diagnostics)}`
+  }).toEqual([
     'ChatGPT Quick Continue',
     'ChatGPT Response Notifier'
   ]);
 
-  return { session, names: new Map(names) };
+  for (const extensionName of ['ChatGPT Quick Continue', 'ChatGPT Response Notifier']) {
+    const matches = diagnostics.filter((candidate) =>
+      candidate.extensionName === extensionName
+      && candidate.href.startsWith('https://chatgpt.com/c/playwright-browser-regression')
+      && candidate.hasComposer
+    );
+    if (matches.length !== 1) {
+      await session.detach().catch(() => {});
+      throw new Error(`Expected exactly one current main-frame world for ${extensionName}; found ${matches.length}: ${JSON.stringify(matches)}`);
+    }
+  }
+
+  return {
+    session,
+    names: new Map([...selected].map(([name, candidate]) => [name, candidate.id])),
+    worlds: new Map(selected),
+    mainFrameId
+  };
 }
 
 export async function evaluateInExtensionWorld(page, extensionName, expression) {
@@ -215,6 +284,15 @@ export async function extensionWorldNames(page) {
   const { session, names } = await discoverExtensionWorlds(page);
   try {
     return [...names.keys()].sort();
+  } finally {
+    await session.detach().catch(() => {});
+  }
+}
+
+export async function extensionWorldDiagnostics(page) {
+  const { session, worlds } = await discoverExtensionWorlds(page);
+  try {
+    return [...worlds.values()];
   } finally {
     await session.detach().catch(() => {});
   }
