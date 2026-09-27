@@ -12,6 +12,36 @@ async function expectTrafficInert(traffic) {
   expect(blocked, `Unexpected ChatGPT network attempts: ${JSON.stringify(blocked)}`).toEqual([]);
 }
 
+async function waitForStableToolbarOwner(page, stableMs = 1500, timeoutMs = 7500) {
+  let ownerToken = '';
+  let stableSince = 0;
+  await expect.poll(async () => {
+    const currentToken = await page.evaluate(() => {
+      const toolbar = document.getElementById('chatgpt-quick-continue-toolbar');
+      if (!toolbar) return '';
+      if (!toolbar.dataset.playwrightOwnerToken) {
+        toolbar.dataset.playwrightOwnerToken = crypto.randomUUID();
+      }
+      return toolbar.dataset.playwrightOwnerToken;
+    });
+    const now = Date.now();
+    if (!currentToken) {
+      ownerToken = '';
+      stableSince = 0;
+      return 0;
+    }
+    if (currentToken !== ownerToken) {
+      ownerToken = currentToken;
+      stableSince = now;
+      return 0;
+    }
+    return now - stableSince;
+  }, {
+    timeout: timeoutMs,
+    message: 'Quick Continue toolbar owner did not stabilize after fresh extension install'
+  }).toBeGreaterThanOrEqual(stableMs);
+}
+
 async function quickContinueDiagnostics(page) {
   return evaluateInExtensionWorld(page, 'ChatGPT Quick Continue', `(async () => {
     const composer = document.querySelector('#prompt-textarea');
@@ -91,6 +121,7 @@ test('Quick Continue exact Continue transaction reaches one browser form submit'
 test('keyboard timestamp toggle preserves one exact logical newline and trusted Enter sends once', async ({ fixturePage, chatgptTraffic }) => {
   const toolbar = fixturePage.locator(toolbarSelector);
   await expect(toolbar).toBeVisible();
+  await waitForStableToolbarOwner(fixturePage);
 
   const clock = fixturePage.getByLabel('Current local time');
   await clock.focus();
@@ -99,6 +130,22 @@ test('keyboard timestamp toggle preserves one exact logical newline and trusted 
 
   const composer = fixturePage.locator('#prompt-textarea');
   await composer.fill('first line\nsecond line');
+  await expect.poll(async () => {
+    const diagnostics = await quickContinueDiagnostics(fixturePage);
+    return {
+      manualTimestampEnabled: diagnostics.manualTimestampEnabled,
+      composerText: diagnostics.composerText,
+      sendDisabled: diagnostics.sendDisabled
+    };
+  }, {
+    timeout: 5_000,
+    message: 'Timestamp send preconditions changed before trusted Enter'
+  }).toEqual({
+    manualTimestampEnabled: true,
+    composerText: 'first line\nsecond line',
+    sendDisabled: false
+  });
+
   await composer.press('Enter');
 
   await expect.poll(() => fixturePage.evaluate(() => window.__fixture.submits.length), { timeout: 5_000 }).toBe(1);
