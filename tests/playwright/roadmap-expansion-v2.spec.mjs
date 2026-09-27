@@ -34,6 +34,20 @@ async function extensionWorkerDescriptor(page, extensionName) {
   };
 }
 
+async function wakeExtensionWorker(page, extensionName) {
+  return evaluateInExtensionWorld(page, extensionName, `(() => {
+    try {
+      chrome.runtime.sendMessage(
+        { type: 'PLAYWRIGHT_WAKE_MV3_SERVICE_WORKER' },
+        () => { void chrome.runtime.lastError; }
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  })()`);
+}
+
 async function findWorkerTarget(rootSession, workerUrl, timeout = 10_000) {
   let target = null;
   let diagnostics = [];
@@ -99,6 +113,12 @@ async function evaluateInExtensionWorker(page, extensionName, expression, { time
   const browser = page.context().browser();
   if (!browser) throw new Error('Playwright browser instance unavailable for MV3 worker inspection.');
   const descriptor = await extensionWorkerDescriptor(page, extensionName);
+
+  // The worker may legitimately be asleep by the time a later serial regression
+  // reaches it. A fire-and-forget extension message is a real MV3 event and wakes
+  // the production service worker without depending on any response contract.
+  await wakeExtensionWorker(page, extensionName);
+
   const rootSession = await browser.newBrowserCDPSession();
   let sessionId = '';
   try {
