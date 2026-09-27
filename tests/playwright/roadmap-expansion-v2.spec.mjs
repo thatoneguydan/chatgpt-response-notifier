@@ -102,6 +102,10 @@ async function evaluateInExtensionWorker(page, extensionName, expression, { time
   const rootSession = await browser.newBrowserCDPSession();
   let sessionId = '';
   try {
+    // Playwright maintains its own target-discovery filter. Reset discovery for
+    // this short-lived browser session so extension service-worker targets are
+    // visible to Target.getTargets instead of being filtered from the result.
+    await rootSession.send('Target.setDiscoverTargets', { discover: true });
     const target = await findWorkerTarget(rootSession, descriptor.workerUrl, timeout);
     const attached = await rootSession.send('Target.attachToTarget', {
       targetId: target.targetId,
