@@ -60,18 +60,48 @@ const fixtureHtml = String.raw`<!doctype html>
       const app = document.getElementById('app');
       const state = {
         submits: [],
-        composerGeneration: 0
+        composerGeneration: 0,
+        submittedTurns: 0
       };
 
       function readComposer(node) {
         return String(node?.innerText || node?.textContent || '').replace(/\r\n?/g, '\n');
       }
 
+      function clearComposer(editor) {
+        editor.replaceChildren();
+        const paragraph = document.createElement('p');
+        paragraph.append(document.createElement('br'));
+        editor.append(paragraph);
+        try {
+          editor.dispatchEvent(new InputEvent('input', {
+            bubbles: true,
+            inputType: 'deleteContentBackward',
+            data: null
+          }));
+        } catch {
+          editor.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      }
+
+      function appendSubmittedUserTurn(text) {
+        state.submittedTurns += 1;
+        const turn = document.createElement('section');
+        turn.dataset.testid = `conversation-turn-fixture-submitted-${state.submittedTurns}`;
+        turn.dataset.messageId = `fixture-user-${state.submittedTurns}`;
+        const role = document.createElement('div');
+        role.dataset.messageAuthorRole = 'user';
+        role.textContent = text;
+        turn.append(role);
+        app.append(turn);
+      }
+
       function buildComposer() {
         state.composerGeneration += 1;
+        const generation = state.composerGeneration;
         const form = document.createElement('form');
         form.dataset.type = 'unified-composer';
-        form.dataset.fixtureGeneration = String(state.composerGeneration);
+        form.dataset.fixtureGeneration = String(generation);
 
         const editor = document.createElement('div');
         editor.id = 'prompt-textarea';
@@ -88,14 +118,23 @@ const fixtureHtml = String.raw`<!doctype html>
         send.dataset.testid = 'send-button';
         send.setAttribute('aria-label', 'Send prompt');
         send.textContent = 'Send';
+        send.disabled = true;
+
+        form.addEventListener('input', () => {
+          send.disabled = !readComposer(editor).trim();
+        });
 
         form.addEventListener('submit', (event) => {
           event.preventDefault();
+          const text = readComposer(editor);
           state.submits.push({
-            text: readComposer(editor),
-            generation: state.composerGeneration,
+            text,
+            generation,
             at: Date.now()
           });
+          appendSubmittedUserTurn(text);
+          clearComposer(editor);
+          send.disabled = true;
         });
 
         form.append(editor, send);
@@ -121,26 +160,64 @@ const fixtureHtml = String.raw`<!doctype html>
 </body>
 </html>`;
 
-async function extensionNames(context) {
-  const result = new Map();
-  for (const worker of context.serviceWorkers()) {
-    try {
-      const name = await worker.evaluate(() => chrome.runtime.getManifest().name);
-      if (name) result.set(name, worker);
-    } catch {}
-  }
-  return result;
-}
+async function discoverExtensionWorlds(page) {
+  const session = await page.context().newCDPSession(page);
+  const contexts = new Map();
+  session.on('Runtime.executionContextCreated', ({ context }) => {
+    contexts.set(context.id, context);
+  });
+  await session.send('Runtime.enable');
 
-export async function waitForExtensionWorkers(context) {
+  const names = new Map();
   await expect.poll(async () => {
-    const names = await extensionNames(context);
+    names.clear();
+    for (const context of contexts.values()) {
+      try {
+        const evaluated = await session.send('Runtime.evaluate', {
+          contextId: context.id,
+          expression: 'globalThis.chrome?.runtime?.getManifest?.().name || ""',
+          returnByValue: true
+        });
+        const name = String(evaluated?.result?.value || '');
+        if (name) names.set(name, context.id);
+      } catch {}
+    }
     return [...names.keys()].sort();
   }, { timeout: 10_000 }).toEqual([
     'ChatGPT Quick Continue',
     'ChatGPT Response Notifier'
   ]);
-  return extensionNames(context);
+
+  return { session, names: new Map(names) };
+}
+
+export async function evaluateInExtensionWorld(page, extensionName, expression) {
+  const { session, names } = await discoverExtensionWorlds(page);
+  try {
+    const contextId = names.get(extensionName);
+    if (!contextId) throw new Error(`Extension world not found: ${extensionName}`);
+    const evaluated = await session.send('Runtime.evaluate', {
+      contextId,
+      expression,
+      returnByValue: true,
+      awaitPromise: true
+    });
+    if (evaluated?.exceptionDetails) {
+      throw new Error(evaluated.exceptionDetails.exception?.description || evaluated.exceptionDetails.text || 'Extension-world evaluation failed.');
+    }
+    return evaluated?.result?.value;
+  } finally {
+    await session.detach().catch(() => {});
+  }
+}
+
+export async function extensionWorldNames(page) {
+  const { session, names } = await discoverExtensionWorlds(page);
+  try {
+    return [...names.keys()].sort();
+  } finally {
+    await session.detach().catch(() => {});
+  }
 }
 
 export const test = base.extend({
