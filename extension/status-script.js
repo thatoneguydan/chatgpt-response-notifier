@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 17;
+  const RUNTIME_VERSION = 18;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const AUTO_CONTINUE_PROMPT = 'Continue until you finish or need something from me.';
   const DEFAULT_WAIT_MS = 30000;
@@ -443,7 +443,7 @@
       return { ok: false, clicked: false, reason: 'watchdog-authorization-expired', documentId };
     }
     const initialPromptKey = latestAssistantSnapshot()?.promptKey || latestUserSnapshot()?.key || '';
-    if (expectedPrompt && initialPromptKey !== expectedPrompt) {
+    if (expectedPrompt && initialPromptKey && initialPromptKey !== expectedPrompt) {
       return { ok: false, clicked: false, reason: 'watchdog-prompt-changed', documentId };
     }
 
@@ -484,7 +484,7 @@
       return { ok: false, clicked: false, reason: 'watchdog-conversation-changed-before-send', documentId };
     }
     const beforeSendPromptKey = latestAssistantSnapshot()?.promptKey || latestUserSnapshot()?.key || '';
-    if (expectedPrompt && beforeSendPromptKey !== expectedPrompt) {
+    if (expectedPrompt && beforeSendPromptKey && beforeSendPromptKey !== expectedPrompt) {
       if (composerText(composer) === cleanComposer(text)) writeComposer(composer, '');
       return { ok: false, clicked: false, reason: 'watchdog-prompt-changed-before-send', documentId };
     }
@@ -557,18 +557,35 @@
     }
   }
 
+  async function persistedWatchdogPromptKey(conversationId) {
+    const expectedConversationId = String(conversationId || '');
+    if (!expectedConversationId) return '';
+    try {
+      const overview = await chrome.runtime.sendMessage({ type: 'GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER' });
+      if (overview?.ok !== true || String(overview?.activeConversationId || '') !== expectedConversationId) return '';
+      const watchdog = overview?.codeWatchdog || null;
+      if (!watchdog || watchdog?.stopped === true || String(watchdog?.conversationId || '') !== expectedConversationId) return '';
+      return String(watchdog?.lastPromptKey || '');
+    } catch {
+      return '';
+    }
+  }
+
   async function requestWatchdogAuthorization(expectedConversationId, expectedPromptKey) {
     const identity = conversationIdentity();
     const conversationId = String(expectedConversationId || identity?.id || '');
-    const promptKey = String(expectedPromptKey || latestAssistantSnapshot()?.promptKey || latestUserSnapshot()?.key || '');
-    if (!conversationId || !promptKey) return { ok: false, granted: false, reason: 'cadence-page-identity-missing' };
+    if (!conversationId) return { ok: false, granted: false, reason: 'cadence-page-identity-missing' };
+    let promptKey = String(expectedPromptKey || latestAssistantSnapshot()?.promptKey || latestUserSnapshot()?.key || '');
+    if (!promptKey) promptKey = await persistedWatchdogPromptKey(conversationId);
+    if (!promptKey) return { ok: false, granted: false, reason: 'cadence-page-identity-missing' };
     try {
-      return await chrome.runtime.sendMessage({
+      const authorization = await chrome.runtime.sendMessage({
         type: 'AUTHORIZE_WATCHDOG_DISPATCH_V1',
         conversationId,
         promptKey,
         documentId
       }) || { ok: false, granted: false, reason: 'cadence-owner-no-response' };
+      return authorization?.granted === true ? { ...authorization, promptKey } : authorization;
     } catch (error) {
       return { ok: false, granted: false, reason: 'cadence-owner-unavailable', error: String(error?.message || error) };
     }
@@ -620,13 +637,14 @@
     const cached = watchdogAttemptResults.get(attemptId);
     if (cached) return { ...cached, deduplicated: true };
     if (watchdogAttemptInflight.has(attemptId)) return await watchdogAttemptInflight.get(attemptId);
+    const authorizedPromptKey = String(authorization?.promptKey || expectedPromptKey || '');
 
     const execution = (async () => {
-      const raw = await performWatchdogContinuationRaw(expectedConversationId, expectedPromptKey, {
+      const raw = await performWatchdogContinuationRaw(expectedConversationId, authorizedPromptKey, {
         ...authorization,
         documentId
       });
-      const finalized = await finalizeWatchdogAuthorization(expectedConversationId, expectedPromptKey, authorization, raw);
+      const finalized = await finalizeWatchdogAuthorization(expectedConversationId, authorizedPromptKey, authorization, raw);
       const terminalStatus = String(raw?.statusCode || '');
       const definitiveTerminal = terminalStatus
         && globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(terminalStatus) !== true;
