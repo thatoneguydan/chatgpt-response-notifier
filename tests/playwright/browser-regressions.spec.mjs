@@ -1,4 +1,9 @@
-import { test, expect, waitForExtensionWorkers } from './extension-fixture.mjs';
+import {
+  test,
+  expect,
+  extensionWorldNames,
+  evaluateInExtensionWorld
+} from './extension-fixture.mjs';
 
 const toolbarSelector = '#chatgpt-quick-continue-toolbar';
 
@@ -7,14 +12,29 @@ async function expectTrafficInert(traffic) {
   expect(blocked, `Unexpected ChatGPT network attempts: ${JSON.stringify(blocked)}`).toEqual([]);
 }
 
-test('loads both production MV3 extensions in headless Chromium', async ({ extensionContext, fixturePage, chatgptTraffic }) => {
-  const workers = await waitForExtensionWorkers(extensionContext);
-  expect([...workers.keys()].sort()).toEqual([
+async function quickContinueDiagnostics(page) {
+  return evaluateInExtensionWorld(page, 'ChatGPT Quick Continue', `(() => {
+    const composer = document.querySelector('#prompt-textarea');
+    const sendButton = document.querySelector('button[data-testid="send-button"]');
+    return {
+      runtimeVersion: Number(globalThis.__chatgptQuickContinueRuntime?.version || 0),
+      sendVersion: Number(globalThis.ChatGPTQuickContinueSend?.version || 0),
+      composerVersion: Number(globalThis.ChatGPTQuickContinueComposer?.version || 0),
+      composerText: String(globalThis.ChatGPTQuickContinueComposer?.read?.(composer) || ''),
+      sendDisabled: Boolean(sendButton?.disabled),
+      toolbarPresent: Boolean(document.getElementById('chatgpt-quick-continue-toolbar'))
+    };
+  })()`);
+}
+
+test('loads both production MV3 extension worlds in headless Chromium', async ({ fixturePage, chatgptTraffic }) => {
+  expect(await extensionWorldNames(fixturePage)).toEqual([
     'ChatGPT Quick Continue',
     'ChatGPT Response Notifier'
   ]);
   await expect(fixturePage.locator(toolbarSelector)).toHaveCount(1);
   await expect(fixturePage.locator(toolbarSelector)).toBeVisible();
+  await expect(fixturePage.locator('html')).toHaveAttribute('data-chatgpt-notifier-automation-owner', /.+/);
   await expectTrafficInert(chatgptTraffic);
 });
 
@@ -45,11 +65,13 @@ test('Continue performs exactly one browser-native form submission', async ({ fi
   await expect(fixturePage.locator(toolbarSelector)).toBeVisible();
   await fixturePage.getByRole('button', { name: 'Send timestamped Continue' }).click();
 
-  await expect.poll(() => fixturePage.evaluate(() => window.__fixture.submits.length)).toBe(1);
+  await expect.poll(() => fixturePage.evaluate(() => window.__fixture.submits.length), { timeout: 5_000 }).toBe(1);
   await fixturePage.waitForTimeout(300);
   const submissions = await fixturePage.evaluate(() => window.__fixture.submits.map((entry) => entry.text));
-  expect(submissions).toHaveLength(1);
+  const diagnostics = await quickContinueDiagnostics(fixturePage);
+  expect(submissions, `Quick Continue diagnostics: ${JSON.stringify(diagnostics)}`).toHaveLength(1);
   expect(submissions[0]).toContain('Continue until you finish or need something from me.');
+  expect(diagnostics.composerText).toBe('');
   await expectTrafficInert(chatgptTraffic);
 });
 
@@ -65,45 +87,30 @@ test('manual timestamp submission preserves one exact logical newline and sends 
   await composer.fill('first line\nsecond line');
   await composer.press('Enter');
 
-  await expect.poll(() => fixturePage.evaluate(() => window.__fixture.submits.length)).toBe(1);
+  await expect.poll(() => fixturePage.evaluate(() => window.__fixture.submits.length), { timeout: 5_000 }).toBe(1);
   await fixturePage.waitForTimeout(300);
   const submissions = await fixturePage.evaluate(() => window.__fixture.submits.map((entry) => entry.text));
-  expect(submissions).toHaveLength(1);
+  const diagnostics = await quickContinueDiagnostics(fixturePage);
+  expect(submissions, `Quick Continue diagnostics: ${JSON.stringify(diagnostics)}`).toHaveLength(1);
   expect(submissions[0].endsWith('first line\nsecond line')).toBe(true);
   expect(submissions[0]).not.toContain('first line\n\nsecond line');
+  expect(diagnostics.composerText).toBe('');
   await expectTrafficInert(chatgptTraffic);
 });
 
-test('notifier terminal detector sees a footer sibling inside the same assistant turn wrapper', async ({ extensionContext, fixturePage, chatgptTraffic }) => {
+test('notifier terminal detector sees a footer sibling inside the same assistant turn wrapper', async ({ fixturePage, chatgptTraffic }) => {
   await expect(fixturePage.locator('[data-testid="conversation-turn-1"]')).toBeVisible();
-  const workers = await waitForExtensionWorkers(extensionContext);
-  const notifier = workers.get('ChatGPT Response Notifier');
-  expect(notifier).toBeTruthy();
 
-  const detection = await notifier.evaluate(async () => {
-    const tabs = await chrome.tabs.query({ url: 'https://chatgpt.com/*' });
-    const tab = tabs.find((candidate) => candidate.url?.includes('/c/playwright-browser-regression'));
-    if (!tab?.id) throw new Error('Fixture tab not found.');
-
-    await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      files: ['status-code.js', 'rendered-terminal-status.js']
-    });
-    const results = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
-      func: () => {
-        const api = globalThis.ChatGPTNotifierRenderedTerminalStatus;
-        const wrapper = document.querySelector('[data-testid="conversation-turn-1"]');
-        const semanticAssistant = wrapper?.querySelector('[data-message-author-role="assistant"]');
-        return {
-          version: Number(api?.version || 0),
-          wrapper: String(api?.detect?.(wrapper) || ''),
-          semanticAssistant: String(api?.detect?.(semanticAssistant) || '')
-        };
-      }
-    });
-    return results[0]?.result || null;
-  });
+  const detection = await evaluateInExtensionWorld(fixturePage, 'ChatGPT Response Notifier', `(() => {
+    const api = globalThis.ChatGPTNotifierRenderedTerminalStatus;
+    const wrapper = document.querySelector('[data-testid="conversation-turn-1"]');
+    const semanticAssistant = wrapper?.querySelector('[data-message-author-role="assistant"]');
+    return {
+      version: Number(api?.version || 0),
+      wrapper: String(api?.detect?.(wrapper) || ''),
+      semanticAssistant: String(api?.detect?.(semanticAssistant) || '')
+    };
+  })()`);
 
   expect(detection).toEqual({
     version: 2,
