@@ -1,4 +1,10 @@
-# ChatGPT Response Notifier 0.9.93
+# ChatGPT Response Notifier 0.9.94
+
+- Fixes the watchdog getting stuck at zero with `cadence-page-identity-missing` when ChatGPT temporarily stops exposing the current turn identity even though the conversation URL and composer are still usable.
+- Falls back to the durable watchdog record's prompt identity only when the sender is still attached to the same conversation and that watchdog remains active; a conflicting live page prompt still fails closed before any send.
+- Carries the recovered prompt identity through reservation, pre-send validation, and finalization so a successful auto-continue consumes exactly one attempt and immediately establishes the next 30-minute cadence window.
+
+## Previous: 0.9.93
 
 - Fixes a terminal-status acknowledgement race where successful notification delivery could mark a rendered footer handled even when watchdog parking failed, leaving the visible 30-minute timer running after `COMPLETE_APPLIED`, `COMPLETE_NO_CHANGES`, `BLOCKED_HUMAN`, or `PLANNING_ACTIVE`.
 - Requires explicit persisted `stopped:true` proof before the page observer retires terminal-footer retries. Notification delivery remains independent and can no longer masquerade as watchdog-stop success.
