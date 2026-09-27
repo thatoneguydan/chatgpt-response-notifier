@@ -11,7 +11,7 @@ const backgroundSource = fs.readFileSync(
   'utf8'
 );
 
-function loadManagedUpdatePolicy(runningVersion = '1.2.25') {
+function loadManagedUpdatePolicy(runningVersion = '1.2.26') {
   const context = {
     globalThis: null,
     Number,
@@ -43,10 +43,10 @@ function loadManagedUpdatePolicy(runningVersion = '1.2.25') {
 test('managed updater never reloads a newer candidate down to the helper version', () => {
   const shouldReload = loadManagedUpdatePolicy();
   expect(typeof shouldReload).toBe('function');
-  expect(shouldReload('1.2.24', '1.2.25')).toBe(false);
-  expect(shouldReload('1.2.25', '1.2.25')).toBe(false);
-  expect(shouldReload('1.2.26', '1.2.25')).toBe(true);
-  expect(shouldReload('invalid', '1.2.25')).toBe(false);
+  expect(shouldReload('1.2.25', '1.2.26')).toBe(false);
+  expect(shouldReload('1.2.26', '1.2.26')).toBe(false);
+  expect(shouldReload('1.2.27', '1.2.26')).toBe(true);
+  expect(shouldReload('invalid', '1.2.26')).toBe(false);
 });
 
 test('managed update check delegates mismatch direction to the one-way policy', () => {
