@@ -6,6 +6,7 @@ import {
 
 const toolbarSelector = '#chatgpt-quick-continue-toolbar';
 const fixtureConversationId = 'playwright-browser-regression';
+const watchdogDelayMs = 30 * 60_000;
 const extensionWorkerPaths = Object.freeze({
   'ChatGPT Quick Continue': 'background.js',
   'ChatGPT Response Notifier': 'diagnostics-bootstrap.js'
@@ -47,47 +48,43 @@ async function notifierControlPage(page) {
   return control;
 }
 
+async function serviceWorkerTargetId(session, scriptUrl) {
+  const result = await session.send('Target.getTargets');
+  const target = (result?.targetInfos || []).find((candidate) =>
+    String(candidate?.type || '') === 'service_worker'
+    && String(candidate?.url || '') === scriptUrl
+  );
+  return String(target?.targetId || '');
+}
+
 async function restartExtensionServiceWorker(page, extensionName) {
   const descriptor = await extensionDescriptor(page, extensionName);
   const session = await page.context().newCDPSession(page);
-  const versions = new Map();
-  const updateVersions = (event) => {
-    for (const version of event?.versions || []) {
-      versions.set(String(version.versionId || ''), version);
-    }
-  };
-  session.on('ServiceWorker.workerVersionUpdated', updateVersions);
 
   try {
+    await session.send('Target.setDiscoverTargets', { discover: true });
     await session.send('ServiceWorker.enable');
     await session.send('ServiceWorker.startWorker', { scopeURL: descriptor.scopeUrl });
 
-    let runningVersionId = '';
-    await expect.poll(() => {
-      const running = [...versions.values()].find((version) =>
-        String(version.scriptURL || '') === descriptor.scriptUrl
-        && String(version.runningStatus || '') === 'running'
-      );
-      runningVersionId = String(running?.versionId || '');
-      return runningVersionId;
-    }, { timeout: 10_000 }).not.toBe('');
+    await expect.poll(() => serviceWorkerTargetId(session, descriptor.scriptUrl), {
+      timeout: 10_000
+    }).not.toBe('');
 
-    await session.send('ServiceWorker.stopWorker', { versionId: runningVersionId });
-    await expect.poll(() => {
-      const version = versions.get(runningVersionId);
-      return String(version?.runningStatus || '');
-    }, { timeout: 10_000 }).toBe('stopped');
+    await session.send('ServiceWorker.stopAllWorkers');
+    await expect.poll(() => serviceWorkerTargetId(session, descriptor.scriptUrl), {
+      timeout: 10_000
+    }).toBe('');
 
     await session.send('ServiceWorker.startWorker', { scopeURL: descriptor.scopeUrl });
-    await expect.poll(() => [...versions.values()].some((version) =>
-      String(version.scriptURL || '') === descriptor.scriptUrl
-      && String(version.runningStatus || '') === 'running'
-    ), { timeout: 10_000 }).toBe(true);
+    const restartedTargetId = await expect.poll(() => serviceWorkerTargetId(session, descriptor.scriptUrl), {
+      timeout: 10_000
+    }).not.toBe('');
 
     return {
       extensionId: descriptor.extensionId,
       scriptUrl: descriptor.scriptUrl,
-      scopeUrl: descriptor.scopeUrl
+      scopeUrl: descriptor.scopeUrl,
+      restartedTargetId
     };
   } finally {
     await session.detach().catch(() => {});
@@ -104,19 +101,15 @@ async function notifierMessage(page, message) {
 async function notifierWatchdog(page, conversationId = fixtureConversationId) {
   const control = await notifierControlPage(page);
   return control.evaluate(async (id) => {
-    const DB_NAME = 'chatgpt-response-notifier-monitor';
-    const DB_VERSION = 1;
-    const PROFILE_STORE = 'profile';
-    const key = `code-watchdog:${id}`;
     const database = await new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
+      const request = indexedDB.open('chatgpt-response-notifier-monitor', 1);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error || new Error('Could not open watchdog database.'));
     });
     try {
       return await new Promise((resolve, reject) => {
-        const transaction = database.transaction(PROFILE_STORE, 'readonly');
-        const request = transaction.objectStore(PROFILE_STORE).get(key);
+        const transaction = database.transaction('profile', 'readonly');
+        const request = transaction.objectStore('profile').get(`code-watchdog:${id}`);
         request.onsuccess = () => resolve(request.result || null);
         request.onerror = () => reject(request.error || new Error('Could not read watchdog record.'));
       });
@@ -151,76 +144,90 @@ async function prepareNonTerminalNotifier(page) {
     });
   }, fixtureConversationId);
 
-  await expect.poll(() => evaluateInExtensionWorld(page, 'ChatGPT Response Notifier', `(() => {
-    return String(globalThis.__chatgptNotifierStatusDom?.latestAssistantSnapshot?.()?.statusCode || '');
-  })()`), { timeout: 10_000 }).toBe('');
-}
-
-async function enableNotifierAutomation(page) {
-  const result = await notifierMessage(page, {
-    type: 'SET_BUILD_AUTOMATION_STATE_FOR_SENDER',
-    enabled: true,
-    requestId: 'playwright-enable-automation'
-  });
-  expect(result?.ok).toBe(true);
-
+  let promptKey = '';
   await expect.poll(async () => {
-    const watchdog = await notifierWatchdog(page);
+    const snapshot = await evaluateInExtensionWorld(page, 'ChatGPT Response Notifier', `(() => {
+      const value = globalThis.__chatgptNotifierStatusDom?.latestAssistantSnapshot?.() || {};
+      return {
+        statusCode: String(value.statusCode || ''),
+        promptKey: String(value.promptKey || '')
+      };
+    })()`);
+    promptKey = String(snapshot?.promptKey || '');
     return {
-      exists: Boolean(watchdog),
-      stopped: watchdog?.stopped === true,
-      deadlineAt: Math.max(0, Number(watchdog?.deadlineAt || 0))
+      statusCode: String(snapshot?.statusCode || ''),
+      hasPromptKey: Boolean(promptKey)
     };
-  }, { timeout: 15_000 }).toMatchObject({ exists: true, stopped: false });
-
-  return await notifierWatchdog(page);
+  }, { timeout: 10_000 }).toEqual({ statusCode: '', hasPromptKey: true });
+  return promptKey;
 }
 
-async function seedWatchdogDue(page, conversationId = fixtureConversationId) {
+async function seedEnabledWatchdog(page, promptKey, { due = false } = {}) {
   const control = await notifierControlPage(page);
-  return control.evaluate(async (id) => {
-    const DB_NAME = 'chatgpt-response-notifier-monitor';
-    const DB_VERSION = 1;
-    const PROFILE_STORE = 'profile';
-    const key = `code-watchdog:${id}`;
+  return control.evaluate(async ({ conversationId, promptKeyValue, makeDue, delayMs }) => {
+    const now = Date.now();
+    const tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] });
+    const target = tabs.find((tab) => {
+      try { return new URL(String(tab.url || '')).pathname === `/c/${conversationId}`; }
+      catch { return false; }
+    });
+    if (!Number.isInteger(target?.id)) throw new Error('Playwright ChatGPT fixture tab not found for watchdog seed.');
+
     const database = await new Promise((resolve, reject) => {
-      const request = indexedDB.open(DB_NAME, DB_VERSION);
+      const request = indexedDB.open('chatgpt-response-notifier-monitor', 1);
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => reject(request.error || new Error('Could not open watchdog database.'));
     });
 
     try {
-      const current = await new Promise((resolve, reject) => {
-        const transaction = database.transaction(PROFILE_STORE, 'readonly');
-        const request = transaction.objectStore(PROFILE_STORE).get(key);
-        request.onsuccess = () => resolve(request.result || null);
-        request.onerror = () => reject(request.error || new Error('Could not read watchdog record.'));
-      });
-      if (!current) throw new Error('Watchdog record missing before due-state seed.');
-
-      const next = {
-        ...current,
-        deadlineAt: Date.now() - 1000,
-        retryAt: 0,
-        retryReason: '',
-        stopped: false,
-        stopReason: '',
-        watchdogRevision: Math.max(0, Number(current.watchdogRevision || 0)) + 1,
-        updatedAt: Date.now()
-      };
-
       await new Promise((resolve, reject) => {
-        const transaction = database.transaction(PROFILE_STORE, 'readwrite');
-        transaction.objectStore(PROFILE_STORE).put(next);
+        const transaction = database.transaction(['enrollments', 'profile'], 'readwrite');
+        transaction.objectStore('enrollments').put({
+          conversationId,
+          conversationUrl: String(target.url || `https://chatgpt.com/c/${conversationId}`),
+          schemaVersion: 2,
+          revision: 1,
+          enabled: true,
+          recoveryEnabled: true,
+          userPaused: false,
+          source: 'playwright-browser-regression',
+          enrolledAt: now,
+          updatedAt: now
+        });
+        transaction.objectStore('profile').put({
+          key: `code-watchdog:${conversationId}`,
+          conversationId,
+          conversationUrl: String(target.url || `https://chatgpt.com/c/${conversationId}`),
+          ownerTabId: target.id,
+          sendCount: 0,
+          stopped: false,
+          stopReason: '',
+          waitingForRequestStart: false,
+          lastRequestStartedAt: 0,
+          lastPromptKey: String(promptKeyValue || ''),
+          lastStatusCode: '',
+          manualActivatedAt: now,
+          deadlineAt: makeDue ? now - 1000 : now + Math.max(1, Number(delayMs || 0)),
+          retryAt: 0,
+          retryReason: '',
+          watchdogRevision: 1,
+          updatedAt: now
+        });
         transaction.oncomplete = resolve;
-        transaction.onerror = () => reject(transaction.error || new Error('Could not seed due watchdog record.'));
-        transaction.onabort = () => reject(transaction.error || new Error('Due watchdog seed was aborted.'));
+        transaction.onerror = () => reject(transaction.error || new Error('Could not seed notifier automation state.'));
+        transaction.onabort = () => reject(transaction.error || new Error('Notifier automation seed was aborted.'));
       });
-      return next;
     } finally {
       try { database.close(); } catch {}
     }
-  }, conversationId);
+
+    return { ownerTabId: target.id, seededAt: now };
+  }, {
+    conversationId: fixtureConversationId,
+    promptKeyValue: promptKey,
+    makeDue: due,
+    delayMs: watchdogDelayMs
+  });
 }
 
 test('recovers the same Quick Continue toolbar owner after external host detachment', async ({ fixturePage, chatgptTraffic }) => {
@@ -338,14 +345,15 @@ test('Quick Continue MV3 worker stop/wake does not rebuild live page UI', async 
 });
 
 test('terminal stop rejects a superseded prompt then persists the rendered definitive stop', async ({ fixturePage, chatgptTraffic }) => {
-  await prepareNonTerminalNotifier(fixturePage);
-  const armed = await enableNotifierAutomation(fixturePage);
-  expect(String(armed?.lastPromptKey || '')).not.toBe('');
+  const promptKey = await prepareNonTerminalNotifier(fixturePage);
+  await seedEnabledWatchdog(fixturePage, promptKey);
+  const armed = await notifierWatchdog(fixturePage);
+  expect(String(armed?.lastPromptKey || '')).toBe(promptKey);
 
   const rejected = await notifierMessage(fixturePage, {
     type: 'FORCE_PARK_CODE_WATCHDOG_TERMINAL_V3',
     conversationId: fixtureConversationId,
-    promptKey: `${armed.lastPromptKey}-superseded`,
+    promptKey: `${promptKey}-superseded`,
     statusCode: 'COMPLETE_APPLIED'
   });
   expect(rejected).toMatchObject({ ok: false, reason: 'terminal-prompt-superseded' });
@@ -379,11 +387,9 @@ test('terminal stop rejects a superseded prompt then persists the rendered defin
 });
 
 test('due watchdog sends exactly once and reserves the next 30-minute cadence before replay', async ({ fixturePage, chatgptTraffic }) => {
-  await prepareNonTerminalNotifier(fixturePage);
-  const armed = await enableNotifierAutomation(fixturePage);
-  expect(String(armed?.lastPromptKey || '')).not.toBe('');
+  const promptKey = await prepareNonTerminalNotifier(fixturePage);
+  await seedEnabledWatchdog(fixturePage, promptKey, { due: true });
 
-  await seedWatchdogDue(fixturePage);
   const first = await notifierMessage(fixturePage, {
     type: 'RUN_CODE_WATCHDOG_NOW_V3',
     conversationId: fixtureConversationId
