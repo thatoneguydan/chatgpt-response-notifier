@@ -12,23 +12,33 @@ import {
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const wrapperRoot = path.join(here, 'wrappers');
-const wrapperFilename = 'playwright-worker-wrapper.js';
 
 async function prepareWrappedExtension(sourcePath, destinationPath, wrapperName) {
   await fs.rm(destinationPath, { recursive: true, force: true });
   await fs.cp(sourcePath, destinationPath, { recursive: true });
-  await fs.copyFile(
-    path.join(wrapperRoot, wrapperName),
-    path.join(destinationPath, wrapperFilename)
-  );
 
   const manifestPath = path.join(destinationPath, 'manifest.json');
   const manifest = JSON.parse(await fs.readFile(manifestPath, 'utf8'));
-  manifest.background = {
-    ...(manifest.background || {}),
-    service_worker: wrapperFilename
-  };
-  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, 'utf8');
+  const serviceWorker = String(manifest?.background?.service_worker || '').trim();
+  if (!serviceWorker) throw new Error(`Missing production MV3 service worker in ${manifestPath}.`);
+
+  const workerPath = path.join(destinationPath, serviceWorker);
+  const productionWorker = await fs.readFile(workerPath, 'utf8');
+  const rawHook = await fs.readFile(path.join(wrapperRoot, wrapperName), 'utf8');
+  const hook = rawHook
+    .split(/\r?\n/)
+    .filter((line) => !line.trim().startsWith('importScripts('))
+    .join('\n')
+    .trim();
+  if (!hook) throw new Error(`Empty Playwright worker hook: ${wrapperName}`);
+
+  // Preserve the production manifest and production worker entrypoint exactly.
+  // Only the temporary test copy receives an appended observer/control hook.
+  await fs.writeFile(
+    workerPath,
+    `${productionWorker.trimEnd()}\n\n// Playwright test-only hook; never packaged with the extension.\n${hook}\n`,
+    'utf8'
+  );
 }
 
 export const test = base.extend({
