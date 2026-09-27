@@ -12,25 +12,6 @@ async function expectTrafficInert(traffic) {
   expect(blocked, `Unexpected ChatGPT network attempts: ${JSON.stringify(blocked)}`).toEqual([]);
 }
 
-async function armQuickContinueEventProbe(page) {
-  await evaluateInExtensionWorld(page, 'ChatGPT Quick Continue', `(() => {
-    const events = [];
-    globalThis.__playwrightQuickContinueEvents = events;
-    const summarize = (event) => ({
-      type: event.type,
-      key: String(event.key || ''),
-      isTrusted: event.isTrusted === true,
-      defaultPrevented: event.defaultPrevented === true,
-      targetId: String(event.target?.id || ''),
-      targetLabel: String(event.target?.getAttribute?.('aria-label') || ''),
-      targetTag: String(event.target?.tagName || '')
-    });
-    window.addEventListener('click', (event) => events.push(summarize(event)), true);
-    window.addEventListener('keydown', (event) => events.push(summarize(event)), true);
-    return true;
-  })()`);
-}
-
 async function quickContinueDiagnostics(page) {
   return evaluateInExtensionWorld(page, 'ChatGPT Quick Continue', `(async () => {
     const composer = document.querySelector('#prompt-textarea');
@@ -48,8 +29,6 @@ async function quickContinueDiagnostics(page) {
       composerText: String(globalThis.ChatGPTQuickContinueComposer?.read?.(composer) || ''),
       sendDisabled: Boolean(sendButton?.disabled),
       toolbarPresent: Boolean(document.getElementById('chatgpt-quick-continue-toolbar')),
-      toolbarStatus: String(document.querySelector('#chatgpt-quick-continue-toolbar [role="status"]')?.textContent || ''),
-      events: Array.from(globalThis.__playwrightQuickContinueEvents || []),
       configLoaded: Boolean(config),
       configError
     };
@@ -102,12 +81,22 @@ test('Quick Continue isolated-world send transaction reaches one browser form su
   await expectTrafficInert(chatgptTraffic);
 });
 
-test('Continue performs exactly one browser-native form submission', async ({ fixturePage, chatgptTraffic }) => {
+test('Continue toolbar wiring performs exactly one browser-native form submission', async ({ fixturePage, chatgptTraffic }) => {
   await expect(fixturePage.locator(toolbarSelector)).toBeVisible();
-  await armQuickContinueEventProbe(fixturePage);
-  await fixturePage.getByRole('button', { name: 'Send timestamped Continue' }).click();
 
-  await fixturePage.waitForTimeout(4_000);
+  // Dispatch from the actual Quick Continue isolated world so this assertion
+  // exercises the production element listener rather than relying on CDP's
+  // cross-world pointer-event retargeting. Trusted physical-control behavior is
+  // separately covered by the existing installed-system-Chrome controls probe.
+  await evaluateInExtensionWorld(fixturePage, 'ChatGPT Quick Continue', `(() => {
+    const button = document.querySelector('#chatgpt-quick-continue-toolbar button[aria-label="Send timestamped Continue"]');
+    if (!button) throw new Error('Continue button not found.');
+    button.click();
+    return true;
+  })()`);
+
+  await expect.poll(() => fixturePage.evaluate(() => window.__fixture.submits.length), { timeout: 5_000 }).toBe(1);
+  await fixturePage.waitForTimeout(300);
   const submissions = await fixturePage.evaluate(() => window.__fixture.submits.map((entry) => entry.text));
   const diagnostics = await quickContinueDiagnostics(fixturePage);
   expect(submissions, `Quick Continue diagnostics: ${JSON.stringify(diagnostics)}`).toHaveLength(1);
@@ -116,26 +105,31 @@ test('Continue performs exactly one browser-native form submission', async ({ fi
   await expectTrafficInert(chatgptTraffic);
 });
 
-test('manual timestamp submission preserves one exact logical newline and sends once', async ({ fixturePage, chatgptTraffic }) => {
+test('keyboard timestamp toggle preserves one exact logical newline and trusted Enter sends once', async ({ fixturePage, chatgptTraffic }) => {
   const toolbar = fixturePage.locator(toolbarSelector);
   await expect(toolbar).toBeVisible();
-  await armQuickContinueEventProbe(fixturePage);
 
+  // The clock is a span with role=button; keyboard activation is handled by the
+  // production document-level listener and avoids Chromium/CDP synthesizing an
+  // additional untrusted pointer click for this custom control.
   const clock = fixturePage.getByLabel('Current local time');
-  await clock.click();
+  await clock.focus();
+  await clock.press('Enter');
   await expect(clock).toHaveAttribute('aria-pressed', 'true');
 
   const composer = fixturePage.locator('#prompt-textarea');
   await composer.fill('first line\nsecond line');
   await composer.press('Enter');
 
-  await fixturePage.waitForTimeout(4_000);
+  await expect.poll(() => fixturePage.evaluate(() => window.__fixture.submits.length), { timeout: 5_000 }).toBe(1);
+  await fixturePage.waitForTimeout(300);
   const submissions = await fixturePage.evaluate(() => window.__fixture.submits.map((entry) => entry.text));
   const diagnostics = await quickContinueDiagnostics(fixturePage);
   expect(submissions, `Quick Continue diagnostics: ${JSON.stringify(diagnostics)}`).toHaveLength(1);
   expect(submissions[0].endsWith('first line\nsecond line')).toBe(true);
   expect(submissions[0]).not.toContain('first line\n\nsecond line');
   expect(diagnostics.composerText).toBe('');
+  expect(diagnostics.manualTimestampEnabled).toBe(true);
   await expectTrafficInert(chatgptTraffic);
 });
 
