@@ -45,14 +45,26 @@ test('WebSocket data handoff bypasses the PowerShell output pipeline', () => {
   assert.doesNotMatch(script, /return \$message/);
 });
 
+test('legacy helpers can bootstrap before runningHostVersion exists, but cannot satisfy acceptance without it', () => {
+  assert.match(script, /function Read-OptionalReadyString/);
+  assert.match(script, /\$Ready\.PSObject\.Properties\[\$Name\]/);
+  assert.match(script, /if \(\$null -eq \$property\) \{ return '' \}/);
+  assert.doesNotMatch(script, /\$ready\.runningHostVersion/);
+  assert.match(script, /\$runningIdentityAvailable = -not \[string\]::IsNullOrWhiteSpace\(\$runningHost\)/);
+  assert.match(script, /\$needsUpdate = \$installed -ne \$ExpectedVersion -or -not \$runningIdentityAvailable -or \$runningHost -ne \$ExpectedVersion/);
+  assert.match(script, /Request-ManagedUpdate[\s\S]*\$requested = \$true/);
+  assert.match(script, /<legacy-no-runtime-id>/);
+  assert.match(script, /\$installed -eq \$ExpectedVersion -and \$runningIdentityAvailable -and \$runningHost -eq \$ExpectedVersion/);
+});
+
 test('live acceptance requires disk state and actual running helper generation to converge', () => {
   assert.match(script, /function Read-BridgeReady/);
   assert.match(script, /function Request-ManagedUpdate/);
   assert.match(script, /\$installed = \[string\]\$ready\.installedExtensionVersion/);
-  assert.match(script, /\$runningHost = \[string\]\$ready\.runningHostVersion/);
-  assert.match(script, /\$installed -ne \$ExpectedVersion -or \$runningHost -ne \$ExpectedVersion/);
+  assert.match(script, /Read-OptionalReadyString -Ready \$ready -Name 'runningHostVersion'/);
+  assert.match(script, /\$installed -ne \$ExpectedVersion -or \[string\]::IsNullOrWhiteSpace\(\$runningHost\) -or \$runningHost -ne \$ExpectedVersion/);
   assert.match(script, /\(\(\$attempt - 1\) % 4 -eq 0\)/);
-  assert.match(script, /\$installed -eq \$ExpectedVersion -and \$runningHost -eq \$ExpectedVersion/);
+  assert.match(script, /\$installed -eq \$ExpectedVersion -and \$runningIdentityAvailable -and \$runningHost -eq \$ExpectedVersion/);
   assert.match(script, /Start-Sleep -Seconds \$RetryDelaySeconds/);
   assert.match(script, /confirmed as the running helper generation/);
 });

@@ -112,6 +112,19 @@ function Read-BridgeReady {
     }
 }
 
+function Read-OptionalReadyString {
+    param(
+        [Parameter(Mandatory = $true)]
+        [object]$Ready,
+        [Parameter(Mandatory = $true)]
+        [string]$Name
+    )
+
+    $property = $Ready.PSObject.Properties[$Name]
+    if ($null -eq $property) { return '' }
+    return [string]$property.Value
+}
+
 function Request-ManagedUpdate {
     $socket = $null
     Open-BridgeSocket -Socket ([ref]$socket)
@@ -151,15 +164,21 @@ for ($attempt = 1; $attempt -le $Attempts; $attempt += 1) {
         $ready = $null
         Read-BridgeReady -Ready ([ref]$ready)
         $installed = [string]$ready.installedExtensionVersion
-        $runningHost = [string]$ready.runningHostVersion
+        $runningHost = Read-OptionalReadyString -Ready $ready -Name 'runningHostVersion'
+        $runningIdentityAvailable = -not [string]::IsNullOrWhiteSpace($runningHost)
 
-        if (($installed -ne $ExpectedVersion -or $runningHost -ne $ExpectedVersion) -and (($attempt - 1) % 4 -eq 0)) {
+        # A pre-0.9.92 helper cannot report runningHostVersion. That legacy
+        # handshake is valid only as a bootstrap state: keep requesting the
+        # managed update instead of letting StrictMode abort before update.check.
+        $needsUpdate = $installed -ne $ExpectedVersion -or -not $runningIdentityAvailable -or $runningHost -ne $ExpectedVersion
+        if ($needsUpdate -and (($attempt - 1) % 4 -eq 0)) {
             Request-ManagedUpdate
             $requested = $true
         }
 
-        Write-Host "Notifier live-update acceptance attempt $attempt`: expected=$ExpectedVersion installed=$installed runningHost=$runningHost updateRequested=$requested"
-        if ($installed -eq $ExpectedVersion -and $runningHost -eq $ExpectedVersion) { break }
+        $runningDisplay = if ($runningIdentityAvailable) { $runningHost } else { '<legacy-no-runtime-id>' }
+        Write-Host "Notifier live-update acceptance attempt $attempt`: expected=$ExpectedVersion installed=$installed runningHost=$runningDisplay updateRequested=$requested"
+        if ($installed -eq $ExpectedVersion -and $runningIdentityAvailable -and $runningHost -eq $ExpectedVersion) { break }
     }
     catch {
         $lastError = $_.Exception.Message
@@ -169,7 +188,7 @@ for ($attempt = 1; $attempt -le $Attempts; $attempt += 1) {
     if ($attempt -lt $Attempts) { Start-Sleep -Seconds $RetryDelaySeconds }
 }
 
-if ($installed -ne $ExpectedVersion -or $runningHost -ne $ExpectedVersion) {
+if ($installed -ne $ExpectedVersion -or [string]::IsNullOrWhiteSpace($runningHost) -or $runningHost -ne $ExpectedVersion) {
     throw "Notifier $ExpectedVersion was published but Glass did not converge disk and running helper state. Last result: installed=$installed runningHost=$runningHost error=$lastError"
 }
 
@@ -184,7 +203,7 @@ for ($attempt = 1; $attempt -le 30; $attempt += 1) {
         $ready = $null
         Read-BridgeReady -Ready ([ref]$ready)
         $hostInstalled = [string]$ready.installedExtensionVersion
-        $hostVersion = [string]$ready.runningHostVersion
+        $hostVersion = Read-OptionalReadyString -Ready $ready -Name 'runningHostVersion'
         if ($hostInstalled -eq $ExpectedVersion -and $hostVersion -eq $ExpectedVersion) {
             $verifiedHost = $true
             break
