@@ -1,8 +1,9 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   const BLOCK_SELECTOR = 'p, div, section, article';
+  const ROLE_SELECTOR = '[data-message-author-role="user"], [data-message-author-role="assistant"], [data-turn="user"], [data-turn="assistant"]';
   const EXCLUDED_SELECTOR = 'pre, code, blockquote, ul, ol, li, button, svg, [role="button"], [aria-hidden="true"], [hidden], [inert], [data-message-author-role="tool"], [data-tool]';
 
   function normalize(value) {
@@ -119,10 +120,53 @@
     }
   }
 
+  function sameAssistantTurnRole(node, assistant) {
+    if (!node || !assistant) return false;
+    if (node === assistant) return true;
+    try {
+      return assistant.contains?.(node) === true || node.contains?.(assistant) === true;
+    } catch {
+      return false;
+    }
+  }
+
+  function detectionRoots(turn) {
+    const assistant = assistantRoot(turn);
+    if (!assistant) return [];
+    const roots = [];
+    const add = (node) => {
+      if (node && !roots.includes(node)) roots.push(node);
+    };
+
+    add(assistant);
+    add(turn);
+
+    // Current ChatGPT builds can put the semantic assistant role marker inside a
+    // larger message wrapper while rendering the final markdown/footer as a
+    // sibling. Walk only through ancestors that still contain this one assistant
+    // turn; stop before any neighboring user/assistant turn can enter the scan.
+    let current = turn?.parentElement || assistant?.parentElement || null;
+    for (let depth = 0; current && depth < 4; depth += 1) {
+      let foreignTurn = false;
+      try {
+        const roles = Array.from(current.querySelectorAll?.(ROLE_SELECTOR) || []);
+        foreignTurn = roles.some((node) => !sameAssistantTurnRole(node, assistant));
+      } catch {}
+      if (foreignTurn) break;
+      add(current);
+      current = current.parentElement || null;
+    }
+    return roots;
+  }
+
   function detect(turn) {
-    const root = assistantRoot(turn);
-    if (!root) return '';
-    return liveTerminalLine(root) || terminalLeafBlock(root) || terminalTextNode(root) || '';
+    const codes = [];
+    for (const root of detectionRoots(turn)) {
+      const code = liveTerminalLine(root) || terminalLeafBlock(root) || terminalTextNode(root) || '';
+      if (code) codes.push(code);
+    }
+    const distinct = new Set(codes);
+    return distinct.size === 1 ? String(codes[codes.length - 1] || '') : '';
   }
 
   globalThis.ChatGPTNotifierRenderedTerminalStatus = Object.freeze({
