@@ -26,26 +26,14 @@ async function extensionWorkerDescriptor(page, extensionName) {
     `String(globalThis.chrome?.runtime?.id || '')`
   );
   if (!extensionId) throw new Error(`Could not resolve extension ID: ${extensionName}`);
+  const scopeUrl = `chrome-extension://${extensionId}/`;
   return {
     extensionName,
     extensionId,
     workerPath,
-    workerUrl: `chrome-extension://${extensionId}/${workerPath}`
+    scopeUrl,
+    workerUrl: `${scopeUrl}${workerPath}`
   };
-}
-
-async function wakeExtensionWorker(page, extensionName) {
-  return evaluateInExtensionWorld(page, extensionName, `(() => {
-    try {
-      chrome.runtime.sendMessage(
-        { type: 'PLAYWRIGHT_WAKE_MV3_SERVICE_WORKER' },
-        () => { void chrome.runtime.lastError; }
-      );
-      return true;
-    } catch {
-      return false;
-    }
-  })()`);
 }
 
 async function findWorkerTarget(rootSession, workerUrl, timeout = 10_000) {
@@ -113,19 +101,17 @@ async function evaluateInExtensionWorker(page, extensionName, expression, { time
   const browser = page.context().browser();
   if (!browser) throw new Error('Playwright browser instance unavailable for MV3 worker inspection.');
   const descriptor = await extensionWorkerDescriptor(page, extensionName);
-
-  // The worker may legitimately be asleep by the time a later serial regression
-  // reaches it. A fire-and-forget extension message is a real MV3 event and wakes
-  // the production service worker without depending on any response contract.
-  await wakeExtensionWorker(page, extensionName);
-
   const rootSession = await browser.newBrowserCDPSession();
   let sessionId = '';
   try {
-    // Playwright maintains its own target-discovery filter. Reset discovery for
-    // this short-lived browser session so extension service-worker targets are
-    // visible to Target.getTargets instead of being filtered from the result.
+    // Extension service workers are registered under chrome-extension://<id>/.
+    // Start that real registration explicitly, then inspect its production worker
+    // target. This is equivalent to waking an inactive worker from DevTools and
+    // requires no wrapper, manifest change, test permission, or extension hook.
     await rootSession.send('Target.setDiscoverTargets', { discover: true });
+    await rootSession.send('ServiceWorker.enable');
+    await rootSession.send('ServiceWorker.startWorker', { scopeURL: descriptor.scopeUrl });
+
     const target = await findWorkerTarget(rootSession, descriptor.workerUrl, timeout);
     const attached = await rootSession.send('Target.attachToTarget', {
       targetId: target.targetId,
@@ -440,7 +426,6 @@ test('Quick Continue MV3 worker naturally suspends and wakes without rebuilding 
   const beforeWorker = await evaluateInExtensionWorker(fixturePage, 'ChatGPT Quick Continue', `(() => {
     const sentinel = Date.now() + '-' + Math.random().toString(36).slice(2);
     globalThis.__playwrightMv3IdleSentinel = sentinel;
-    chrome.alarms.create('playwright-mv3-idle-wake', { delayInMinutes: 0.75 });
     return {
       extensionName: String(chrome.runtime.getManifest().name || ''),
       sentinel
@@ -449,9 +434,9 @@ test('Quick Continue MV3 worker naturally suspends and wakes without rebuilding 
   expect(beforeWorker.extensionName).toBe('ChatGPT Quick Continue');
   expect(String(beforeWorker.sentinel || '')).not.toBe('');
 
-  // The debugger detaches immediately. Chrome can then suspend the idle worker;
-  // a one-shot extension alarm wakes production background.js without touching
-  // page DOM. Losing the worker-global sentinel proves a real MV3 recreation.
+  // The debugger detaches immediately. Chrome can then suspend the idle worker.
+  // Starting the registered worker again after the idle window wakes production
+  // background.js; losing the worker-global sentinel proves a real recreation.
   await fixturePage.waitForTimeout(50_000);
   const afterWorker = await evaluateInExtensionWorker(
     fixturePage,
