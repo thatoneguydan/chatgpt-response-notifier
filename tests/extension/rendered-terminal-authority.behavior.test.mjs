@@ -120,6 +120,24 @@ test('live terminal parser recovers a segmented footer even when parent innerTex
   assert.equal(detector.detect(assistant), 'COMPLETE_APPLIED');
 });
 
+test('terminal parser follows a semantic assistant marker to its same-turn wrapper footer', () => {
+  const detector = loadDetector();
+  assert.equal(detector.version, 2);
+
+  const semanticAssistant = new FakeNode('div', 'Finished successfully.', [], { 'data-turn': 'assistant' });
+  const footer = new FakeNode('p', '[GITHUB_STATUS: COMPLETE_APPLIED]');
+  const action = new FakeNode('button', 'Copy');
+  const wrapper = new FakeNode('article', '', [semanticAssistant, footer, action]);
+  wrapper.innerText = 'Finished successfully.\n[GITHUB_STATUS: COMPLETE_APPLIED]\nCopy';
+
+  assert.equal(detector.detect(semanticAssistant), 'COMPLETE_APPLIED');
+
+  const neighboringUser = new FakeNode('div', 'New request', [], { 'data-turn': 'user' });
+  const outer = new FakeNode('section', '', [wrapper, neighboringUser]);
+  outer.innerText = 'Finished successfully.\n[GITHUB_STATUS: COMPLETE_APPLIED]\nCopy\nNew request';
+  assert.equal(detector.detect(semanticAssistant), 'COMPLETE_APPLIED');
+});
+
 test('live terminal parser rejects quoted/code examples and non-terminal standalone status paragraphs', () => {
   const detector = loadDetector();
   const codeExample = new FakeNode('pre', '', [new FakeNode('code', '[GITHUB_STATUS: COMPLETE_APPLIED]')]);
