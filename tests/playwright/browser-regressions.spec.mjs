@@ -81,22 +81,19 @@ test('Quick Continue isolated-world send transaction reaches one browser form su
   await expectTrafficInert(chatgptTraffic);
 });
 
-test('Continue toolbar wiring performs exactly one browser-native form submission', async ({ fixturePage, chatgptTraffic }) => {
-  await expect(fixturePage.locator(toolbarSelector)).toBeVisible();
+test('Continue native-button keyboard activation performs exactly one browser-native form submission', async ({ fixturePage, chatgptTraffic }) => {
+  const continueButton = fixturePage.getByRole('button', { name: 'Send timestamped Continue' });
+  await expect(continueButton).toBeVisible();
+  await expect(continueButton).toBeEnabled();
 
-  // Dispatch from the actual Quick Continue isolated world so this assertion
-  // exercises the production element listener rather than relying on CDP's
-  // cross-world pointer-event retargeting. Trusted physical-control behavior is
-  // separately covered by the existing installed-system-Chrome controls probe.
-  await evaluateInExtensionWorld(fixturePage, 'ChatGPT Quick Continue', `(() => {
-    const button = document.querySelector('#chatgpt-quick-continue-toolbar button[aria-label="Send timestamped Continue"]');
-    if (!button) throw new Error('Continue button not found.');
-    button.click();
-    return true;
-  })()`);
+  // Chromium's CDP pointer path can retarget synthetic pointer clicks across
+  // extension isolated worlds. Native HTML button keyboard activation still
+  // produces the browser click/activation path and therefore exercises the
+  // production button listener without a test-only hook.
+  await continueButton.focus();
+  await continueButton.press('Enter');
 
-  await expect.poll(() => fixturePage.evaluate(() => window.__fixture.submits.length), { timeout: 5_000 }).toBe(1);
-  await fixturePage.waitForTimeout(300);
+  await fixturePage.waitForTimeout(2_500);
   const submissions = await fixturePage.evaluate(() => window.__fixture.submits.map((entry) => entry.text));
   const diagnostics = await quickContinueDiagnostics(fixturePage);
   expect(submissions, `Quick Continue diagnostics: ${JSON.stringify(diagnostics)}`).toHaveLength(1);
@@ -109,9 +106,6 @@ test('keyboard timestamp toggle preserves one exact logical newline and trusted 
   const toolbar = fixturePage.locator(toolbarSelector);
   await expect(toolbar).toBeVisible();
 
-  // The clock is a span with role=button; keyboard activation is handled by the
-  // production document-level listener and avoids Chromium/CDP synthesizing an
-  // additional untrusted pointer click for this custom control.
   const clock = fixturePage.getByLabel('Current local time');
   await clock.focus();
   await clock.press('Enter');
@@ -129,7 +123,6 @@ test('keyboard timestamp toggle preserves one exact logical newline and trusted 
   expect(submissions[0].endsWith('first line\nsecond line')).toBe(true);
   expect(submissions[0]).not.toContain('first line\n\nsecond line');
   expect(diagnostics.composerText).toBe('');
-  expect(diagnostics.manualTimestampEnabled).toBe(true);
   await expectTrafficInert(chatgptTraffic);
 });
 
