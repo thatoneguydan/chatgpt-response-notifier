@@ -87,8 +87,8 @@ const fixtureHtml = String.raw`<!doctype html>
       function appendSubmittedUserTurn(text) {
         state.submittedTurns += 1;
         const turn = document.createElement('section');
-        turn.dataset.testid = `conversation-turn-fixture-submitted-${state.submittedTurns}`;
-        turn.dataset.messageId = `fixture-user-${state.submittedTurns}`;
+        turn.dataset.testid = 'conversation-turn-fixture-submitted-' + state.submittedTurns;
+        turn.dataset.messageId = 'fixture-user-' + state.submittedTurns;
         const role = document.createElement('div');
         role.dataset.messageAuthorRole = 'user';
         role.textContent = text;
