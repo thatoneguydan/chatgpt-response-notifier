@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   const STORAGE_PREFIX = 'quick-continue:manual-timestamp:';
   const CLOCK_SELECTOR = '[aria-label="Current local time"]';
   const previousRuntime = globalThis.__chatgptQuickContinueConversationStateRuntime;
@@ -135,19 +135,23 @@
 
   function persistUserChoiceSoon(event) {
     if (event?.isTrusted !== true || !clockFromEvent(event)) return;
-    setTimeout(() => {
-      const enabled = currentEnabled();
-      desiredEnabled = enabled;
-      const conversationId = conversationIdFromUrl();
-      activeConversationId = conversationId;
-      if (conversationId) {
-        provisionalTouched = false;
-        writeStoredState(conversationId, enabled).catch(() => {});
-      } else {
-        provisionalEnabled = enabled;
-        provisionalTouched = true;
-      }
-    }, 0);
+
+    // hover-edit-script is loaded before this runtime and owns the clock toggle.
+    // Its document-capture listener has already committed the new in-memory
+    // state by the time this listener runs. Copy that state into the route owner
+    // synchronously so a composer MutationObserver microtask cannot re-apply the
+    // previous desired state before a deferred timer gets to persist the choice.
+    const enabled = currentEnabled();
+    desiredEnabled = enabled;
+    const conversationId = conversationIdFromUrl();
+    activeConversationId = conversationId;
+    if (conversationId) {
+      provisionalTouched = false;
+      writeStoredState(conversationId, enabled).catch(() => {});
+    } else {
+      provisionalEnabled = enabled;
+      provisionalTouched = true;
+    }
   }
 
   function handleClockKeydown(event) {
