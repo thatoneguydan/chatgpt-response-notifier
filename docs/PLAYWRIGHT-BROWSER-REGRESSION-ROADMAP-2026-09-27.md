@@ -2,6 +2,8 @@
 
 Canonical hierarchy: **ChatGPT Response Notifier → Workstream 4/6 — Reliable Background Automation → Stage 3/3 — Browser Integration Regression Harness**.
 
+**Initial stage gate: COMPLETE.** The first traffic-inert browser suite is green on Glass, existing source/installer validation is green, Chrome Web Store package validation is green, and the Playwright workflow remains a separate CI gate so deterministic source validation stays fast and browser failures remain easy to attribute. The unchecked items below are deliberate follow-on expansion, not blockers for the initial Stage 3/3 acceptance boundary.
+
 This stage extends the existing deterministic/state-machine test architecture. It does **not** replace it and it does **not** move Playwright into either extension's production runtime. The purpose is to close the recurring gap between source-level tests and real Chromium DOM/MV3 behavior.
 
 ## Design contract
@@ -9,7 +11,7 @@ This stage extends the existing deterministic/state-machine test architecture. I
 - Run the actual `extension/` and `standalone-quick-continue/` MV3 payloads in Playwright's bundled Chromium through a persistent browser context.
 - Keep ordinary browser regressions completely traffic-inert with respect to ChatGPT. The harness serves an intercepted `https://chatgpt.com/c/playwright-browser-regression` fixture and blocks every other ChatGPT/OpenAI request it sees.
 - Preserve deterministic Node tests as the primary authority for watchdog cadence, attempt accounting, durable ownership, recovery budgets, terminal policy and other state-machine invariants.
-- Use browser regressions for integration boundaries that Node fixtures cannot faithfully prove: content-script injection, DOM remounts, SPA navigation, trusted keyboard/click events, browser-native form submission, isolated extension worlds and MV3 service workers.
+- Use browser regressions for integration boundaries that Node fixtures cannot faithfully prove: content-script injection, DOM remounts, SPA navigation, trusted keyboard behavior, browser-native form submission, isolated extension worlds and MV3 service workers.
 - Keep Windows/Glass physical acceptance only for OS boundaries Playwright cannot prove: virtual desktops, native notifications/chimes, Chrome crashes, real-profile registration/update handoff and Windows process behavior.
 - Every expensive browser regression found in the field should receive the smallest deterministic reproducer at the lowest useful layer. Add a Playwright case when the failure depends on Chromium/DOM/MV3 semantics.
 
@@ -28,7 +30,7 @@ This stage extends the existing deterministic/state-machine test architecture. I
 **Gate 1/1:** The first suite proves browser behaviors that recently escaped deterministic tests.
 
 - [x] Toolbar remains a singleton and the same DOM owner across repeated composer remounts and SPA history transitions.
-- [x] Continue uses one browser-native form submission and cannot double-send from the extension path.
+- [x] The production Continue prompt/send transaction performs exactly one browser-native form submission and cannot double-send from the extension path.
 - [x] Trusted manual Enter with timestamps preserves exactly one logical newline between two lines and sends once.
 - [x] The notifier's production rendered-terminal detector sees `COMPLETE_APPLIED` when the footer is a sibling of the semantic assistant marker inside the same turn wrapper.
 - [ ] Add explicit MV3 worker stop/wake coverage once a stable Chromium DevTools control path is proven not to introduce false lifecycle behavior.
@@ -42,7 +44,7 @@ This stage extends the existing deterministic/state-machine test architecture. I
 - [x] Verify exact checked-out source SHA before running tests.
 - [x] Install the pinned Playwright dependency and bundled Chromium automatically.
 - [x] Upload Playwright failure traces as short-retention evidence.
-- [ ] After the inaugural suite is green and stable, decide whether to keep it as a separate required gate or call it from the existing source-validation workflow. Prefer the separate gate if it keeps deterministic validation fast and failures easier to attribute.
+- [x] Keep Playwright as a separate CI gate from source validation so deterministic validation remains fast and failures remain attributable.
 
 ## Step 4/4 — Expand only from demonstrated value
 
@@ -56,7 +58,7 @@ This stage extends the existing deterministic/state-machine test architecture. I
 
 ## Acceptance boundary
 
-Stage 3/3 is complete when the initial Playwright suite is green on the exact PR head, the workflow is automatic and traffic-inert, and its regression cases demonstrably exercise the production extension payloads rather than copied test-only implementations. No user-account/manual testing is required for this stage's initial gate. Real Windows notification/virtual-desktop behavior remains covered by the existing Glass acceptance paths.
+Stage 3/3 initial acceptance is complete when the initial Playwright suite is green on the exact PR head, the workflow is automatic and traffic-inert, and its regression cases demonstrably exercise the production extension payloads rather than copied test-only implementations. No user-account/manual testing is required for this stage's initial gate. Real Windows notification/virtual-desktop behavior remains covered by the existing Glass acceptance paths.
 
 ## Dependency choice
 
