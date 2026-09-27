@@ -3,7 +3,7 @@
 (() => {
   if (globalThis.__chatgptNotifierTerminalWatchdogAuthority) return;
 
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
   const DB_NAME = 'chatgpt-response-notifier-monitor';
   const DB_VERSION = 1;
   const PROFILE_STORE = 'profile';
@@ -116,15 +116,63 @@
     }
   }
 
+  function renderedIdentityMatches(expected, current, conversationId) {
+    if (!expected || !current) return false;
+    return String(expected.conversationId || '') === String(conversationId || '')
+      && String(current.conversationId || '') === String(conversationId || '')
+      && String(expected.promptKey || '') === String(current.promptKey || '')
+      && String(expected.assistantKey || '') === String(current.assistantKey || '')
+      && String(expected.assistantRevision || '') === String(current.assistantRevision || '');
+  }
+
+  async function currentWatchdogPromptForSettledRenderedStatus(message, target) {
+    const snapshot = message?.snapshot || null;
+    if (!snapshot || String(snapshot.requestPhase || '') !== 'completed') return '';
+    const requestStartedAt = Math.max(0, Number(snapshot.requestStartedAt || 0));
+    if (!requestStartedAt) return '';
+
+    const [pageIdentity, watchdog] = await Promise.all([
+      identityFromPage(target.tab.id),
+      readWatchdog(target.id).catch(() => null)
+    ]);
+    if (!renderedIdentityMatches(snapshot, pageIdentity, target.id)) return '';
+    if (!watchdog || watchdog.stopped === true) return '';
+    if (Math.max(0, Number(watchdog.lastRequestStartedAt || 0)) !== requestStartedAt) return '';
+
+    const currentPromptKey = String(watchdog.lastPromptKey || '');
+    if (!currentPromptKey || currentPromptKey === String(snapshot.promptKey || '')) return '';
+    return currentPromptKey;
+  }
+
   async function parkDefinitiveStatus(message, sender, target, statusCode) {
     const lifecycle = globalThis.__chatgptNotifierWatchdogRequestLifecycleFix;
     if (typeof lifecycle?.parkTerminalStatusForSender !== 'function') return false;
-    const result = await lifecycle.parkTerminalStatusForSender({
+    const requestStartedAt = Math.max(0, Number(message?.snapshot?.requestStartedAt || message?.requestStartedAt || 0));
+    let result = await lifecycle.parkTerminalStatusForSender({
       conversationId: target.id,
       promptKey: String(message?.snapshot?.promptKey || message?.promptKey || ''),
+      requestStartedAt,
       statusCode
     }, sender);
-    if (result?.ok !== true) return false;
+
+    // The page DOM and persisted watchdog prompt key can briefly disagree while
+    // the same request is settling. Rebind only after proving that (1) the page
+    // still shows the exact same assistant revision, (2) the request is completed,
+    // and (3) the watchdog tracks that exact request timestamp. A stale footer from
+    // a newer in-flight request therefore cannot park the new timer.
+    if (result?.ok !== true && result?.reason === 'terminal-prompt-superseded') {
+      const reboundPromptKey = await currentWatchdogPromptForSettledRenderedStatus(message, target);
+      if (reboundPromptKey) {
+        result = await lifecycle.parkTerminalStatusForSender({
+          conversationId: target.id,
+          promptKey: reboundPromptKey,
+          requestStartedAt,
+          statusCode
+        }, sender);
+      }
+    }
+
+    if (result?.ok !== true || result?.stopped !== true) return false;
     await resetStoppedAttempts(target.id, statusCode).catch(() => null);
     await publishOverview(target);
     return true;
@@ -267,7 +315,9 @@
       queueRenderedNotification(message, sender, target, statusCode, 'rendered-terminal-authority').catch(() => false)
     ]);
     await publishOverview(target);
-    return { ok: stopped || notified, stopped, notified, statusCode };
+    // A notification is not proof that the watchdog alarm/timer was parked.
+    // The content observer may retire its retries only after stopped=true.
+    return { ok: stopped, stopped, notified, statusCode };
   }
 
   async function stopFromStream(message, sender) {

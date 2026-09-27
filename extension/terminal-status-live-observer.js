@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const RETRY_DELAYS_MS = Object.freeze([0, 250, 1000, 3000]);
 
@@ -155,7 +155,10 @@
         statusLine: current.statusLine,
         snapshot
       });
-      if (result?.ok === true) {
+      // Notification delivery is independent of watchdog parking. Only acknowledge
+      // this footer after the background authority proves the watchdog was stopped;
+      // otherwise keep retries eligible so a notification cannot mask a live timer.
+      if (result?.ok === true && result?.stopped === true) {
         deliveredKey = key;
         clearRetryTimers();
         return true;

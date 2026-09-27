@@ -1,4 +1,10 @@
-# ChatGPT Response Notifier 0.9.92
+# ChatGPT Response Notifier 0.9.93
+
+- Fixes a terminal-status acknowledgement race where successful notification delivery could mark a rendered footer handled even when watchdog parking failed, leaving the visible 30-minute timer running after `COMPLETE_APPLIED`, `COMPLETE_NO_CHANGES`, `BLOCKED_HUMAN`, or `PLANNING_ACTIVE`.
+- Requires explicit persisted `stopped:true` proof before the page observer retires terminal-footer retries. Notification delivery remains independent and can no longer masquerade as watchdog-stop success.
+- Adds a tightly bounded same-request prompt-key recovery for transient DOM/watchdog identity skew: the request must already be completed, the rendered assistant identity and revision must still match exactly, and the persisted watchdog must carry the exact same request-start timestamp.
+
+## Previous: 0.9.92
 
 - Makes managed notifier updates converge the actual running helper process as well as the files on disk. Update checks are now serialized, and any stale helper generation self-heals to the versioned host executable that matches the installed extension state.
 - Adds `runningHostVersion` to the localhost helper handshake, derived from the helper process executable generation rather than mutable extension files.

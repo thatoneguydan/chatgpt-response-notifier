@@ -143,24 +143,32 @@ test('rendered terminal authority is hot-bound and feeds both watchdog parking a
   const rebind = read('extension/page-runtime-rebind.js');
   const streamBridge = read('extension/response-stream-status-bridge.js');
 
-  assert.equal(manifest.version, '0.9.92');
+  assert.equal(manifest.version, '0.9.93');
   assert.ok(manifest.content_scripts[0].js.includes('rendered-terminal-status.js'));
   assert.ok(manifest.content_scripts[0].js.includes('terminal-status-live-observer.js'));
   assert.ok(manifest.content_scripts[0].js.indexOf('rendered-terminal-status.js') < manifest.content_scripts[0].js.indexOf('terminal-status-live-observer.js'));
 
+  assert.match(observer, /RUNTIME_VERSION = 2/);
   assert.match(observer, /CHATGPT_RENDERED_TERMINAL_STATUS/);
   assert.match(observer, /CHATGPT_RENDERED_TERMINAL_IDENTITY_QUERY/);
   assert.match(observer, /MutationObserver/);
   assert.match(observer, /RETRY_DELAYS_MS = Object\.freeze\(\[0, 250, 1000, 3000\]\)/);
+  assert.match(observer, /result\?\.ok === true && result\?\.stopped === true/);
   assert.doesNotMatch(observer, /\bfetch\s*\(|XMLHttpRequest|WebSocket/);
 
-  assert.match(authority, /RUNTIME_VERSION = 2/);
+  assert.match(authority, /RUNTIME_VERSION = 3/);
   assert.match(authority, /handleRenderedTerminal/);
   assert.match(authority, /parkDefinitiveStatus/);
   assert.match(authority, /queueRenderedNotification/);
   assert.match(authority, /state\.claimTurn\(snapshot, owner\)/);
   assert.match(authority, /queueDurableNotification\(deliveryRecord/);
   assert.match(authority, /rendered-terminal-authority/);
+  assert.match(authority, /return \{ ok: stopped, stopped, notified, statusCode \}/);
+  assert.match(authority, /result\?\.reason === 'terminal-prompt-superseded'/);
+  assert.match(authority, /currentWatchdogPromptForSettledRenderedStatus/);
+  assert.match(authority, /String\(snapshot\.requestPhase \|\| ''\) !== 'completed'/);
+  assert.match(authority, /renderedIdentityMatches\(snapshot, pageIdentity, target\.id\)/);
+  assert.match(authority, /watchdog\.lastRequestStartedAt/);
 
   assert.match(hotRecovery, /RUNTIME_VERSION = 3/);
   assert.match(hotRecovery, /'rendered-terminal-status\.js'/);
