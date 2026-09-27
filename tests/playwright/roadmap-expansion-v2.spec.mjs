@@ -6,29 +6,49 @@ import {
 
 const toolbarSelector = '#chatgpt-quick-continue-toolbar';
 const fixtureConversationId = 'playwright-browser-regression';
+const workerCommandKey = 'playwright-test:worker-command';
+const workerResponsePrefix = 'playwright-test:worker-response:';
 
 async function expectTrafficInert(traffic) {
   const blocked = traffic.filter((entry) => entry.kind === 'blocked');
   expect(blocked, `Unexpected ChatGPT network attempts: ${JSON.stringify(blocked)}`).toEqual([]);
 }
 
-async function extensionMessage(page, extensionName, message) {
-  const payload = JSON.stringify(message);
-  return evaluateInExtensionWorld(page, extensionName, `(async () => {
-    return await chrome.runtime.sendMessage(${payload});
-  })()`);
-}
-
-async function notifierMessage(page, message) {
-  return extensionMessage(page, 'ChatGPT Response Notifier', message);
-}
-
 async function testControl(page, extensionName, message) {
-  const response = await extensionMessage(page, extensionName, message);
+  const requestId = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const responseKey = `${workerResponsePrefix}${requestId}`;
+  const command = { ...message, requestId, issuedAt: Date.now() };
+  const commandJson = JSON.stringify(command);
+  const responseKeyJson = JSON.stringify(responseKey);
+  const commandKeyJson = JSON.stringify(workerCommandKey);
+
+  await evaluateInExtensionWorld(page, extensionName, `(async () => {
+    await chrome.storage.local.remove(${responseKeyJson});
+    await chrome.storage.local.set({ [${commandKeyJson}]: ${commandJson} });
+    return true;
+  })()`);
+
+  let response = null;
+  await expect.poll(async () => {
+    response = await evaluateInExtensionWorld(page, extensionName, `(async () => {
+      const values = await chrome.storage.local.get(${responseKeyJson});
+      return values?.[${responseKeyJson}] || null;
+    })()`);
+    return response?.ok === true ? 'ok' : response?.ok === false ? 'error' : 'pending';
+  }, {
+    timeout: 12_000,
+    message: `Worker control did not settle for ${extensionName}: ${message?.type || 'unknown'}`
+  }).not.toBe('pending');
+
+  await evaluateInExtensionWorld(page, extensionName, `(async () => {
+    await chrome.storage.local.remove([${responseKeyJson}, ${commandKeyJson}]);
+    return true;
+  })()`).catch(() => false);
+
   if (response?.ok !== true) {
-    throw new Error(`Playwright worker control failed: ${String(response?.error || response?.reason || 'unknown')}`);
+    throw new Error(`Playwright worker control failed: ${String(response?.error || 'unknown')}`);
   }
-  return Object.prototype.hasOwnProperty.call(response, 'result') ? response.result : response;
+  return response.result;
 }
 
 async function notifierWatchdog(page, conversationId = fixtureConversationId) {
@@ -166,7 +186,7 @@ test('terminal detector remains same-turn bounded after assistant wrapper replac
 });
 
 test('Quick Continue MV3 worker naturally suspends and wakes without rebuilding live page UI', async ({ fixturePage, chatgptTraffic }) => {
-  test.setTimeout(75_000);
+  test.setTimeout(100_000);
   const toolbar = fixturePage.locator(toolbarSelector);
   await expect(toolbar).toBeVisible();
   const original = await fixturePage.evaluateHandle(() => document.getElementById('chatgpt-quick-continue-toolbar'));
@@ -180,9 +200,9 @@ test('Quick Continue MV3 worker naturally suspends and wakes without rebuilding 
   expect(beforeWorker.extensionName).toBe('ChatGPT Quick Continue');
   expect(String(beforeWorker.generation || '')).not.toBe('');
 
-  // Chrome terminates idle MV3 extension workers after roughly 30 seconds.
-  // The next extension message wakes it; the wrapper generation changes only
-  // when the worker global was actually recreated.
+  // Chrome terminates idle MV3 extension workers after roughly 30 seconds. A
+  // storage-change extension event wakes the worker without relying on CDP's
+  // web-service-worker control path; a new generation proves global recreation.
   await fixturePage.waitForTimeout(40_000);
   const afterWorker = await testControl(fixturePage, 'ChatGPT Quick Continue', {
     type: 'PLAYWRIGHT_TEST_WORKER_GENERATION'
@@ -210,8 +230,8 @@ test('terminal stop rejects a superseded prompt then persists the rendered defin
   const armed = await seedEnabledWatchdog(fixturePage, promptKey);
   expect(String(armed?.lastPromptKey || '')).toBe(promptKey);
 
-  const rejected = await notifierMessage(fixturePage, {
-    type: 'FORCE_PARK_CODE_WATCHDOG_TERMINAL_V3',
+  const rejected = await testControl(fixturePage, 'ChatGPT Response Notifier', {
+    type: 'PLAYWRIGHT_TEST_FORCE_TERMINAL_STOP',
     conversationId: fixtureConversationId,
     promptKey: `${promptKey}-superseded`,
     statusCode: 'COMPLETE_APPLIED'
@@ -251,8 +271,8 @@ test('due watchdog sends exactly once and reserves the next 30-minute cadence be
   const seeded = await seedEnabledWatchdog(fixturePage, promptKey, { due: true });
   expect(Math.max(0, Number(seeded?.deadlineAt || 0))).toBeLessThanOrEqual(Date.now());
 
-  const first = await notifierMessage(fixturePage, {
-    type: 'RUN_CODE_WATCHDOG_NOW_V3',
+  const first = await testControl(fixturePage, 'ChatGPT Response Notifier', {
+    type: 'PLAYWRIGHT_TEST_RUN_DUE_WATCHDOG',
     conversationId: fixtureConversationId
   });
   expect(first).toMatchObject({ ok: true, ran: true });
@@ -266,8 +286,8 @@ test('due watchdog sends exactly once and reserves the next 30-minute cadence be
   expect(Math.max(0, Number(afterFirst?.retryAt || 0))).toBe(0);
   expect(Math.max(0, Number(afterFirst?.deadlineAt || 0))).toBeGreaterThan(Date.now() + 20 * 60_000);
 
-  const second = await notifierMessage(fixturePage, {
-    type: 'RUN_CODE_WATCHDOG_NOW_V3',
+  const second = await testControl(fixturePage, 'ChatGPT Response Notifier', {
+    type: 'PLAYWRIGHT_TEST_RUN_DUE_WATCHDOG',
     conversationId: fixtureConversationId
   });
   expect(second).toMatchObject({ ok: true, ran: false, reason: 'watchdog-not-due' });
