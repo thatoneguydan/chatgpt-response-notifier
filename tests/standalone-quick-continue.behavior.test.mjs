@@ -30,15 +30,18 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'send-transaction.js', 'runtime-reset.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.24');
+  assert.equal(manifest.version, '1.2.25');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
 
-test('managed updater talks only to loopback, reloads itself, and reinjects current scripts into open ChatGPT tabs', () => {
+test('managed updater talks only to loopback, reloads itself only for a newer installed version, and reinjects current scripts into open ChatGPT tabs', () => {
   assert.doesNotThrow(() => new vm.Script(backgroundSource));
   assert.match(backgroundSource, /UPDATE_URL = 'http:\/\/127\.0\.0\.1:38473\/quick-continue\/update'/);
   assert.match(backgroundSource, /periodInMinutes: 15/);
+  assert.match(backgroundSource, /function managedUpdateShouldReload\(installedVersion, runningVersion\)/);
+  assert.match(backgroundSource, /comparison !== null && comparison > 0/);
+  assert.match(backgroundSource, /if \(!managedUpdateShouldReload\(installedVersion, runningVersion\)\) return false/);
   assert.match(backgroundSource, /chrome\.runtime\.reload\(\)/);
   assert.match(backgroundSource, /chrome\.tabs\.query\(\{ url: \['https:\/\/chatgpt\.com\/\*'\] \}\)/);
   assert.match(backgroundSource, /chrome\.scripting\.executeScript/);
