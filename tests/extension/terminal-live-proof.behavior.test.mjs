@@ -20,6 +20,9 @@ test('live terminal proof observes real terminal messages and persisted watchdog
   assert.match(proofSource, /terminal-watchdog-not-stopped-observed/);
   assert.match(proofSource, /monitorOverview\(target\)/);
   assert.match(proofSource, /source:\s*'terminal-live-proof'/);
+  assert.match(proofSource, /__chatgptNotifierBuildIdentity\?\.sourceCommit/);
+  assert.match(proofSource, /buildCommitSuffix/);
+  assert.match(proofSource, /reason:\s*`build=\$\{commitSuffix/);
 
   for (const forbidden of [
     'responseText:',
