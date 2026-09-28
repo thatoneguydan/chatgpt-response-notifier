@@ -119,7 +119,7 @@
     const target = targetForSender(sender);
     emit('terminal-message-received', {
       ...diagnosticFields(message, sender, target),
-      reason: type
+      reason: `status=${String(message?.statusCode || '')};${type}`
     });
     for (const delayMs of OBSERVATION_DELAYS_MS) {
       observePersistedState(message, sender, target, delayMs).catch(() => {});
