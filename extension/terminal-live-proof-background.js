@@ -3,12 +3,17 @@
 (() => {
   if (globalThis.__chatgptNotifierTerminalLiveProof) return;
 
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   const OBSERVATION_DELAYS_MS = Object.freeze([50, 350, 1200]);
 
   function suffix(value) {
     const text = String(value || '').trim();
     return text.length <= 8 ? text : text.slice(-8);
+  }
+
+  function buildCommitSuffix() {
+    const text = String(globalThis.__chatgptNotifierBuildIdentity?.sourceCommit || '').trim();
+    return text.length <= 12 ? text : text.slice(-12);
   }
 
   function emit(status, fields = {}) {
@@ -19,6 +24,7 @@
       status: String(status || 'unknown').slice(0, 80),
       observedAt: new Date().toISOString(),
       extensionVersion,
+      buildCommitSuffix: buildCommitSuffix(),
       tabId: Number.isInteger(fields.tabId) ? fields.tabId : undefined,
       statusCode: fields.statusCode ? String(fields.statusCode).slice(0, 40) : undefined,
       reason: fields.reason ? String(fields.reason).replace(/[\r\n\t]+/g, ' ').slice(0, 160) : undefined,
