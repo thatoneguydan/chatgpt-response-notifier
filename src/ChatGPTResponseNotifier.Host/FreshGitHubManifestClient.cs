@@ -11,7 +11,7 @@ internal static class FreshGitHubManifestClient
         string userAgentProduct,
         CancellationToken cancellationToken)
     {
-        var separator = manifestUrl.Contains('?', StringComparison.Ordinal) ? '&' : '?';
+        var separator = manifestUrl.Contains('?') ? '&' : '?';
         var requestUrl = $"{manifestUrl}{separator}cacheBust={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
 
         // Feed checks are intentionally connection-isolated. A long-lived helper
