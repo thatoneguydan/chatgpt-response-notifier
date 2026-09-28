@@ -138,6 +138,24 @@ test('terminal parser follows a semantic assistant marker to its same-turn wrapp
   assert.equal(detector.detect(semanticAssistant), 'COMPLETE_APPLIED');
 });
 
+test('terminal parser crosses deep same-turn wrapper nesting until the first foreign turn boundary', () => {
+  const detector = loadDetector();
+  const semanticAssistant = new FakeNode('div', 'Finished successfully.', [], { 'data-turn': 'assistant' });
+  let nested = new FakeNode('article', '', [semanticAssistant]);
+  for (let depth = 0; depth < 6; depth += 1) nested = new FakeNode('div', '', [nested]);
+
+  const footer = new FakeNode('p', '[GITHUB_STATUS: COMPLETE_APPLIED]');
+  const sameTurnOuter = new FakeNode('section', '', [nested, footer]);
+  sameTurnOuter.innerText = 'Finished successfully.\n[GITHUB_STATUS: COMPLETE_APPLIED]';
+
+  assert.equal(detector.detect(semanticAssistant), 'COMPLETE_APPLIED');
+
+  const neighboringUser = new FakeNode('div', 'New request', [], { 'data-turn': 'user' });
+  const conversationRoot = new FakeNode('main', '', [sameTurnOuter, neighboringUser]);
+  conversationRoot.innerText = 'Finished successfully.\n[GITHUB_STATUS: COMPLETE_APPLIED]\nNew request';
+  assert.equal(detector.detect(semanticAssistant), 'COMPLETE_APPLIED');
+});
+
 test('live terminal parser rejects quoted/code examples and non-terminal standalone status paragraphs', () => {
   const detector = loadDetector();
   const codeExample = new FakeNode('pre', '', [new FakeNode('code', '[GITHUB_STATUS: COMPLETE_APPLIED]')]);
