@@ -55,7 +55,7 @@ function Test-BuildCommitIdentity {
     return $reason -match ('(^|;)build=' + [regex]::Escape($ExpectedSuffix) + '($|;)')
 }
 
-function Test-SameOptionalIdentity {
+function Test-SameRequiredIdentity {
     param([object]$Left, [object]$Right, [string]$Name)
     $leftValue = [string](Get-PropertyValue -InputObject $Left -Name $Name)
     $rightValue = [string](Get-PropertyValue -InputObject $Right -Name $Name)
@@ -122,12 +122,12 @@ foreach ($statusCode in $DefinitiveStatusCodes) {
     $terminalCandidates = @(
         $diagnostics |
             Where-Object {
-                Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'source') 'terminal-live-proof' -and
-                Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'status') 'terminal-message-received' -and
-                Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'statusCode') $statusCode -and
-                Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'extensionVersion') $ExpectedVersion -and
+                ([string](Get-PropertyValue -InputObject $_ -Name 'source') -ceq 'terminal-live-proof') -and
+                ([string](Get-PropertyValue -InputObject $_ -Name 'status') -ceq 'terminal-message-received') -and
+                ([string](Get-PropertyValue -InputObject $_ -Name 'statusCode') -ceq $statusCode) -and
+                ([string](Get-PropertyValue -InputObject $_ -Name 'extensionVersion') -ceq $ExpectedVersion) -and
                 (Test-BuildCommitIdentity -Record $_ -ExpectedSuffix $expectedCommitSuffix) -and
-                $null -ne (Convert-ToDateTimeOffset (Get-PropertyValue -InputObject $_ -Name 'observedAt'))
+                ($null -ne (Convert-ToDateTimeOffset (Get-PropertyValue -InputObject $_ -Name 'observedAt')))
             } |
             Sort-Object { Convert-ToDateTimeOffset (Get-PropertyValue -InputObject $_ -Name 'observedAt') } -Descending
     )
@@ -146,15 +146,15 @@ foreach ($statusCode in $DefinitiveStatusCodes) {
         $stop = @(
             $diagnostics |
                 Where-Object {
-                    Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'source') 'terminal-live-proof' -and
-                    Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'status') 'terminal-watchdog-stopped-observed' -and
-                    Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'statusCode') $statusCode -and
-                    Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'extensionVersion') $ExpectedVersion -and
+                    ([string](Get-PropertyValue -InputObject $_ -Name 'source') -ceq 'terminal-live-proof') -and
+                    ([string](Get-PropertyValue -InputObject $_ -Name 'status') -ceq 'terminal-watchdog-stopped-observed') -and
+                    ([string](Get-PropertyValue -InputObject $_ -Name 'statusCode') -ceq $statusCode) -and
+                    ([string](Get-PropertyValue -InputObject $_ -Name 'extensionVersion') -ceq $ExpectedVersion) -and
                     (Test-BuildCommitIdentity -Record $_ -ExpectedSuffix $expectedCommitSuffix) -and
-                    (Test-SameOptionalIdentity -Left $_ -Right $terminal -Name 'conversationSuffix') -and
-                    (Test-SameOptionalIdentity -Left $_ -Right $terminal -Name 'assistantSuffix') -and
+                    (Test-SameRequiredIdentity -Left $_ -Right $terminal -Name 'conversationSuffix') -and
+                    (Test-SameRequiredIdentity -Left $_ -Right $terminal -Name 'assistantSuffix') -and
                     (Test-WithinWindow -Candidate $_ -Start $terminalAt -End $stopDeadline) -and
-                    ([string](Get-PropertyValue -InputObject $_ -Name 'reason')) -match '(^|;)deadline=zero($|;)'
+                    (([string](Get-PropertyValue -InputObject $_ -Name 'reason')) -match '(^|;)deadline=zero($|;)')
                 } |
                 Sort-Object { Convert-ToDateTimeOffset (Get-PropertyValue -InputObject $_ -Name 'observedAt') } |
                 Select-Object -First 1
@@ -164,12 +164,12 @@ foreach ($statusCode in $DefinitiveStatusCodes) {
         $helperCandidates = @(
             $allRecords |
                 Where-Object {
-                    Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'source') 'delivery-pipeline' -and
-                    Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'status') 'helper-durable-accepted' -and
-                    Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'extensionVersion') $ExpectedVersion -and
-                    (Get-PropertyValue -InputObject $_ -Name 'presented') -eq $true -and
-                    (Test-SameOptionalIdentity -Left $_ -Right $terminal -Name 'conversationSuffix') -and
-                    -not [string]::IsNullOrWhiteSpace([string](Get-PropertyValue -InputObject $_ -Name 'notificationSuffix')) -and
+                    ([string](Get-PropertyValue -InputObject $_ -Name 'source') -ceq 'delivery-pipeline') -and
+                    ([string](Get-PropertyValue -InputObject $_ -Name 'status') -ceq 'helper-durable-accepted') -and
+                    ([string](Get-PropertyValue -InputObject $_ -Name 'extensionVersion') -ceq $ExpectedVersion) -and
+                    ((Get-PropertyValue -InputObject $_ -Name 'presented') -eq $true) -and
+                    (Test-SameRequiredIdentity -Left $_ -Right $terminal -Name 'conversationSuffix') -and
+                    (-not [string]::IsNullOrWhiteSpace([string](Get-PropertyValue -InputObject $_ -Name 'notificationSuffix'))) -and
                     (Test-WithinWindow -Candidate $_ -Start $deliveryStart -End $deliveryEnd)
                 } |
                 Sort-Object { Convert-ToDateTimeOffset (Get-PropertyValue -InputObject $_ -Name 'observedAt') }
@@ -185,11 +185,11 @@ foreach ($statusCode in $DefinitiveStatusCodes) {
             $host = @(
                 $allRecords |
                     Where-Object {
-                        Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'source') 'host' -and
-                        Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'status') 'toast-presented' -and
-                        (Get-PropertyValue -InputObject $_ -Name 'presented') -eq $true -and
-                        Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'notificationSuffix') $notificationSuffix -and
-                        (Test-SameOptionalIdentity -Left $_ -Right $terminal -Name 'conversationSuffix') -and
+                        ([string](Get-PropertyValue -InputObject $_ -Name 'source') -ceq 'host') -and
+                        ([string](Get-PropertyValue -InputObject $_ -Name 'status') -ceq 'toast-presented') -and
+                        ((Get-PropertyValue -InputObject $_ -Name 'presented') -eq $true) -and
+                        ([string](Get-PropertyValue -InputObject $_ -Name 'notificationSuffix') -ceq $notificationSuffix) -and
+                        (Test-SameRequiredIdentity -Left $_ -Right $terminal -Name 'conversationSuffix') -and
                         (Test-WithinWindow -Candidate $_ -Start $hostStart -End $hostEnd)
                     } |
                     Sort-Object { Convert-ToDateTimeOffset (Get-PropertyValue -InputObject $_ -Name 'observedAt') } -Descending |
