@@ -3,7 +3,7 @@
 (() => {
   if (globalThis.__chatgptNotifierStreamTerminalDurableFallback) return;
 
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   const RETRY_DELAYS_MS = Object.freeze([75, 350, 1200]);
   const inFlight = new Map();
 
@@ -55,6 +55,46 @@
     }
   }
 
+  function exactRequestCandidate(snapshotValue, expected) {
+    const snapshot = snapshotValue || null;
+    if (!snapshot) return null;
+    if (String(snapshot.conversationId || '') !== expected.conversationId) return null;
+
+    const requestId = String(snapshot.requestId || '');
+    const requestStartedAt = Math.max(0, Number(snapshot.requestStartedAt || 0));
+    const requestPhase = String(snapshot.requestPhase || '');
+    if (!requestId || !requestStartedAt || !['started', 'completed', 'error'].includes(requestPhase)) return null;
+    if (requestStartedAt !== expected.requestStartedAt) return null;
+
+    const snapshotPromptKey = String(snapshot.promptKey || '');
+    if (snapshotPromptKey && snapshotPromptKey !== expected.promptKey) return null;
+
+    return {
+      requestId,
+      requestStartedAt,
+      monitorRuntimeId: String(snapshot.documentId || ''),
+      identitySource: expected.identitySource
+    };
+  }
+
+  function exactDurableRunCandidate(runValue, expected) {
+    const run = runValue || null;
+    if (!run) return null;
+    if (String(run.conversationId || '') !== expected.conversationId) return null;
+    if (!Number.isInteger(run.ownerTabId) || run.ownerTabId !== expected.tabId) return null;
+    if (String(run.ownerDocumentId || '') !== expected.chromeDocumentId) return null;
+
+    const runPromptKey = String(run.promptKey || run.snapshot?.promptKey || '');
+    if (!runPromptKey || runPromptKey !== expected.promptKey) return null;
+
+    return exactRequestCandidate(run.snapshot, {
+      conversationId: expected.conversationId,
+      promptKey: expected.promptKey,
+      requestStartedAt: expected.requestStartedAt,
+      identitySource: 'durable-run'
+    });
+  }
+
   async function exactStoppedRequestIdentity(statusCode, sender) {
     const target = targetForSender(sender);
     const tabId = sender?.tab?.id;
@@ -63,39 +103,46 @@
     if (Number.isInteger(target?.tab?.id) && target.tab.id !== tabId) return null;
 
     const api = monitor();
-    const [enrollment, snapshot, watchdog] = await Promise.all([
+    const [enrollment, snapshot, watchdog, durableRun] = await Promise.all([
       api?.getEnrollment?.(target.id).catch?.(() => null) || null,
       queryMonitorSnapshot(sender),
-      api?.readCodeWatchdog?.(target.id).catch?.(() => null) || null
+      api?.readCodeWatchdog?.(target.id).catch?.(() => null) || null,
+      api?.latestRunForConversation?.(target.id).catch?.(() => null) || null
     ]);
     if (enrollment?.enabled !== true || enrollment?.userPaused === true) return null;
-    if (!snapshot || String(snapshot.conversationId || '') !== String(target.id)) return null;
-
-    const requestId = String(snapshot.requestId || '');
-    const requestStartedAt = Math.max(0, Number(snapshot.requestStartedAt || 0));
-    const requestPhase = String(snapshot.requestPhase || '');
-    if (!requestId || !requestStartedAt || !['started', 'completed', 'error'].includes(requestPhase)) return null;
 
     if (!watchdog || watchdog.stopped !== true) return null;
     if (String(watchdog.stopReason || '') !== `status:${statusCode}`) return null;
     if (Math.max(0, Number(watchdog.deadlineAt || 0)) !== 0) return null;
-    if (Math.max(0, Number(watchdog.lastRequestStartedAt || 0)) !== requestStartedAt) return null;
 
+    const requestStartedAt = Math.max(0, Number(watchdog.lastRequestStartedAt || 0));
     const promptKey = String(watchdog.lastPromptKey || '');
-    if (!promptKey || !promptKey.startsWith(`${target.id}|`)) return null;
-    const snapshotPromptKey = String(snapshot.promptKey || '');
-    if (snapshotPromptKey && !snapshotPromptKey.startsWith(`${target.id}|`)) return null;
+    if (!requestStartedAt || !promptKey || !promptKey.startsWith(`${target.id}|`)) return null;
+
+    const expected = {
+      conversationId: String(target.id),
+      promptKey,
+      requestStartedAt,
+      tabId,
+      chromeDocumentId,
+      identitySource: 'page-snapshot'
+    };
+
+    const candidate = exactRequestCandidate(snapshot, expected)
+      || exactDurableRunCandidate(durableRun, expected);
+    if (!candidate) return null;
 
     return {
       conversationId: String(target.id),
       conversationUrl: String(target.url || sender?.tab?.url || ''),
       promptKey,
-      requestId,
-      requestStartedAt,
-      monitorRuntimeId: String(snapshot.documentId || ''),
+      requestId: candidate.requestId,
+      requestStartedAt: candidate.requestStartedAt,
+      monitorRuntimeId: candidate.monitorRuntimeId,
       chromeDocumentId,
       tabId,
       statusCode,
+      identitySource: candidate.identitySource,
       transport: 'stream-terminal-durable-fallback'
     };
   }
@@ -149,7 +196,7 @@
       });
       recordDiagnostic('response-stream-terminal-fallback-queued', {
         tabId: identity.tabId,
-        reason: `status=${identity.statusCode};watchdog=exact-stopped-request`,
+        reason: `status=${identity.statusCode};watchdog=exact-stopped-request;identity=${identity.identitySource}`,
         conversationId: identity.conversationId,
         notificationId,
         chromeDocumentId: identity.chromeDocumentId,
