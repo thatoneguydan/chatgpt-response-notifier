@@ -46,6 +46,15 @@ function Test-ExactText {
     return [string]::Equals([string]$Actual, $Expected, [StringComparison]::Ordinal)
 }
 
+function Test-BuildCommitIdentity {
+    param([object]$Record, [string]$ExpectedSuffix)
+    $field = [string](Get-PropertyValue -InputObject $Record -Name 'buildCommitSuffix')
+    if (-not [string]::IsNullOrWhiteSpace($field) -and (Test-ExactText $field $ExpectedSuffix)) { return $true }
+    $reason = [string](Get-PropertyValue -InputObject $Record -Name 'reason')
+    if ([string]::IsNullOrWhiteSpace($reason)) { return $false }
+    return $reason -match ('(^|;)build=' + [regex]::Escape($ExpectedSuffix) + '($|;)')
+}
+
 function Test-SameOptionalIdentity {
     param([object]$Left, [object]$Right, [string]$Name)
     $leftValue = [string](Get-PropertyValue -InputObject $Left -Name $Name)
@@ -94,7 +103,11 @@ if ($null -eq $chrome -or (Get-PropertyValue -InputObject $chrome -Name 'extensi
 }
 
 $currentObserved = Convert-ToDateTimeOffset (Get-PropertyValue -InputObject $safe -Name 'currentExtensionObservedAtUtc')
-if ($null -eq $currentObserved -or ([DateTimeOffset]::UtcNow - $currentObserved.ToUniversalTime()).TotalSeconds -gt 120) {
+if ($null -eq $currentObserved) {
+    throw 'Live acceptance failed: no fresh live extension identity timestamp is available.'
+}
+$identityAgeSeconds = ([DateTimeOffset]::UtcNow - $currentObserved.ToUniversalTime()).TotalSeconds
+if ($identityAgeSeconds -lt -5 -or $identityAgeSeconds -gt 120) {
     throw 'Live acceptance failed: live extension identity is stale; interact with the normal Chrome profile and retry.'
 }
 
@@ -113,7 +126,7 @@ foreach ($statusCode in $DefinitiveStatusCodes) {
                 Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'status') 'terminal-message-received' -and
                 Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'statusCode') $statusCode -and
                 Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'extensionVersion') $ExpectedVersion -and
-                Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'buildCommitSuffix') $expectedCommitSuffix -and
+                (Test-BuildCommitIdentity -Record $_ -ExpectedSuffix $expectedCommitSuffix) -and
                 $null -ne (Convert-ToDateTimeOffset (Get-PropertyValue -InputObject $_ -Name 'observedAt'))
             } |
             Sort-Object { Convert-ToDateTimeOffset (Get-PropertyValue -InputObject $_ -Name 'observedAt') } -Descending
@@ -137,7 +150,7 @@ foreach ($statusCode in $DefinitiveStatusCodes) {
                     Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'status') 'terminal-watchdog-stopped-observed' -and
                     Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'statusCode') $statusCode -and
                     Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'extensionVersion') $ExpectedVersion -and
-                    Test-ExactText (Get-PropertyValue -InputObject $_ -Name 'buildCommitSuffix') $expectedCommitSuffix -and
+                    (Test-BuildCommitIdentity -Record $_ -ExpectedSuffix $expectedCommitSuffix) -and
                     (Test-SameOptionalIdentity -Left $_ -Right $terminal -Name 'conversationSuffix') -and
                     (Test-SameOptionalIdentity -Left $_ -Right $terminal -Name 'assistantSuffix') -and
                     (Test-WithinWindow -Candidate $_ -Start $terminalAt -End $stopDeadline) -and
