@@ -28,6 +28,19 @@ function Copy-SafeDiagnostic {
         $value = Get-PropertyValue -InputObject $Record -Name $name
         if ($null -ne $value) { $safe[$name] = $value }
     }
+
+    # Some helper generations preserve the bounded diagnostic reason but omit a
+    # newer top-level statusCode field. Recover only the exact enum-like token
+    # already encoded in that safe reason so live acceptance stays fail-closed
+    # without ever copying response or prompt content.
+    if (-not $safe.Contains('statusCode')) {
+        $reason = [string](Get-PropertyValue -InputObject $Record -Name 'reason')
+        $match = [regex]::Match($reason, '(?:^|;)status=([A-Z][A-Z0-9_]*)(?:;|$)')
+        if (-not $match.Success) {
+            $match = [regex]::Match($reason, '(?:^|;)stopReason=status:([A-Z][A-Z0-9_]*)(?:;|$)')
+        }
+        if ($match.Success) { $safe['statusCode'] = $match.Groups[1].Value }
+    }
     return [pscustomobject]$safe
 }
 
