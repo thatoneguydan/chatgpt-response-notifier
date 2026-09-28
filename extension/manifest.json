@@ -19,8 +19,8 @@
     "service_worker": "diagnostics-bootstrap.js"
   },
   "action": {
-    "default_popup": "popup.html",
-    "default_title": "ChatGPT Response Notifier"
+    "default_title": "ChatGPT Response Notifier",
+    "default_popup": "popup.html"
   },
   "content_scripts": [
     {
@@ -28,29 +28,94 @@
         "https://chatgpt.com/*"
       ],
       "js": [
-        "page-runtime-identity.js",
-        "status-code.js",
-        "status-policy.js",
+        "page-dom-compat.js",
+        "attachment-script.js",
         "content-script.js",
         "persistence-script.js",
-        "attachment-script.js",
+        "status-code.js",
+        "status-policy.js",
+        "rendered-terminal-status.js",
         "monitor-script.js",
-        "recovery-script.js",
         "bounded-recovery-script.js",
         "status-script.js",
-        "recovery-live-fix-content.js"
+        "terminal-status-live-observer.js",
+        "recovery-script.js"
       ],
-      "run_at": "document_idle"
-    }
-  ],
-  "web_accessible_resources": [
+      "run_at": "document_start"
+    },
     {
-      "resources": [
-        "response-stream-status-main.js"
-      ],
       "matches": [
         "https://chatgpt.com/*"
-      ]
+      ],
+      "js": [
+        "watchdog-page-authority-v3.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "automation-route-refresh.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "observation-relay.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "response-stream-status-main.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "response-stream-status-bridge.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "hidden-window-diagnostics-page.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "hidden-window-diagnostics-main.js"
+      ],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
+        "quick-continue-status-owner-v6.js"
+      ],
+      "run_at": "document_start"
     }
   ]
 }
