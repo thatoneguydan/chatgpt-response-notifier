@@ -7,7 +7,7 @@ public sealed record PublicUpdateManifest(string Version, string SourceCommit, s
 public static class PublicUpdateFeed
 {
     public const string RepositoryFullName = "thatoneguydan/chatgpt-response-notifier";
-    public const string ManifestUrl = "https://raw.githubusercontent.com/thatoneguydan/chatgpt-response-notifier/main/update/manifest.json";
+    public const string ManifestUrl = "https://api.github.com/repos/thatoneguydan/chatgpt-response-notifier/contents/update/manifest.json";
 
     private const string ReleasePathPrefix = "/thatoneguydan/chatgpt-response-notifier/releases/download/";
 
@@ -46,46 +46,46 @@ public static class PublicUpdateFeed
             || !string.Equals(uri.Scheme, Uri.UriSchemeHttps, StringComparison.OrdinalIgnoreCase)
             || !string.Equals(uri.Host, "github.com", StringComparison.OrdinalIgnoreCase)
             || !uri.AbsolutePath.StartsWith(ReleasePathPrefix, StringComparison.Ordinal)
+            || !Path.GetFileName(uri.AbsolutePath).StartsWith("ChatGPT-Response-Notifier-", StringComparison.Ordinal)
             || !uri.AbsolutePath.EndsWith(".zip", StringComparison.OrdinalIgnoreCase))
         {
-            throw new InvalidDataException("Public update download URL is outside the pinned notifier release route.");
+            throw new InvalidDataException("Public update download URL is outside the pinned release route.");
         }
 
-        return new PublicUpdateManifest(version, sourceCommit, downloadUrl, sha256);
+        return new PublicUpdateManifest(
+            Version: version,
+            SourceCommit: sourceCommit,
+            DownloadUrl: downloadUrl,
+            Sha256: sha256);
     }
 
     public static int CompareVersions(string left, string right)
     {
         if (!TryParseVersion(left, out var a) || !TryParseVersion(right, out var b))
-            throw new InvalidDataException("Cannot compare invalid notifier versions.");
+            throw new InvalidDataException("Version comparison requires numeric dot-separated versions.");
 
-        for (var index = 0; index < 4; index++)
+        var length = Math.Max(a.Length, b.Length);
+        for (var index = 0; index < length; index += 1)
         {
             var av = index < a.Length ? a[index] : 0;
             var bv = index < b.Length ? b[index] : 0;
-            if (av != bv) return av.CompareTo(bv);
+            if (av == bv) continue;
+            return av > bv ? 1 : -1;
         }
         return 0;
     }
 
     private static bool TryParseVersion(string value, out int[] parts)
     {
-        var raw = (value ?? string.Empty).Split('.');
-        if (raw.Length < 2 || raw.Length > 4)
+        parts = Array.Empty<int>();
+        var tokens = (value ?? string.Empty).Trim().Split('.', StringSplitOptions.RemoveEmptyEntries);
+        if (tokens.Length < 2 || tokens.Length > 4) return false;
+        var parsed = new int[tokens.Length];
+        for (var index = 0; index < tokens.Length; index += 1)
         {
-            parts = Array.Empty<int>();
-            return false;
+            if (!int.TryParse(tokens[index], out parsed[index]) || parsed[index] < 0) return false;
         }
-
-        parts = new int[raw.Length];
-        for (var i = 0; i < raw.Length; i++)
-        {
-            if (!int.TryParse(raw[i], out parts[i]) || parts[i] < 0)
-            {
-                parts = Array.Empty<int>();
-                return false;
-            }
-        }
+        parts = parsed;
         return true;
     }
 }

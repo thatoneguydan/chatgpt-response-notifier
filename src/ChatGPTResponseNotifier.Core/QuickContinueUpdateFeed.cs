@@ -4,7 +4,7 @@ namespace ChatGPTResponseNotifier.Core;
 
 public static class QuickContinueUpdateFeed
 {
-    public const string ManifestUrl = "https://raw.githubusercontent.com/thatoneguydan/chatgpt-response-notifier/main/standalone-quick-continue/update/manifest.json";
+    public const string ManifestUrl = "https://api.github.com/repos/thatoneguydan/chatgpt-response-notifier/contents/standalone-quick-continue/update/manifest.json";
 
     private const string ReleasePathPrefix = "/thatoneguydan/chatgpt-response-notifier/releases/download/";
 

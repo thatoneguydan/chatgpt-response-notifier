@@ -4,49 +4,58 @@ import test from 'node:test';
 
 const read = (relative) => readFileSync(new URL(`../../${relative}`, import.meta.url), 'utf8');
 const feed = read('src/ChatGPTResponseNotifier.Core/QuickContinueUpdateFeed.cs');
+const publicFeed = read('src/ChatGPTResponseNotifier.Core/PublicUpdateFeed.cs');
 const installer = read('src/ChatGPTResponseNotifier.Core/QuickContinueBundleInstaller.cs');
 const service = read('src/ChatGPTResponseNotifier.Host/QuickContinueUpdateService.cs');
 const publicUpdateService = read('src/ChatGPTResponseNotifier.Host/PublicUpdateService.cs');
+const manifestClient = read('src/ChatGPTResponseNotifier.Host/FreshGitHubManifestClient.cs');
 const bridge = read('src/ChatGPTResponseNotifier.Host/LocalBridgeServer.cs');
 const app = read('src/ChatGPTResponseNotifier.Host/NativeHostApplication.cs');
 const quickWorkflow = read('.github/workflows/quick-continue-release.yml');
 const notifierWorkflow = read('.github/workflows/release.yml');
 
-test('Quick Continue feed is pinned to the canonical release route and digest', () => {
-  assert.match(feed, /standalone-quick-continue\/update\/manifest\.json/);
-  assert.match(feed, /github\.com/);
+test('Quick Continue feed is pinned to the canonical GitHub contents API and release route', () => {
+  assert.match(feed, /api\.github\.com\/repos\/thatoneguydan\/chatgpt-response-notifier\/contents\/standalone-quick-continue\/update\/manifest\.json/);
   assert.match(feed, /ChatGPT-Quick-Continue-/);
   assert.match(feed, /sha256/i);
   assert.match(feed, /SourceCommit/);
 });
 
-test('Quick Continue feed checks bypass stale CDN and HTTP client caches', () => {
-  assert.match(service, /cacheBust=\{DateTimeOffset\.UtcNow\.ToUnixTimeMilliseconds\(\)\}/);
-  assert.match(service, /new HttpRequestMessage\(HttpMethod\.Get, manifestUrl\)/);
-  assert.match(service, /CacheControlHeaderValue/);
-  assert.match(service, /NoCache = true/);
-  assert.match(service, /NoStore = true/);
-  assert.match(service, /_http\.SendAsync\(manifestRequest, HttpCompletionOption\.ResponseContentRead/);
+test('notifier feed uses the same canonical GitHub contents API authority', () => {
+  assert.match(publicFeed, /api\.github\.com\/repos\/thatoneguydan\/chatgpt-response-notifier\/contents\/update\/manifest\.json/);
+  assert.doesNotMatch(publicFeed, /raw\.githubusercontent\.com/);
+});
+
+test('managed feed checks use isolated connections and GitHub raw-content media type', () => {
+  assert.match(manifestClient, /new SocketsHttpHandler/);
+  assert.match(manifestClient, /PooledConnectionLifetime = TimeSpan\.Zero/);
+  assert.match(manifestClient, /PooledConnectionIdleTimeout = TimeSpan\.Zero/);
+  assert.match(manifestClient, /cacheBust=\{DateTimeOffset\.UtcNow\.ToUnixTimeMilliseconds\(\)\}/);
+  assert.match(manifestClient, /application\/vnd\.github\.raw\+json/);
+  assert.match(manifestClient, /X-GitHub-Api-Version/);
+  assert.match(manifestClient, /2022-11-28/);
+  assert.match(manifestClient, /NoCache = true/);
+  assert.match(manifestClient, /NoStore = true/);
+  assert.match(manifestClient, /ConnectionClose = true/);
+  assert.match(manifestClient, /HttpCompletionOption\.ResponseContentRead/);
+});
+
+test('Quick Continue and notifier updates both use the isolated manifest authority', () => {
+  assert.match(service, /FreshGitHubManifestClient\.GetRawAsync/);
+  assert.match(service, /QuickContinueUpdateFeed\.ManifestUrl/);
+  assert.match(publicUpdateService, /FreshGitHubManifestClient\.GetRawAsync/);
+  assert.match(publicUpdateService, /PublicUpdateFeed\.ManifestUrl/);
   assert.doesNotMatch(service, /_http\.GetAsync\(QuickContinueUpdateFeed\.ManifestUrl/);
+  assert.doesNotMatch(publicUpdateService, /_http\.GetAsync\(PublicUpdateFeed\.ManifestUrl/);
 });
 
 test('explicit Quick Continue update requests wait for an active check then perform a fresh check', () => {
   assert.match(service, /await _gate\.WaitAsync\(cancellationToken\)\.ConfigureAwait\(false\)/);
   assert.doesNotMatch(service, /WaitAsync\(0, cancellationToken\)/);
-  assert.match(service, /every waiting caller performs its own fresh cache-busted/);
+  assert.match(service, /every waiting caller performs its own authoritative/);
   const gateIndex = service.indexOf('await _gate.WaitAsync(cancellationToken)');
-  const cacheBustIndex = service.indexOf('cacheBust=', gateIndex);
-  assert.ok(gateIndex >= 0 && cacheBustIndex > gateIndex);
-});
-
-test('notifier public feed checks also bypass stale CDN and HTTP client caches', () => {
-  assert.match(publicUpdateService, /cacheBust=\{DateTimeOffset\.UtcNow\.ToUnixTimeMilliseconds\(\)\}/);
-  assert.match(publicUpdateService, /new HttpRequestMessage\(HttpMethod\.Get, manifestUrl\)/);
-  assert.match(publicUpdateService, /CacheControlHeaderValue/);
-  assert.match(publicUpdateService, /NoCache = true/);
-  assert.match(publicUpdateService, /NoStore = true/);
-  assert.match(publicUpdateService, /_http\.SendAsync\(manifestRequest, HttpCompletionOption\.ResponseContentRead/);
-  assert.doesNotMatch(publicUpdateService, /_http\.GetAsync\(PublicUpdateFeed\.ManifestUrl/);
+  const fetchIndex = service.indexOf('FreshGitHubManifestClient.GetRawAsync', gateIndex);
+  assert.ok(gateIndex >= 0 && fetchIndex > gateIndex);
 });
 
 test('helper updates only the fixed Quick Continue user-profile root and preserves config', () => {
