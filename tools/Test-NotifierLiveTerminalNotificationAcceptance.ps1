@@ -182,7 +182,7 @@ foreach ($statusCode in $DefinitiveStatusCodes) {
             if ($null -eq $helperAt) { continue }
             $hostStart = $helperAt.AddSeconds(-10)
             $hostEnd = $helperAt.AddSeconds(2)
-            $host = @(
+            $hostRecord = @(
                 $allRecords |
                     Where-Object {
                         ([string](Get-PropertyValue -InputObject $_ -Name 'source') -ceq 'host') -and
@@ -195,7 +195,7 @@ foreach ($statusCode in $DefinitiveStatusCodes) {
                     Sort-Object { Convert-ToDateTimeOffset (Get-PropertyValue -InputObject $_ -Name 'observedAt') } -Descending |
                     Select-Object -First 1
             ) | Select-Object -First 1
-            if ($null -eq $host) { continue }
+            if ($null -eq $hostRecord) { continue }
 
             [void]$usedNotificationSuffixes.Add($notificationSuffix)
             $acceptedForCode = [pscustomobject][ordered]@{
@@ -205,7 +205,7 @@ foreach ($statusCode in $DefinitiveStatusCodes) {
                 notificationSuffix = $notificationSuffix
                 terminalObservedAt = [string](Get-PropertyValue -InputObject $terminal -Name 'observedAt')
                 watchdogStoppedAt = [string](Get-PropertyValue -InputObject $stop -Name 'observedAt')
-                toastPresentedAt = [string](Get-PropertyValue -InputObject $host -Name 'observedAt')
+                toastPresentedAt = [string](Get-PropertyValue -InputObject $hostRecord -Name 'observedAt')
                 helperAcceptedAt = [string](Get-PropertyValue -InputObject $helper -Name 'observedAt')
                 presentationState = [string](Get-PropertyValue -InputObject $helper -Name 'presentationState')
             }
