@@ -30,6 +30,7 @@ test('live terminal proof observes terminal messages, safe detector shape, and p
   assert.match(proofSource, /__chatgptNotifierBuildIdentity\?\.sourceCommit/);
   assert.match(proofSource, /buildCommitSuffix/);
   assert.match(proofSource, /reason:\s*`build=\$\{commitSuffix/);
+  assert.match(proofSource, /reason:\s*`status=\$\{String\(message\?\.statusCode/);
 
   assert.match(observerSource, /RUNTIME_VERSION = 3/);
   assert.match(observerSource, /NO_STATUS_DIAGNOSTIC_DELAY_MS = 1500/);
