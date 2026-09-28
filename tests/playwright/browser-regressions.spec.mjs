@@ -180,3 +180,31 @@ test('notifier terminal detector sees a footer sibling inside the same assistant
   });
   await expectTrafficInert(chatgptTraffic);
 });
+
+test('notifier terminal detector crosses deep same-turn wrappers until a neighboring turn boundary', async ({ fixturePage, chatgptTraffic }) => {
+  await fixturePage.evaluate(() => {
+    const turn = document.querySelector('[data-testid="conversation-turn-1"]');
+    const semanticAssistant = turn?.querySelector('[data-message-author-role="assistant"]');
+    const footer = turn?.querySelector('.rendered-footer');
+    if (!turn || !semanticAssistant || !footer) throw new Error('Fixture assistant turn is incomplete.');
+
+    footer.remove();
+    let current = turn;
+    for (let depth = 0; depth < 6; depth += 1) {
+      const wrapper = document.createElement('div');
+      current.replaceWith(wrapper);
+      wrapper.append(current);
+      current = wrapper;
+    }
+    current.append(footer);
+  });
+
+  const detection = await evaluateInExtensionWorld(fixturePage, 'ChatGPT Response Notifier', `(() => {
+    const api = globalThis.ChatGPTNotifierRenderedTerminalStatus;
+    const semanticAssistant = document.querySelector('[data-message-author-role="assistant"]');
+    return String(api?.detect?.(semanticAssistant) || '');
+  })()`);
+
+  expect(detection).toBe('COMPLETE_APPLIED');
+  await expectTrafficInert(chatgptTraffic);
+});
