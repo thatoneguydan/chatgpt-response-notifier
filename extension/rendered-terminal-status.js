@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
   const BLOCK_SELECTOR = 'p, div, section, article';
   const ROLE_SELECTOR = '[data-message-author-role="user"], [data-message-author-role="assistant"], [data-turn="user"], [data-turn="assistant"]';
   const EXCLUDED_SELECTOR = 'pre, code, blockquote, ul, ol, li, button, svg, [role="button"], [aria-hidden="true"], [hidden], [inert], [data-message-author-role="tool"], [data-tool]';
@@ -141,12 +141,13 @@
     add(assistant);
     add(turn);
 
-    // Current ChatGPT builds can put the semantic assistant role marker inside a
-    // larger message wrapper while rendering the final markdown/footer as a
-    // sibling. Walk only through ancestors that still contain this one assistant
-    // turn; stop before any neighboring user/assistant turn can enter the scan.
+    // The semantic assistant marker can sit several wrappers below the rendered
+    // markdown/footer. Do not impose an arbitrary DOM-depth limit: the real safety
+    // boundary is the first ancestor that contains a different user/assistant turn.
+    // This lets one assistant turn own arbitrarily nested presentation wrappers
+    // without ever scanning into a neighboring conversation turn.
     let current = turn?.parentElement || assistant?.parentElement || null;
-    for (let depth = 0; current && depth < 4; depth += 1) {
+    while (current) {
       let foreignTurn = false;
       try {
         const roles = Array.from(current.querySelectorAll?.(ROLE_SELECTOR) || []);
