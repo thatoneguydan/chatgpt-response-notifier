@@ -96,9 +96,9 @@ foreach ($name in $managedBootstrapSources) {
 $bootstrapPath = Join-Path $bundleExtensionRoot 'diagnostics-bootstrap.js'
 $bootstrapText = Get-Content -LiteralPath $bootstrapPath -Raw -Encoding UTF8
 $bootstrapImportLines = $managedBootstrapSources | ForEach-Object { "importScripts('$_');" }
-$bootstrapImportPattern = '^(?:' + (($bootstrapImportLines | ForEach-Object { [regex]::Escape($_) }) -join '\r?\n') + ')\r?\n'
+$bootstrapImportPattern = (($bootstrapImportLines | ForEach-Object { [regex]::Escape($_) }) -join '\r?\n') + '\r?\n'
 $bootstrapMatch = [regex]::Match($bootstrapText, $bootstrapImportPattern)
-if (-not $bootstrapMatch.Success) {
+if (-not $bootstrapMatch.Success -or $bootstrapMatch.Index -gt 64) {
     throw 'Diagnostics bootstrap no longer begins with the reviewed managed-bootstrap import sequence.'
 }
 
@@ -113,7 +113,7 @@ foreach ($name in $managedBootstrapSources) {
     (($aggregateParts.ToArray() -join "`n;`n") + "`n"),
     (New-Object Text.UTF8Encoding($false)))
 
-$rewrittenBootstrap = "importScripts('managed-bootstrap-core.js');`r`n" + $bootstrapText.Substring($bootstrapMatch.Length)
+$rewrittenBootstrap = $bootstrapText.Substring(0, $bootstrapMatch.Index) + "importScripts('managed-bootstrap-core.js');`r`n" + $bootstrapText.Substring($bootstrapMatch.Index + $bootstrapMatch.Length)
 [IO.File]::WriteAllText($bootstrapPath, $rewrittenBootstrap, (New-Object Text.UTF8Encoding($false)))
 foreach ($name in $managedBootstrapSources) {
     Remove-Item -LiteralPath (Join-Path $bundleExtensionRoot $name) -Force
