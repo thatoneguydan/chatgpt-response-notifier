@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 3;
   const STORAGE_PREFIX = 'quick-continue:manual-timestamp:';
   const CLOCK_SELECTOR = '[aria-label="Current local time"]';
   const previousRuntime = globalThis.__chatgptQuickContinueConversationStateRuntime;
@@ -135,19 +135,24 @@
 
   function persistUserChoiceSoon(event) {
     if (event?.isTrusted !== true || !clockFromEvent(event)) return;
-    setTimeout(() => {
-      const enabled = currentEnabled();
-      desiredEnabled = enabled;
-      const conversationId = conversationIdFromUrl();
-      activeConversationId = conversationId;
-      if (conversationId) {
-        provisionalTouched = false;
-        writeStoredState(conversationId, enabled).catch(() => {});
-      } else {
-        provisionalEnabled = enabled;
-        provisionalTouched = true;
-      }
-    }, 0);
+
+    // hover-edit-script is loaded before this runtime and owns the clock toggle.
+    // Its document-capture listener has already committed the new in-memory
+    // state by the time this listener runs. Invalidate any asynchronous restore
+    // that started before this trusted choice so a late storage read cannot
+    // overwrite the user's newer state.
+    restoreGeneration += 1;
+    const enabled = currentEnabled();
+    desiredEnabled = enabled;
+    const conversationId = conversationIdFromUrl();
+    activeConversationId = conversationId;
+    if (conversationId) {
+      provisionalTouched = false;
+      writeStoredState(conversationId, enabled).catch(() => {});
+    } else {
+      provisionalEnabled = enabled;
+      provisionalTouched = true;
+    }
   }
 
   function handleClockKeydown(event) {
@@ -159,6 +164,7 @@
     if (areaName !== 'local' || !activeConversationId) return;
     const key = storageKey(activeConversationId);
     if (!Object.prototype.hasOwnProperty.call(changes || {}, key)) return;
+    restoreGeneration += 1;
     desiredEnabled = changes[key]?.newValue === true;
     provisionalEnabled = desiredEnabled;
     provisionalTouched = false;

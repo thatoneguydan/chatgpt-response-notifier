@@ -326,7 +326,9 @@ export const test = base.extend({
       viewport: { width: 1280, height: 900 },
       args: [
         `--disable-extensions-except=${extensions}`,
-        `--load-extension=${extensions}`
+        `--load-extension=${extensions}`,
+        '--proxy-server=http://127.0.0.1:9',
+        '--proxy-bypass-list=<-loopback>'
       ]
     });
     try {
@@ -334,7 +336,9 @@ export const test = base.extend({
       // onInstalled hot-replacement path. Keep only a neutral about:blank tab
       // open until that startup work has had time to query existing tabs, so the
       // browser fixture cannot be mistaken for a pre-existing ChatGPT tab and
-      // reinjected underneath the first assertion.
+      // reinjected underneath the first assertion. The dead loopback proxy also
+      // prevents the machine's live managed updater from replacing exact-head
+      // extension bytes while the isolated browser regression is running.
       await new Promise((resolve) => setTimeout(resolve, 1500));
       await use(context);
     } finally {

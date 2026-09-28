@@ -35,6 +35,11 @@ function compareVersions(left, right) {
   return 0;
 }
 
+function managedUpdateShouldReload(installedVersion, runningVersion) {
+  const comparison = compareVersions(installedVersion, runningVersion);
+  return comparison !== null && comparison > 0;
+}
+
 async function injectCurrentRuntimeIntoOpenTabs() {
   let tabs = [];
   try { tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] }); } catch { return; }
@@ -63,8 +68,7 @@ async function checkManagedUpdate() {
   try { payload = await response.json(); } catch { return false; }
   const installedVersion = String(payload?.installedVersion || '');
   const runningVersion = String(chrome.runtime.getManifest().version || '');
-  const comparison = compareVersions(installedVersion, runningVersion);
-  if (comparison === null || comparison === 0) return false;
+  if (!managedUpdateShouldReload(installedVersion, runningVersion)) return false;
 
   setTimeout(() => chrome.runtime.reload(), 200);
   return true;
