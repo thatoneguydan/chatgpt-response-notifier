@@ -29,8 +29,8 @@ internal sealed class QuickContinueUpdateService : IDisposable
         // periodic/background check is already in flight, returning the previous
         // snapshot can falsely report an old version as "current" even after the
         // public feed has advanced. Serialize callers instead: once the active
-        // check completes, every waiting caller performs its own fresh cache-busted
-        // feed read before reporting a result.
+        // check completes, every waiting caller performs its own authoritative
+        // GitHub contents-API read before reporting a result.
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         string? archivePath = null;
@@ -44,16 +44,10 @@ internal sealed class QuickContinueUpdateService : IDisposable
             }
 
             _status = new UpdateStatusSnapshot("checking", currentVersion);
-            var manifestUrl = $"{QuickContinueUpdateFeed.ManifestUrl}?cacheBust={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
-            using var manifestRequest = new HttpRequestMessage(HttpMethod.Get, manifestUrl);
-            manifestRequest.Headers.CacheControl = new CacheControlHeaderValue
-            {
-                NoCache = true,
-                NoStore = true
-            };
-            using var manifestResponse = await _http.SendAsync(manifestRequest, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
-            manifestResponse.EnsureSuccessStatusCode();
-            var manifestJson = await manifestResponse.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            var manifestJson = await FreshGitHubManifestClient.GetRawAsync(
+                QuickContinueUpdateFeed.ManifestUrl,
+                "ChatGPTQuickContinueUpdater",
+                cancellationToken).ConfigureAwait(false);
             var manifest = QuickContinueUpdateFeed.Parse(manifestJson);
 
             if (PublicUpdateFeed.CompareVersions(manifest.Version, currentVersion) <= 0)
