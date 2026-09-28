@@ -56,8 +56,10 @@ if ($unexpectedRuntimeFiles.Count -gt 0) {
 }
 
 Copy-Item -LiteralPath $publishedExe -Destination (Join-Path $bundleRoot 'ChatGPTResponseNotifier.Host.exe') -Force
-Copy-Item -LiteralPath (Join-Path $root 'extension') -Destination (Join-Path $bundleRoot 'extension') -Recurse -Force
-$runtimeIdentityPath = Join-Path $bundleRoot 'extension\runtime-build-identity.js'
+$sourceExtensionRoot = Join-Path $root 'extension'
+$bundleExtensionRoot = Join-Path $bundleRoot 'extension'
+Copy-Item -LiteralPath $sourceExtensionRoot -Destination $bundleExtensionRoot -Recurse -Force
+$runtimeIdentityPath = Join-Path $bundleExtensionRoot 'runtime-build-identity.js'
 $runtimeIdentityText = @"
 'use strict';
 
@@ -67,6 +69,73 @@ globalThis.__chatgptNotifierBuildIdentity = Object.freeze({
 });
 "@
 Set-Content -LiteralPath $runtimeIdentityPath -Value $runtimeIdentityText -Encoding UTF8
+
+# The protected Dan-session deployment adapter intentionally has a bounded bundle
+# inventory. Keep development source modular, but coalesce the fixed fail-closed
+# bootstrap sequence in the managed payload so normal candidate deployment does
+# not require a privileged broker upgrade every time source modules grow.
+$managedBootstrapSources = @(
+    'page-runtime-compat-background.js',
+    'background.js',
+    'watchdog-sole-continuation-authority-background.js',
+    'watchdog-request-lifecycle-fix-background.js',
+    'terminal-watchdog-authority-background.js',
+    'terminal-live-proof-background.js',
+    'response-stream-terminal-durable-fallback-background.js',
+    'quick-continue-monitor-bridge-background.js',
+    'watchdog-authority-v3-background.js',
+    'terminal-stop-post-update-recovery-background.js',
+    'recovery-refresh-policy-background.js'
+)
+foreach ($name in $managedBootstrapSources) {
+    if (-not (Test-Path -LiteralPath (Join-Path $bundleExtensionRoot $name) -PathType Leaf)) {
+        throw "Managed bootstrap source is missing from the copied extension: $name"
+    }
+}
+
+$bootstrapPath = Join-Path $bundleExtensionRoot 'diagnostics-bootstrap.js'
+$bootstrapText = Get-Content -LiteralPath $bootstrapPath -Raw -Encoding UTF8
+$bootstrapImportLines = $managedBootstrapSources | ForEach-Object { "importScripts('$_');" }
+$bootstrapImportPattern = '^(?:' + (($bootstrapImportLines | ForEach-Object { [regex]::Escape($_) }) -join '\r?\n') + ')\r?\n'
+$bootstrapMatch = [regex]::Match($bootstrapText, $bootstrapImportPattern)
+if (-not $bootstrapMatch.Success) {
+    throw 'Diagnostics bootstrap no longer begins with the reviewed managed-bootstrap import sequence.'
+}
+
+$aggregatePath = Join-Path $bundleExtensionRoot 'managed-bootstrap-core.js'
+$aggregateParts = New-Object Collections.Generic.List[string]
+foreach ($name in $managedBootstrapSources) {
+    $moduleText = Get-Content -LiteralPath (Join-Path $bundleExtensionRoot $name) -Raw -Encoding UTF8
+    $aggregateParts.Add("// managed-source: $name`n$moduleText")
+}
+[IO.File]::WriteAllText(
+    $aggregatePath,
+    (($aggregateParts.ToArray() -join "`n;`n") + "`n"),
+    (New-Object Text.UTF8Encoding($false)))
+
+$rewrittenBootstrap = "importScripts('managed-bootstrap-core.js');`r`n" + $bootstrapText.Substring($bootstrapMatch.Length)
+[IO.File]::WriteAllText($bootstrapPath, $rewrittenBootstrap, (New-Object Text.UTF8Encoding($false)))
+foreach ($name in $managedBootstrapSources) {
+    Remove-Item -LiteralPath (Join-Path $bundleExtensionRoot $name) -Force
+}
+
+# These historical data contracts are retained in source for documentation/tests,
+# but no production extension code names or loads them. Refuse to omit them if a
+# future runtime starts referencing either file.
+$sourceOnlyContracts = @(
+    'github-work-status-contract.v1.json',
+    'github-work-status-contract.v2.json'
+)
+$runtimeReferenceFiles = @(Get-ChildItem -LiteralPath $sourceExtensionRoot -File | Where-Object { $_.Extension -in @('.js', '.html', '.json') })
+foreach ($contract in $sourceOnlyContracts) {
+    $references = @($runtimeReferenceFiles | Where-Object {
+        $_.Name -ne $contract -and (Get-Content -LiteralPath $_.FullName -Raw -Encoding UTF8).Contains($contract)
+    })
+    if ($references.Count -gt 0) {
+        throw "Source-only contract became a production runtime dependency: $contract"
+    }
+    Remove-Item -LiteralPath (Join-Path $bundleExtensionRoot $contract) -Force
+}
 
 Copy-Item -LiteralPath (Join-Path $root 'LICENSE') -Destination (Join-Path $bundleRoot 'LICENSE') -Force
 
@@ -92,6 +161,17 @@ Get-ChildItem -LiteralPath $bundleRoot -Recurse -File | Sort-Object FullName | F
         sha256 = (Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
     }
 }
+if ($fileRecords.Count -gt 64) {
+    throw "Managed bundle inventory exceeds the installed protected-deployment contract: $($fileRecords.Count) > 64."
+}
+if (@($fileRecords | Where-Object { $_.path -eq 'extension/managed-bootstrap-core.js' }).Count -ne 1) {
+    throw 'Managed bundle is missing the deterministic bootstrap aggregate.'
+}
+foreach ($removed in @($managedBootstrapSources + $sourceOnlyContracts)) {
+    if (@($fileRecords | Where-Object { $_.path -eq "extension/$removed" }).Count -gt 0) {
+        throw "Managed bundle unexpectedly retained a coalesced/source-only file: $removed"
+    }
+}
 
 $manifest = [ordered]@{
     schemaVersion = 1
@@ -108,5 +188,5 @@ $manifest = [ordered]@{
 }
 $manifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $bundleRoot 'bundle-manifest.json') -Encoding UTF8
 
-Write-Host "Bundle ready: $bundleRoot"
+Write-Host "Bundle ready: $bundleRoot ($($fileRecords.Count) managed files)"
 Write-Output $bundleRoot
