@@ -8,7 +8,18 @@ const read = (relative) => readFileSync(new URL(relative, root), 'utf8');
 const source = read('extension/response-stream-terminal-durable-fallback-background.js');
 const bootstrap = read('extension/diagnostics-bootstrap.js');
 
-function buildContext({ watchdogStartedAt = 123456, snapshotStartedAt = 123456, stopped = true } = {}) {
+function buildContext({
+  watchdogStartedAt = 123456,
+  snapshotStartedAt = 123456,
+  snapshotRequestId = 'request-1',
+  snapshotPromptKey = '',
+  stopped = true,
+  durableRunStartedAt = 123456,
+  durableRunRequestId = 'request-1',
+  durableRunPromptKey = 'conversation-1|user-1',
+  durableRunOwnerTabId = 7,
+  durableRunOwnerDocumentId = 'chrome-doc-1'
+} = {}) {
   const listeners = [];
   const queued = [];
   const reserved = [];
@@ -19,10 +30,25 @@ function buildContext({ watchdogStartedAt = 123456, snapshotStartedAt = 123456, 
     conversationId: 'conversation-1',
     conversationUrl: 'https://chatgpt.com/c/conversation-1',
     documentId: 'monitor-runtime-1',
-    promptKey: '',
-    requestId: 'request-1',
+    promptKey: snapshotPromptKey,
+    requestId: snapshotRequestId,
     requestPhase: 'completed',
     requestStartedAt: snapshotStartedAt
+  };
+  const durableRun = {
+    conversationId: 'conversation-1',
+    promptKey: durableRunPromptKey,
+    ownerTabId: durableRunOwnerTabId,
+    ownerDocumentId: durableRunOwnerDocumentId,
+    snapshot: {
+      conversationId: 'conversation-1',
+      conversationUrl: 'https://chatgpt.com/c/conversation-1',
+      documentId: 'monitor-runtime-persisted',
+      promptKey: durableRunPromptKey,
+      requestId: durableRunRequestId,
+      requestPhase: 'completed',
+      requestStartedAt: durableRunStartedAt
+    }
   };
   const watchdog = {
     conversationId: 'conversation-1',
@@ -56,7 +82,8 @@ function buildContext({ watchdogStartedAt = 123456, snapshotStartedAt = 123456, 
         return tab?.id === 7 ? { id: 'conversation-1', url: 'https://chatgpt.com/c/conversation-1', tab } : null;
       },
       getEnrollment: async () => ({ enabled: true, userPaused: false }),
-      readCodeWatchdog: async () => watchdog
+      readCodeWatchdog: async () => watchdog,
+      latestRunForConversation: async () => durableRun
     },
     __chatgptNotifierDeliveryReliability: {
       record(status, fields) { diagnostics.push({ status, fields }); }
@@ -106,11 +133,11 @@ test('durable stream terminal fallback is loaded after terminal watchdog authori
   assert.doesNotThrow(() => new vm.Script(source));
 });
 
-test('lost in-memory request context still queues one durable definitive notification from exact persisted request identity', async () => {
+test('lost in-memory request context still queues one durable definitive notification from exact current page identity', async () => {
   const harness = buildContext();
   vm.runInContext(source, harness.context);
   const runtime = harness.context.__chatgptNotifierStreamTerminalDurableFallback;
-  assert.equal(runtime.version, 1);
+  assert.equal(runtime.version, 2);
 
   const result = await runtime.handleTerminalStatus(
     { type: 'CHATGPT_RESPONSE_STREAM_TERMINAL_STATUS', statusCode: 'BLOCKED_HUMAN' },
@@ -121,6 +148,7 @@ test('lost in-memory request context still queues one durable definitive notific
   assert.equal(harness.reserved.length, 1);
   assert.equal(harness.reserved[0].identity.requestId, 'request-1');
   assert.equal(harness.reserved[0].identity.promptKey, 'conversation-1|user-1');
+  assert.equal(harness.reserved[0].identity.identitySource, 'page-snapshot');
   assert.equal(harness.reserved[0].owner.documentId, 'chrome-doc-1');
   assert.equal(harness.queued.length, 1);
   assert.equal(harness.queued[0].turnKey, '');
@@ -131,8 +159,27 @@ test('lost in-memory request context still queues one durable definitive notific
   assert.equal(harness.released.length, 0);
 });
 
+test('live regression: missing page request identity recovers from exact persisted run identity', async () => {
+  const harness = buildContext({ snapshotRequestId: '' });
+  vm.runInContext(source, harness.context);
+
+  const result = await harness.context.__chatgptNotifierStreamTerminalDurableFallback.handleTerminalStatus(
+    { type: 'CHATGPT_RESPONSE_STREAM_TERMINAL_STATUS', statusCode: 'BLOCKED_HUMAN' },
+    { tab: { id: 7, url: 'https://chatgpt.com/c/conversation-1', title: 'Project chat' }, documentId: 'chrome-doc-1' }
+  );
+
+  assert.equal(result, 'notification-1');
+  assert.equal(harness.reserved.length, 1);
+  assert.equal(harness.reserved[0].identity.requestId, 'request-1');
+  assert.equal(harness.reserved[0].identity.requestStartedAt, 123456);
+  assert.equal(harness.reserved[0].identity.promptKey, 'conversation-1|user-1');
+  assert.equal(harness.reserved[0].identity.identitySource, 'durable-run');
+  assert.equal(harness.queued.length, 1);
+  assert.match(harness.diagnostics.at(-1).fields.reason, /identity=durable-run/);
+});
+
 test('durable fallback fails closed when persisted watchdog and current request timestamps disagree', async () => {
-  const harness = buildContext({ watchdogStartedAt: 123455, snapshotStartedAt: 123456 });
+  const harness = buildContext({ watchdogStartedAt: 123455, snapshotStartedAt: 123456, durableRunStartedAt: 123456 });
   vm.runInContext(source, harness.context);
 
   const result = await harness.context.__chatgptNotifierStreamTerminalDurableFallback.handleTerminalStatus(
@@ -146,6 +193,34 @@ test('durable fallback fails closed when persisted watchdog and current request 
   assert.equal(harness.committed.length, 0);
 });
 
+test('durable-run recovery fails closed when the persisted Chrome document identity changed', async () => {
+  const harness = buildContext({ snapshotRequestId: '', durableRunOwnerDocumentId: 'other-chrome-doc' });
+  vm.runInContext(source, harness.context);
+
+  const result = await harness.context.__chatgptNotifierStreamTerminalDurableFallback.handleTerminalStatus(
+    { type: 'CHATGPT_RESPONSE_STREAM_TERMINAL_STATUS', statusCode: 'BLOCKED_HUMAN' },
+    { tab: { id: 7, url: 'https://chatgpt.com/c/conversation-1' }, documentId: 'chrome-doc-1' }
+  );
+
+  assert.equal(result, null);
+  assert.equal(harness.reserved.length, 0);
+  assert.equal(harness.queued.length, 0);
+});
+
+test('durable-run recovery fails closed when the persisted prompt identity changed', async () => {
+  const harness = buildContext({ snapshotRequestId: '', durableRunPromptKey: 'conversation-1|other-user' });
+  vm.runInContext(source, harness.context);
+
+  const result = await harness.context.__chatgptNotifierStreamTerminalDurableFallback.handleTerminalStatus(
+    { type: 'CHATGPT_RESPONSE_STREAM_TERMINAL_STATUS', statusCode: 'BLOCKED_HUMAN' },
+    { tab: { id: 7, url: 'https://chatgpt.com/c/conversation-1' }, documentId: 'chrome-doc-1' }
+  );
+
+  assert.equal(result, null);
+  assert.equal(harness.reserved.length, 0);
+  assert.equal(harness.queued.length, 0);
+});
+
 test('durable fallback has no ChatGPT traffic or foreground authority', () => {
   assert.doesNotMatch(source, /\bfetch\s*\(|XMLHttpRequest|WebSocket|backend-api/);
   assert.doesNotMatch(source, /tabs\.update\([^)]*active:\s*true/);
@@ -153,4 +228,6 @@ test('durable fallback has no ChatGPT traffic or foreground authority', () => {
   assert.match(source, /reserveRequestDelivery/);
   assert.match(source, /stopReason \|\| ''\) !== `status:\$\{statusCode\}`/);
   assert.match(source, /lastRequestStartedAt/);
+  assert.match(source, /latestRunForConversation/);
+  assert.match(source, /ownerDocumentId/);
 });
