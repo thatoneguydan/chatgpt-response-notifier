@@ -49,6 +49,21 @@ class FakeNode {
     return this.children.some((child) => child.contains(candidate));
   }
 
+  compareDocumentPosition(candidate) {
+    let root = this;
+    while (root.parentElement) root = root.parentElement;
+    const ordered = [];
+    const visit = (node) => {
+      ordered.push(node);
+      for (const child of node.children) visit(child);
+    };
+    visit(root);
+    const left = ordered.indexOf(this);
+    const right = ordered.indexOf(candidate);
+    if (left < 0 || right < 0 || left === right) return 0;
+    return right > left ? 4 : 2;
+  }
+
   querySelector(selector) {
     return this.querySelectorAll(selector)[0] || null;
   }
@@ -95,7 +110,8 @@ function loadDetector() {
     document: {},
     String,
     Array,
-    Set
+    Set,
+    Math
   });
   context.globalThis = context;
   context.ChatGPTNotifierStatusCode = {
@@ -122,7 +138,7 @@ test('live terminal parser recovers a segmented footer even when parent innerTex
 
 test('terminal parser follows a semantic assistant marker to its same-turn wrapper footer', () => {
   const detector = loadDetector();
-  assert.equal(detector.version, 3);
+  assert.equal(detector.version, 4);
 
   const semanticAssistant = new FakeNode('div', 'Finished successfully.', [], { 'data-turn': 'assistant' });
   const footer = new FakeNode('p', '[GITHUB_STATUS: COMPLETE_APPLIED]');
@@ -156,6 +172,29 @@ test('terminal parser crosses deep same-turn wrapper nesting until the first for
   assert.equal(detector.detect(semanticAssistant), 'COMPLETE_APPLIED');
 });
 
+test('terminal parser allows the preceding prompt inside the same response group but stops before a following prompt', () => {
+  const detector = loadDetector();
+  const prompt = new FakeNode('div', 'Please finish the task.', [], { 'data-turn': 'user' });
+  const semanticAssistant = new FakeNode('div', 'Finished successfully.', [], { 'data-turn': 'assistant' });
+  let nestedAssistant = new FakeNode('article', '', [semanticAssistant]);
+  for (let depth = 0; depth < 4; depth += 1) nestedAssistant = new FakeNode('div', '', [nestedAssistant]);
+  const footer = new FakeNode('p', '[GITHUB_STATUS: BLOCKED_HUMAN]');
+  const action = new FakeNode('button', 'Copy');
+  const responseGroup = new FakeNode('section', '', [prompt, nestedAssistant, footer, action]);
+  responseGroup.innerText = 'Please finish the task.\nFinished successfully.\n[GITHUB_STATUS: BLOCKED_HUMAN]\nCopy';
+
+  const nextPrompt = new FakeNode('div', 'Continue', [], { 'data-turn': 'user' });
+  const conversationRoot = new FakeNode('main', '', [responseGroup, nextPrompt]);
+  conversationRoot.innerText = `${responseGroup.innerText}\nContinue`;
+
+  assert.equal(detector.detect(semanticAssistant), 'BLOCKED_HUMAN');
+  const shape = detector.inspect(semanticAssistant);
+  assert.ok(shape.rootCount >= 2);
+  assert.ok(shape.precedingUserCount >= 1);
+  assert.ok(shape.followingUserCount >= 1);
+  assert.equal(shape.boundaryReason, 'following-user');
+});
+
 test('live terminal parser rejects quoted/code examples and non-terminal standalone status paragraphs', () => {
   const detector = loadDetector();
   const codeExample = new FakeNode('pre', '', [new FakeNode('code', '[GITHUB_STATUS: COMPLETE_APPLIED]')]);
@@ -184,9 +223,10 @@ test('rendered terminal authority is hot-bound and feeds both watchdog parking a
   assert.ok(manifest.content_scripts[0].js.includes('terminal-status-live-observer.js'));
   assert.ok(manifest.content_scripts[0].js.indexOf('rendered-terminal-status.js') < manifest.content_scripts[0].js.indexOf('terminal-status-live-observer.js'));
 
-  assert.match(observer, /RUNTIME_VERSION = 2/);
+  assert.match(observer, /RUNTIME_VERSION = 3/);
   assert.match(observer, /CHATGPT_RENDERED_TERMINAL_STATUS/);
   assert.match(observer, /CHATGPT_RENDERED_TERMINAL_IDENTITY_QUERY/);
+  assert.match(observer, /CHATGPT_RENDERED_TERMINAL_SCAN_DIAGNOSTIC/);
   assert.match(observer, /MutationObserver/);
   assert.match(observer, /RETRY_DELAYS_MS = Object\.freeze\(\[0, 250, 1000, 3000\]\)/);
   assert.match(observer, /result\?\.ok === true && result\?\.stopped === true/);

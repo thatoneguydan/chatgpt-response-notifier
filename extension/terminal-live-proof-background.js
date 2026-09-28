@@ -3,7 +3,7 @@
 (() => {
   if (globalThis.__chatgptNotifierTerminalLiveProof) return;
 
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
   const OBSERVATION_DELAYS_MS = Object.freeze([50, 350, 1200]);
 
   function suffix(value) {
@@ -60,6 +60,27 @@
     };
   }
 
+  function boundedCount(value) {
+    return Math.max(0, Math.min(999, Number(value || 0)));
+  }
+
+  function emitScanDiagnostic(message, sender, target) {
+    const shape = message?.shape || {};
+    const reason = [
+      'CHATGPT_RENDERED_TERMINAL_SCAN_DIAGNOSTIC',
+      `turns=${boundedCount(shape.turnCount)}`,
+      `roots=${boundedCount(shape.rootCount)}`,
+      `preUsers=${boundedCount(shape.precedingUserCount)}`,
+      `postUsers=${boundedCount(shape.followingUserCount)}`,
+      `foreignAssistants=${boundedCount(shape.foreignAssistantCount)}`,
+      `boundary=${String(shape.boundaryReason || 'unknown').replace(/[^a-z0-9-]/gi, '').slice(0, 40) || 'unknown'}`
+    ].join(';');
+    emit('terminal-scan-no-status', {
+      ...diagnosticFields(message, sender, target),
+      reason
+    });
+  }
+
   async function observePersistedState(message, sender, target, delayMs) {
     if (!target?.id) return;
     const monitor = globalThis.__chatgptNotifierMonitorBackground;
@@ -86,13 +107,19 @@
   }
 
   function handleMessage(message, sender) {
-    if (!['CHATGPT_RENDERED_TERMINAL_STATUS', 'CHATGPT_RESPONSE_STREAM_TERMINAL_STATUS'].includes(String(message?.type || ''))) {
+    const type = String(message?.type || '');
+    if (type === 'CHATGPT_RENDERED_TERMINAL_SCAN_DIAGNOSTIC') {
+      const target = targetForSender(sender);
+      emitScanDiagnostic(message, sender, target);
+      return false;
+    }
+    if (!['CHATGPT_RENDERED_TERMINAL_STATUS', 'CHATGPT_RESPONSE_STREAM_TERMINAL_STATUS'].includes(type)) {
       return false;
     }
     const target = targetForSender(sender);
     emit('terminal-message-received', {
       ...diagnosticFields(message, sender, target),
-      reason: String(message?.type || '')
+      reason: type
     });
     for (const delayMs of OBSERVATION_DELAYS_MS) {
       observePersistedState(message, sender, target, delayMs).catch(() => {});
@@ -105,6 +132,7 @@
   globalThis.__chatgptNotifierTerminalLiveProof = Object.freeze({
     version: RUNTIME_VERSION,
     emit,
+    emitScanDiagnostic,
     observePersistedState
   });
 })();

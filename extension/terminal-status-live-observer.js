@@ -1,18 +1,23 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const RETRY_DELAYS_MS = Object.freeze([0, 250, 1000, 3000]);
+  const NO_STATUS_DIAGNOSTIC_DELAY_MS = 1500;
+  const NO_STATUS_DIAGNOSTIC_MIN_INTERVAL_MS = 10000;
 
   try { globalThis.__chatgptNotifierRenderedTerminalObserver?.dispose?.(); } catch {}
 
   const abortController = new AbortController();
   let observer = null;
   let scanTimer = null;
+  let diagnosticTimer = null;
   let retryTimers = [];
   let deliveredKey = '';
   let inFlightKey = '';
+  let lastDiagnosticKey = '';
+  let lastDiagnosticAt = 0;
 
   const inline = (value) => String(value || '').replace(/\s+/g, ' ').trim();
 
@@ -101,6 +106,7 @@
     return {
       identity,
       assistantTurn,
+      turnCount: nodes.length,
       snapshot: {
         conversationId: identity.id,
         conversationUrl: identity.url,
@@ -123,11 +129,17 @@
     };
   }
 
+  function detectedStatus(current) {
+    if (!current) return '';
+    const code = String(globalThis.ChatGPTNotifierRenderedTerminalStatus?.detect?.(current.assistantTurn) || '');
+    return globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(code) === true ? code : '';
+  }
+
   function statusForLatestAssistant() {
     const current = latestIdentity();
     if (!current) return null;
-    const code = String(globalThis.ChatGPTNotifierRenderedTerminalStatus?.detect?.(current.assistantTurn) || '');
-    if (globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(code) !== true) return null;
+    const code = detectedStatus(current);
+    if (!code) return null;
     return {
       ...current,
       statusCode: code,
@@ -140,6 +152,12 @@
       try { clearTimeout(timer); } catch {}
     }
     retryTimers = [];
+  }
+
+  function clearDiagnosticTimer() {
+    if (diagnosticTimer === null) return;
+    try { clearTimeout(diagnosticTimer); } catch {}
+    diagnosticTimer = null;
   }
 
   async function publishDetected(current) {
@@ -155,12 +173,10 @@
         statusLine: current.statusLine,
         snapshot
       });
-      // Notification delivery is independent of watchdog parking. Only acknowledge
-      // this footer after the background authority proves the watchdog was stopped;
-      // otherwise keep retries eligible so a notification cannot mask a live timer.
       if (result?.ok === true && result?.stopped === true) {
         deliveredKey = key;
         clearRetryTimers();
+        clearDiagnosticTimer();
         return true;
       }
       return false;
@@ -171,10 +187,74 @@
     }
   }
 
+  async function publishNoStatusDiagnostic() {
+    diagnosticTimer = null;
+    const current = latestIdentity();
+    if (!current || detectedStatus(current)) return;
+    const snapshot = current.snapshot || {};
+    if (!snapshot.conversationId || !snapshot.promptKey || !snapshot.assistantKey || !snapshot.assistantRevision) return;
+    const shape = (() => {
+      try { return globalThis.ChatGPTNotifierRenderedTerminalStatus?.inspect?.(current.assistantTurn) || {}; } catch { return {}; }
+    })();
+    const safeShape = {
+      turnCount: Math.max(0, Number(current.turnCount || 0)),
+      rootCount: Math.max(0, Number(shape.rootCount || 0)),
+      precedingUserCount: Math.max(0, Number(shape.precedingUserCount || 0)),
+      followingUserCount: Math.max(0, Number(shape.followingUserCount || 0)),
+      foreignAssistantCount: Math.max(0, Number(shape.foreignAssistantCount || 0)),
+      boundaryReason: String(shape.boundaryReason || 'unknown').slice(0, 40)
+    };
+    const key = [
+      snapshot.assistantKey,
+      snapshot.assistantRevision,
+      safeShape.turnCount,
+      safeShape.rootCount,
+      safeShape.precedingUserCount,
+      safeShape.followingUserCount,
+      safeShape.foreignAssistantCount,
+      safeShape.boundaryReason
+    ].join('|');
+    const now = Date.now();
+    if (key === lastDiagnosticKey && now - lastDiagnosticAt < NO_STATUS_DIAGNOSTIC_MIN_INTERVAL_MS) return;
+    lastDiagnosticKey = key;
+    lastDiagnosticAt = now;
+    try {
+      await chrome.runtime.sendMessage({
+        type: 'CHATGPT_RENDERED_TERMINAL_SCAN_DIAGNOSTIC',
+        snapshot: {
+          conversationId: snapshot.conversationId,
+          requestId: snapshot.requestId,
+          promptKey: snapshot.promptKey,
+          assistantKey: snapshot.assistantKey,
+          assistantRevision: snapshot.assistantRevision
+        },
+        shape: safeShape
+      });
+    } catch {}
+  }
+
+  function scheduleNoStatusDiagnostic() {
+    clearDiagnosticTimer();
+    diagnosticTimer = setTimeout(() => {
+      publishNoStatusDiagnostic().catch(() => false);
+    }, NO_STATUS_DIAGNOSTIC_DELAY_MS);
+  }
+
   function scan() {
     scanTimer = null;
-    const current = statusForLatestAssistant();
-    if (!current) return;
+    const currentIdentity = latestIdentity();
+    if (!currentIdentity) return;
+    const code = detectedStatus(currentIdentity);
+    if (!code) {
+      scheduleNoStatusDiagnostic();
+      return;
+    }
+    clearDiagnosticTimer();
+    const current = {
+      ...currentIdentity,
+      statusCode: code,
+      statusLine: `[GITHUB_STATUS: ${code}]`
+    };
     const key = `${current.snapshot.promptKey}|${current.snapshot.assistantKey}|${current.snapshot.assistantRevision}|${current.statusCode}`;
     if (key === deliveredKey || key === inFlightKey) return;
     clearRetryTimers();
@@ -221,6 +301,7 @@
       try { observer?.disconnect(); } catch {}
       try { if (scanTimer !== null) clearTimeout(scanTimer); } catch {}
       clearRetryTimers();
+      clearDiagnosticTimer();
       try { chrome.runtime.onMessage.removeListener(handleRuntimeMessage); } catch {}
       if (globalThis.__chatgptNotifierRenderedTerminalObserver === runtime) {
         delete globalThis.__chatgptNotifierRenderedTerminalObserver;

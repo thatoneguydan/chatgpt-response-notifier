@@ -174,7 +174,7 @@ test('notifier terminal detector sees a footer sibling inside the same assistant
   })()`);
 
   expect(detection).toEqual({
-    version: 3,
+    version: 4,
     wrapper: 'COMPLETE_APPLIED',
     semanticAssistant: 'COMPLETE_APPLIED'
   });
@@ -206,5 +206,43 @@ test('notifier terminal detector crosses deep same-turn wrappers until a neighbo
   })()`);
 
   expect(detection).toBe('COMPLETE_APPLIED');
+  await expectTrafficInert(chatgptTraffic);
+});
+
+test('notifier terminal detector includes a footer when the preceding prompt shares the response-group wrapper', async ({ fixturePage, chatgptTraffic }) => {
+  await fixturePage.evaluate(() => {
+    const originalUser = document.querySelector('[data-testid="conversation-turn-0"]');
+    const assistantTurn = document.querySelector('[data-testid="conversation-turn-1"]');
+    const semanticAssistant = assistantTurn?.querySelector('[data-message-author-role="assistant"]');
+    const footer = assistantTurn?.querySelector('.rendered-footer');
+    if (!originalUser || !assistantTurn || !semanticAssistant || !footer) throw new Error('Fixture response group is incomplete.');
+
+    footer.remove();
+    const responseGroup = document.createElement('section');
+    originalUser.replaceWith(responseGroup);
+    responseGroup.append(originalUser);
+    assistantTurn.replaceWith(document.createComment('assistant-anchor'));
+    responseGroup.append(assistantTurn);
+    responseGroup.append(footer);
+
+    const followingUser = document.createElement('div');
+    followingUser.setAttribute('data-turn', 'user');
+    followingUser.textContent = 'Following prompt boundary';
+    responseGroup.after(followingUser);
+  });
+
+  const result = await evaluateInExtensionWorld(fixturePage, 'ChatGPT Response Notifier', `(() => {
+    const api = globalThis.ChatGPTNotifierRenderedTerminalStatus;
+    const semanticAssistant = document.querySelector('[data-message-author-role="assistant"]');
+    return {
+      code: String(api?.detect?.(semanticAssistant) || ''),
+      shape: api?.inspect?.(semanticAssistant) || null
+    };
+  })()`);
+
+  expect(result.code).toBe('COMPLETE_APPLIED');
+  expect(result.shape.precedingUserCount).toBeGreaterThanOrEqual(1);
+  expect(result.shape.followingUserCount).toBeGreaterThanOrEqual(1);
+  expect(result.shape.boundaryReason).toBe('following-user');
   await expectTrafficInert(chatgptTraffic);
 });

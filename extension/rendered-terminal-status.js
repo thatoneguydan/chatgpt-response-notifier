@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 3;
+  const RUNTIME_VERSION = 4;
   const BLOCK_SELECTOR = 'p, div, section, article';
   const ROLE_SELECTOR = '[data-message-author-role="user"], [data-message-author-role="assistant"], [data-turn="user"], [data-turn="assistant"]';
   const EXCLUDED_SELECTOR = 'pre, code, blockquote, ul, ol, li, button, svg, [role="button"], [aria-hidden="true"], [hidden], [inert], [data-message-author-role="tool"], [data-tool]';
@@ -120,6 +120,15 @@
     }
   }
 
+  function semanticRole(node) {
+    try {
+      const role = String(node?.getAttribute?.('data-message-author-role') || node?.getAttribute?.('data-turn') || '').toLowerCase();
+      return role === 'user' || role === 'assistant' ? role : '';
+    } catch {
+      return '';
+    }
+  }
+
   function sameAssistantTurnRole(node, assistant) {
     if (!node || !assistant) return false;
     if (node === assistant) return true;
@@ -130,34 +139,98 @@
     }
   }
 
-  function detectionRoots(turn) {
+  function follows(reference, candidate) {
+    if (!reference || !candidate || reference === candidate) return false;
+    try {
+      const position = reference.compareDocumentPosition(candidate);
+      const following = typeof Node === 'function' ? Node.DOCUMENT_POSITION_FOLLOWING : 4;
+      return Boolean(position & following);
+    } catch {
+      return false;
+    }
+  }
+
+  function roleBoundary(root, assistant) {
+    const result = {
+      precedingUserCount: 0,
+      followingUserCount: 0,
+      foreignAssistantCount: 0,
+      unsafe: false,
+      reason: ''
+    };
+    try {
+      const roles = Array.from(root?.querySelectorAll?.(ROLE_SELECTOR) || []);
+      for (const node of roles) {
+        if (sameAssistantTurnRole(node, assistant)) continue;
+        const role = semanticRole(node);
+        if (role === 'assistant') {
+          result.foreignAssistantCount += 1;
+          continue;
+        }
+        if (role !== 'user') continue;
+        if (follows(assistant, node)) result.followingUserCount += 1;
+        else result.precedingUserCount += 1;
+      }
+    } catch {}
+    result.unsafe = result.foreignAssistantCount > 0 || result.followingUserCount > 0;
+    if (result.foreignAssistantCount > 0) result.reason = 'foreign-assistant';
+    else if (result.followingUserCount > 0) result.reason = 'following-user';
+    return result;
+  }
+
+  function traverseDetectionRoots(turn) {
     const assistant = assistantRoot(turn);
-    if (!assistant) return [];
+    if (!assistant) {
+      return {
+        roots: [],
+        shape: { rootCount: 0, precedingUserCount: 0, followingUserCount: 0, foreignAssistantCount: 0, boundaryReason: 'assistant-missing' }
+      };
+    }
     const roots = [];
     const add = (node) => {
       if (node && !roots.includes(node)) roots.push(node);
     };
-
     add(assistant);
     add(turn);
 
-    // The semantic assistant marker can sit several wrappers below the rendered
-    // markdown/footer. Do not impose an arbitrary DOM-depth limit: the real safety
-    // boundary is the first ancestor that contains a different user/assistant turn.
-    // This lets one assistant turn own arbitrarily nested presentation wrappers
-    // without ever scanning into a neighboring conversation turn.
+    let precedingUserCount = 0;
+    let followingUserCount = 0;
+    let foreignAssistantCount = 0;
+    let boundaryReason = '';
+
+    // Current ChatGPT can group the prompt and its assistant response under one
+    // presentation wrapper while rendering footer/actions as siblings of the
+    // semantic assistant marker. A preceding user role is therefore part of the
+    // current response group, not a neighboring-turn boundary. A second assistant
+    // or any user role following this assistant still closes the safe scan region.
     let current = turn?.parentElement || assistant?.parentElement || null;
     while (current) {
-      let foreignTurn = false;
-      try {
-        const roles = Array.from(current.querySelectorAll?.(ROLE_SELECTOR) || []);
-        foreignTurn = roles.some((node) => !sameAssistantTurnRole(node, assistant));
-      } catch {}
-      if (foreignTurn) break;
+      const boundary = roleBoundary(current, assistant);
+      precedingUserCount = Math.max(precedingUserCount, boundary.precedingUserCount);
+      followingUserCount = Math.max(followingUserCount, boundary.followingUserCount);
+      foreignAssistantCount = Math.max(foreignAssistantCount, boundary.foreignAssistantCount);
+      if (boundary.unsafe) {
+        boundaryReason = boundary.reason;
+        break;
+      }
       add(current);
       current = current.parentElement || null;
     }
-    return roots;
+
+    return {
+      roots,
+      shape: {
+        rootCount: roots.length,
+        precedingUserCount,
+        followingUserCount,
+        foreignAssistantCount,
+        boundaryReason: boundaryReason || 'root-exhausted'
+      }
+    };
+  }
+
+  function detectionRoots(turn) {
+    return traverseDetectionRoots(turn).roots;
   }
 
   function detect(turn) {
@@ -170,9 +243,15 @@
     return distinct.size === 1 ? String(codes[codes.length - 1] || '') : '';
   }
 
+  function inspect(turn) {
+    const traversal = traverseDetectionRoots(turn);
+    return Object.freeze({ ...traversal.shape });
+  }
+
   globalThis.ChatGPTNotifierRenderedTerminalStatus = Object.freeze({
     version: RUNTIME_VERSION,
     exactStatusCode,
-    detect
+    detect,
+    inspect
   });
 })();
