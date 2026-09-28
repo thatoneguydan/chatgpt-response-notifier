@@ -19,15 +19,17 @@
   function emit(status, fields = {}) {
     let extensionVersion = '';
     try { extensionVersion = String(chrome.runtime.getManifest().version || ''); } catch {}
+    const commitSuffix = buildCommitSuffix();
+    const fieldReason = fields.reason ? String(fields.reason).replace(/[\r\n\t]+/g, ' ').slice(0, 140) : '';
     const diagnostic = {
       source: 'terminal-live-proof',
       status: String(status || 'unknown').slice(0, 80),
       observedAt: new Date().toISOString(),
       extensionVersion,
-      buildCommitSuffix: buildCommitSuffix(),
+      buildCommitSuffix: commitSuffix,
       tabId: Number.isInteger(fields.tabId) ? fields.tabId : undefined,
       statusCode: fields.statusCode ? String(fields.statusCode).slice(0, 40) : undefined,
-      reason: fields.reason ? String(fields.reason).replace(/[\r\n\t]+/g, ' ').slice(0, 160) : undefined,
+      reason: `build=${commitSuffix || 'unknown'}${fieldReason ? `;${fieldReason}` : ''}`.slice(0, 160),
       conversationSuffix: suffix(fields.conversationId),
       requestSuffix: suffix(fields.requestId),
       promptSuffix: suffix(fields.promptKey),
