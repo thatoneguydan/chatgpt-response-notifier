@@ -1,4 +1,11 @@
-# ChatGPT Response Notifier 0.9.95
+# ChatGPT Response Notifier 0.9.96
+
+- Moves both managed update manifests from the branch-based raw-content CDN to GitHub's repository-contents API using the raw media type, so the long-lived Windows helper reads the canonical current branch state rather than a stale raw edge.
+- Performs each manifest read through a fresh one-request connection with cache-busting, no-cache/no-store, `Connection: close`, and an explicit GitHub API version. A helper process can no longer stay pinned to an old feed view across releases.
+- Fixes the deployment failure exposed by Quick Continue 1.2.27, where the Glass helper repeatedly reported `availableVersion=1.2.24` even while an independent request from the same machine saw the published 1.2.27 feed.
+- Applies the same authoritative manifest transport to the notifier's own updater so both managed release paths share the hardened behavior.
+
+## Previous: 0.9.95
 
 - Fixes the live `COMPLETE_APPLIED` miss reproduced on Glass with notifier 0.9.94: the current ChatGPT DOM can render the final status footer as a sibling of the semantic assistant marker, while the rendered-terminal detector was scanning only inside that marker.
 - Expands terminal detection only through ancestors that still belong to the same assistant turn, so a visible sibling footer is recognized without allowing a neighboring user or assistant turn to supply the status.
