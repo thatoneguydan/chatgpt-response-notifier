@@ -122,7 +122,7 @@ test('live terminal parser recovers a segmented footer even when parent innerTex
 
 test('terminal parser follows a semantic assistant marker to its same-turn wrapper footer', () => {
   const detector = loadDetector();
-  assert.equal(detector.version, 2);
+  assert.equal(detector.version, 3);
 
   const semanticAssistant = new FakeNode('div', 'Finished successfully.', [], { 'data-turn': 'assistant' });
   const footer = new FakeNode('p', '[GITHUB_STATUS: COMPLETE_APPLIED]');
@@ -179,7 +179,7 @@ test('rendered terminal authority is hot-bound and feeds both watchdog parking a
   const rebind = read('extension/page-runtime-rebind.js');
   const streamBridge = read('extension/response-stream-status-bridge.js');
 
-  assert.equal(manifest.version, '0.9.96');
+  assert.equal(manifest.version, '0.9.97');
   assert.ok(manifest.content_scripts[0].js.includes('rendered-terminal-status.js'));
   assert.ok(manifest.content_scripts[0].js.includes('terminal-status-live-observer.js'));
   assert.ok(manifest.content_scripts[0].js.indexOf('rendered-terminal-status.js') < manifest.content_scripts[0].js.indexOf('terminal-status-live-observer.js'));
