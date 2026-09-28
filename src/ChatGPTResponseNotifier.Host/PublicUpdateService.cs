@@ -40,8 +40,8 @@ internal sealed class PublicUpdateService : IDisposable
         // Explicit release-acceptance checks and the periodic updater share this
         // service. Returning an in-flight snapshot lets a caller observe new files
         // on disk without receiving the InstalledBundle that activates the matching
-        // helper process. Serialize instead: every caller gets a fresh cache-busted
-        // feed read after the preceding check completes.
+        // helper process. Serialize instead: every caller gets an authoritative
+        // GitHub contents-API feed read after the preceding check completes.
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
 
         string? archivePath = null;
@@ -50,16 +50,10 @@ internal sealed class PublicUpdateService : IDisposable
             var currentVersion = BundleInstaller.ReadInstalledExtensionVersion() ?? _status.CurrentVersion;
             await SetStatusAsync(new UpdateStatusSnapshot("checking", currentVersion)).ConfigureAwait(false);
 
-            var manifestUrl = $"{PublicUpdateFeed.ManifestUrl}?cacheBust={DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
-            using var manifestRequest = new HttpRequestMessage(HttpMethod.Get, manifestUrl);
-            manifestRequest.Headers.CacheControl = new CacheControlHeaderValue
-            {
-                NoCache = true,
-                NoStore = true
-            };
-            using var manifestResponse = await _http.SendAsync(manifestRequest, HttpCompletionOption.ResponseContentRead, cancellationToken).ConfigureAwait(false);
-            manifestResponse.EnsureSuccessStatusCode();
-            var manifestJson = await manifestResponse.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
+            var manifestJson = await FreshGitHubManifestClient.GetRawAsync(
+                PublicUpdateFeed.ManifestUrl,
+                "ChatGPTResponseNotifier",
+                cancellationToken).ConfigureAwait(false);
             var manifest = PublicUpdateFeed.Parse(manifestJson);
 
             if (PublicUpdateFeed.CompareVersions(manifest.Version, currentVersion) <= 0)
