@@ -216,7 +216,7 @@ foreach ($statusCode in $DefinitiveStatusCodes) {
     }
 
     if ($null -eq $acceptedForCode) {
-        throw "Live acceptance failed for $statusCode: terminal observation exists, but matching persisted watchdog stop + unique presented toast/helper acknowledgement evidence is incomplete."
+        throw "Live acceptance failed for ${statusCode}: terminal observation exists, but matching persisted watchdog stop + unique presented toast/helper acknowledgement evidence is incomplete."
     }
     $accepted += $acceptedForCode
 }
