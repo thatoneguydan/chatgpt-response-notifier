@@ -174,7 +174,7 @@ test('notifier terminal detector sees a footer sibling inside the same assistant
   })()`);
 
   expect(detection).toEqual({
-    version: 2,
+    version: 3,
     wrapper: 'COMPLETE_APPLIED',
     semanticAssistant: 'COMPLETE_APPLIED'
   });
