@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
   const STORAGE_PREFIX = 'quick-continue:manual-timestamp:';
   const CLOCK_SELECTOR = '[aria-label="Current local time"]';
   const previousRuntime = globalThis.__chatgptQuickContinueConversationStateRuntime;
@@ -138,9 +138,10 @@
 
     // hover-edit-script is loaded before this runtime and owns the clock toggle.
     // Its document-capture listener has already committed the new in-memory
-    // state by the time this listener runs. Copy that state into the route owner
-    // synchronously so a composer MutationObserver microtask cannot re-apply the
-    // previous desired state before a deferred timer gets to persist the choice.
+    // state by the time this listener runs. Invalidate any asynchronous restore
+    // that started before this trusted choice so a late storage read cannot
+    // overwrite the user's newer state.
+    restoreGeneration += 1;
     const enabled = currentEnabled();
     desiredEnabled = enabled;
     const conversationId = conversationIdFromUrl();
@@ -163,6 +164,7 @@
     if (areaName !== 'local' || !activeConversationId) return;
     const key = storageKey(activeConversationId);
     if (!Object.prototype.hasOwnProperty.call(changes || {}, key)) return;
+    restoreGeneration += 1;
     desiredEnabled = changes[key]?.newValue === true;
     provisionalEnabled = desiredEnabled;
     provisionalTouched = false;
