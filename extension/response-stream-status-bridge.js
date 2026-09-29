@@ -45,13 +45,14 @@
       const statusCode = String(data.statusCode || '');
       if (!globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode)) return;
       const snapshot = currentTerminalSnapshot();
+      const message = {
+        type: 'CHATGPT_RESPONSE_STREAM_TERMINAL_STATUS',
+        statusCode,
+        transport
+      };
+      if (snapshot) message.snapshot = snapshot;
       try {
-        chrome.runtime.sendMessage({
-          type: 'CHATGPT_RESPONSE_STREAM_TERMINAL_STATUS',
-          statusCode,
-          transport,
-          snapshot
-        }).catch(() => {});
+        chrome.runtime.sendMessage(message).catch(() => {});
       } catch {}
       return;
     }
