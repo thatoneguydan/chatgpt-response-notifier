@@ -137,7 +137,7 @@ test('lost in-memory request context still queues one durable definitive notific
   const harness = buildContext();
   vm.runInContext(source, harness.context);
   const runtime = harness.context.__chatgptNotifierStreamTerminalDurableFallback;
-  assert.equal(runtime.version, 2);
+  assert.equal(runtime.version, 3);
 
   const result = await runtime.handleTerminalStatus(
     { type: 'CHATGPT_RESPONSE_STREAM_TERMINAL_STATUS', statusCode: 'BLOCKED_HUMAN' },
