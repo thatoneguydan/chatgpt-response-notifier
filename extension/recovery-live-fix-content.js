@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 5;
+  const RUNTIME_VERSION = 6;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const FALLBACK_SELECTOR = [
     '[role="alert"]',
@@ -29,8 +29,6 @@
 
   try { globalThis.__chatgptNotifierRecoveryLiveContent?.dispose?.(); } catch {}
 
-  let observer = null;
-  let publishTimer = null;
   let disposed = false;
 
   const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
@@ -281,14 +279,6 @@
     } catch { return false; }
   }
 
-  function schedulePublish() {
-    if (disposed || publishTimer !== null) return;
-    publishTimer = setTimeout(() => {
-      publishTimer = null;
-      publishExplicitState().catch(() => {});
-    }, 60);
-  }
-
   const messageListener = (message, _sender, sendResponse) => {
     if (message?.type === 'CHATGPT_RECOVERY_LIVE_PING') {
       sendResponse?.({ ok: true, runtimeVersion: RUNTIME_VERSION });
@@ -308,12 +298,6 @@
   };
 
   chrome.runtime.onMessage.addListener(messageListener);
-  const root = document.documentElement || document.body;
-  if (root && typeof MutationObserver === 'function') {
-    observer = new MutationObserver(schedulePublish);
-    observer.observe(root, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['role', 'aria-live', 'aria-label', 'aria-hidden', 'hidden', 'data-testid', 'class', 'style'] });
-  }
-  setTimeout(() => publishExplicitState().catch(() => {}), 0);
 
   const runtime = {
     version: RUNTIME_VERSION,
@@ -325,8 +309,6 @@
     dispose() {
       disposed = true;
       try { chrome.runtime.onMessage.removeListener(messageListener); } catch {}
-      try { observer?.disconnect(); } catch {}
-      if (publishTimer !== null) clearTimeout(publishTimer);
       if (globalThis.__chatgptNotifierRecoveryLiveContent === runtime) delete globalThis.__chatgptNotifierRecoveryLiveContent;
     }
   };
