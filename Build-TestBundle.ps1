@@ -80,6 +80,7 @@ $managedBootstrapSources = @(
     'watchdog-sole-continuation-authority-background.js',
     'watchdog-request-lifecycle-fix-background.js',
     'terminal-watchdog-authority-background.js',
+    'stream-terminal-snapshot-notification-background.js',
     'terminal-live-proof-background.js',
     'response-stream-terminal-durable-fallback-background.js',
     'quick-continue-monitor-bridge-background.js',
