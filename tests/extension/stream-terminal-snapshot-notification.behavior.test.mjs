@@ -110,7 +110,7 @@ test('stream bridge forwards bounded monitor identity with a terminal status', (
   assert.match(bridge, /__chatgptNotifierMonitorRuntime\?\.snapshot\?\.\(\)/);
   assert.match(bridge, /requestStartedAt:\s*Math\.max/);
   assert.match(bridge, /assistantRevision/);
-  assert.match(bridge, /snapshot\n\s*\}\)\.catch/);
+  assert.match(bridge, /if \(snapshot\) message\.snapshot = snapshot;/);
 });
 
 test('exact stream snapshot notification authority loads after watchdog authority and before fallback', () => {
