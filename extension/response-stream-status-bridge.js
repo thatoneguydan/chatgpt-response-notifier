@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 3;
+  const RUNTIME_VERSION = 2;
   try { globalThis.__chatgptNotifierStreamStatusBridge?.dispose?.(); } catch {}
 
   const EVENT_MARKER = 'chatgpt-response-notifier-stream-status-v1';
