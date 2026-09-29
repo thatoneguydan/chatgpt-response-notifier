@@ -223,7 +223,7 @@ test('rendered terminal authority is hot-bound and feeds both watchdog parking a
   assert.ok(manifest.content_scripts[0].js.includes('terminal-status-live-observer.js'));
   assert.ok(manifest.content_scripts[0].js.indexOf('rendered-terminal-status.js') < manifest.content_scripts[0].js.indexOf('terminal-status-live-observer.js'));
 
-  assert.match(observer, /RUNTIME_VERSION = 3/);
+  assert.match(observer, /RUNTIME_VERSION = 4/);
   assert.match(observer, /CHATGPT_RENDERED_TERMINAL_STATUS/);
   assert.match(observer, /CHATGPT_RENDERED_TERMINAL_IDENTITY_QUERY/);
   assert.match(observer, /CHATGPT_RENDERED_TERMINAL_SCAN_DIAGNOSTIC/);
