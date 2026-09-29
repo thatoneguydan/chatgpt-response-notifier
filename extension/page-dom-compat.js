@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   try { globalThis.__chatgptNotifierPageDomCompat?.dispose?.(); } catch {}
 
   if (typeof Document === 'undefined' || typeof Element === 'undefined') return;
@@ -12,6 +12,19 @@
     '[data-message-author-role="assistant"]',
     '[data-turn="user"]',
     '[data-turn="assistant"]'
+  ].join(',');
+  const SPEAKER_LABEL_SELECTOR = [
+    'h1.sr-only', 'h2.sr-only', 'h3.sr-only', 'h4.sr-only', 'h5.sr-only', 'h6.sr-only',
+    'h1.visually-hidden', 'h2.visually-hidden', 'h3.visually-hidden', 'h4.visually-hidden', 'h5.visually-hidden', 'h6.visually-hidden',
+    'h1.cdk-visually-hidden', 'h2.cdk-visually-hidden', 'h3.cdk-visually-hidden', 'h4.cdk-visually-hidden', 'h5.cdk-visually-hidden', 'h6.cdk-visually-hidden'
+  ].join(',');
+  const TURN_CONTAINER_SELECTOR = [
+    LEGACY_TURN_SELECTOR,
+    '[data-turn-id]',
+    '[data-message-id]',
+    '[data-turn]',
+    'article',
+    'section'
   ].join(',');
   const LEGACY_COMPOSER_SELECTORS = new Set([
     '#prompt-textarea',
@@ -32,6 +45,7 @@
   const nativeElementQuerySelectorAll = Element.prototype.querySelectorAll;
   const nativeClosest = Element.prototype.closest;
   const nativeGetAttribute = Element.prototype.getAttribute;
+  const speakerRoles = new WeakMap();
 
   function nativeQueryAll(root, selector) {
     try {
@@ -49,7 +63,16 @@
     try { return nativeClosest.call(node, selector); } catch { return null; }
   }
 
+  function speakerLabelRole(node) {
+    const text = String(node?.textContent || node?.innerText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (text === 'you said:') return 'user';
+    if (text === 'chatgpt said:' || text === 'assistant said:') return 'assistant';
+    return '';
+  }
+
   function semanticRole(node) {
+    const synthetic = speakerRoles.get(node);
+    if (synthetic === 'user' || synthetic === 'assistant') return synthetic;
     const value = String(
       nativeAttribute(node, 'data-message-author-role')
       || nativeAttribute(node, 'data-turn')
@@ -70,12 +93,28 @@
     return 0;
   }
 
+  function speakerLabelTurns(root) {
+    const turns = [];
+    const seen = new Set();
+    for (const label of nativeQueryAll(root, SPEAKER_LABEL_SELECTOR)) {
+      const role = speakerLabelRole(label);
+      if (!role) continue;
+      let turn = nativeClosestTo(label, TURN_CONTAINER_SELECTOR);
+      if (!turn) turn = label.parentElement || null;
+      if (!turn || seen.has(turn)) continue;
+      speakerRoles.set(turn, role);
+      seen.add(turn);
+      turns.push(turn);
+    }
+    return turns.sort(compareDomOrder);
+  }
+
   function compatibleTurns(root) {
     const legacy = nativeQueryAll(root, LEGACY_TURN_SELECTOR);
     const roles = nativeQueryAll(root, SEMANTIC_ROLE_SELECTOR).filter((node) => semanticRole(node));
-    if (!roles.length) return legacy;
-
+    const speakerTurns = speakerLabelTurns(root);
     const combined = [...legacy];
+
     for (const roleNode of roles) {
       if (legacy.some((turn) => turn === roleNode || turn.contains?.(roleNode))) continue;
       const role = semanticRole(roleNode);
@@ -84,6 +123,12 @@
       if (sameRoleAncestor && sameRoleAncestor !== roleNode) continue;
       combined.push(roleNode);
     }
+
+    for (const speakerTurn of speakerTurns) {
+      if (combined.some((turn) => turn === speakerTurn || turn.contains?.(speakerTurn) || speakerTurn.contains?.(turn))) continue;
+      combined.push(speakerTurn);
+    }
+
     return Array.from(new Set(combined)).sort(compareDomOrder);
   }
 
@@ -181,14 +226,21 @@
     const value = String(selector || '');
     const direct = nativeClosest.call(this, selector);
     if (direct || value !== LEGACY_TURN_SELECTOR) return direct;
-    return nativeClosestTo(this, SEMANTIC_ROLE_SELECTOR);
+    const semantic = nativeClosestTo(this, SEMANTIC_ROLE_SELECTOR);
+    if (semantic) return semantic;
+    for (const turn of speakerLabelTurns(document)) {
+      if (turn === this || turn.contains?.(this)) return turn;
+    }
+    return null;
   }
 
   function notifierCompatGetAttribute(name) {
     const value = nativeGetAttribute.call(this, name);
-    if (value != null || String(name || '').toLowerCase() !== 'data-testid') return value;
+    const normalizedName = String(name || '').toLowerCase();
     const role = semanticRole(this);
-    if (!role) return value;
+    if (value != null) return value;
+    if ((normalizedName === 'data-turn' || normalizedName === 'data-message-author-role') && role) return role;
+    if (normalizedName !== 'data-testid' || !role) return value;
 
     const messageId = String(
       nativeAttribute(this, 'data-message-id')
@@ -197,8 +249,8 @@
     ).trim();
     if (messageId) return `conversation-turn-${messageId}`;
 
-    const roles = nativeQueryAll(document, SEMANTIC_ROLE_SELECTOR).filter((node) => semanticRole(node));
-    const index = Math.max(0, roles.indexOf(this));
+    const turns = compatibleTurns(document);
+    const index = Math.max(0, turns.indexOf(this));
     return `conversation-turn-compat-${role}-${index}`;
   }
 
@@ -212,6 +264,7 @@
   const runtime = {
     version: RUNTIME_VERSION,
     compatibleTurns,
+    speakerLabelTurns,
     fallbackComposer,
     fallbackSend,
     fallbackStop,
