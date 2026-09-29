@@ -19,3 +19,15 @@ test('rendered terminal observer reports bounded identity-missing diagnostics in
   assert.match(source, /CHATGPT_RENDERED_TERMINAL_SCAN_DIAGNOSTIC/);
   assert.doesNotMatch(source, /\bfetch\s*\(|XMLHttpRequest|new WebSocket/);
 });
+
+test('rendered terminal observer coalesces mutation storms instead of rescanning every 40ms', () => {
+  assert.match(source, /const RUNTIME_VERSION = 4;/);
+  assert.match(source, /const SCAN_DEBOUNCE_MS = 250;/);
+  assert.match(source, /const MAX_SCAN_INTERVAL_MS = 1500;/);
+  assert.match(source, /let maxScanTimer = null;/);
+  assert.match(source, /scanTimer = setTimeout\(runScheduledScan, SCAN_DEBOUNCE_MS\);/);
+  assert.match(source, /maxScanTimer = setTimeout\(runScheduledScan, MAX_SCAN_INTERVAL_MS\);/);
+  assert.match(source, /function clearScanTimers\(\)/);
+  assert.match(source, /clearScanTimers\(\);\s*clearRetryTimers\(\);/s);
+  assert.doesNotMatch(source, /setTimeout\(scan, 40\)/);
+});
