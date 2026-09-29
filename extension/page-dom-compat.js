@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
   try { globalThis.__chatgptNotifierPageDomCompat?.dispose?.(); } catch {}
 
   if (typeof Document === 'undefined' || typeof Element === 'undefined') return;
@@ -26,6 +26,7 @@
     'article',
     'section'
   ].join(',');
+  const SPEAKER_CACHE_MS = 500;
   const LEGACY_COMPOSER_SELECTORS = new Set([
     '#prompt-textarea',
     'textarea[data-testid="prompt-textarea"]',
@@ -46,6 +47,9 @@
   const nativeClosest = Element.prototype.closest;
   const nativeGetAttribute = Element.prototype.getAttribute;
   const speakerRoles = new WeakMap();
+  const speakerTurnCache = new WeakMap();
+  const syntheticTurnIds = new WeakMap();
+  let nextSyntheticTurnId = 1;
 
   function nativeQueryAll(root, selector) {
     try {
@@ -93,7 +97,26 @@
     return 0;
   }
 
+  function syntheticTurnId(node, role) {
+    let value = syntheticTurnIds.get(node);
+    if (value) return value;
+    value = `conversation-turn-compat-${role}-${nextSyntheticTurnId}`;
+    nextSyntheticTurnId += 1;
+    syntheticTurnIds.set(node, value);
+    return value;
+  }
+
   function speakerLabelTurns(root) {
+    const now = Date.now();
+    const cached = speakerTurnCache.get(root);
+    if (
+      cached
+      && now - cached.observedAt < SPEAKER_CACHE_MS
+      && cached.turns.every((turn) => turn?.isConnected !== false)
+    ) {
+      return cached.turns;
+    }
+
     const turns = [];
     const seen = new Set();
     for (const label of nativeQueryAll(root, SPEAKER_LABEL_SELECTOR)) {
@@ -103,18 +126,17 @@
       if (!turn) turn = label.parentElement || null;
       if (!turn || seen.has(turn)) continue;
       speakerRoles.set(turn, role);
+      syntheticTurnId(turn, role);
       seen.add(turn);
       turns.push(turn);
     }
-    return turns.sort(compareDomOrder);
+    const ordered = turns.sort(compareDomOrder);
+    speakerTurnCache.set(root, { observedAt: now, turns: ordered });
+    return ordered;
   }
 
-  function compatibleTurns(root) {
-    const legacy = nativeQueryAll(root, LEGACY_TURN_SELECTOR);
-    const roles = nativeQueryAll(root, SEMANTIC_ROLE_SELECTOR).filter((node) => semanticRole(node));
-    const speakerTurns = speakerLabelTurns(root);
+  function semanticTurns(legacy, roles) {
     const combined = [...legacy];
-
     for (const roleNode of roles) {
       if (legacy.some((turn) => turn === roleNode || turn.contains?.(roleNode))) continue;
       const role = semanticRole(roleNode);
@@ -123,13 +145,14 @@
       if (sameRoleAncestor && sameRoleAncestor !== roleNode) continue;
       combined.push(roleNode);
     }
-
-    for (const speakerTurn of speakerTurns) {
-      if (combined.some((turn) => turn === speakerTurn || turn.contains?.(speakerTurn) || speakerTurn.contains?.(turn))) continue;
-      combined.push(speakerTurn);
-    }
-
     return Array.from(new Set(combined)).sort(compareDomOrder);
+  }
+
+  function compatibleTurns(root) {
+    const legacy = nativeQueryAll(root, LEGACY_TURN_SELECTOR);
+    const roles = nativeQueryAll(root, SEMANTIC_ROLE_SELECTOR).filter((node) => semanticRole(node));
+    if (legacy.length || roles.length) return semanticTurns(legacy, roles);
+    return speakerLabelTurns(root);
   }
 
   function visibleEnough(node) {
@@ -228,8 +251,10 @@
     if (direct || value !== LEGACY_TURN_SELECTOR) return direct;
     const semantic = nativeClosestTo(this, SEMANTIC_ROLE_SELECTOR);
     if (semantic) return semantic;
-    for (const turn of speakerLabelTurns(document)) {
-      if (turn === this || turn.contains?.(this)) return turn;
+    let candidate = this;
+    while (candidate) {
+      if (speakerRoles.get(candidate)) return candidate;
+      candidate = candidate.parentElement || null;
     }
     return null;
   }
@@ -248,10 +273,7 @@
       || ''
     ).trim();
     if (messageId) return `conversation-turn-${messageId}`;
-
-    const turns = compatibleTurns(document);
-    const index = Math.max(0, turns.indexOf(this));
-    return `conversation-turn-compat-${role}-${index}`;
+    return syntheticTurnId(this, role);
   }
 
   Document.prototype.querySelector = notifierCompatDocumentQuerySelector;
