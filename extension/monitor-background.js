@@ -9,14 +9,15 @@
   const RUN_STORE = 'runs';
   const ATTENTION_STORE = 'attention';
   const PROFILE_STORE = 'profile';
+  const WATCHDOG_SETTINGS_KEY = 'code-watchdog-settings';
   const AUTOMATION_SCHEMA_VERSION = 2;
   const MAX_RUN_AGE_MS = 14 * 24 * 60 * 60 * 1000;
   const MAX_ATTENTION = 20;
   const CODE_WATCHDOG_RECORD_PREFIX = 'code-watchdog:';
   const CODE_WATCHDOG_ALARM_PREFIX = 'chatgpt-notifier-code-watchdog:';
-  const CODE_WATCHDOG_DELAY_MS = 30 * 60_000;
+  const DEFAULT_CODE_WATCHDOG_DELAY_MS = 30 * 60_000;
   const CODE_WATCHDOG_RETRY_MS = 60_000;
-  const CODE_WATCHDOG_MAX_SENDS = 3;
+  const DEFAULT_CODE_WATCHDOG_MAX_SENDS = 3;
   const CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS = 15_000;
   const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 14;
   const HOT_PAGE_MONITOR_RUNTIME_VERSION = 12;
@@ -39,6 +40,7 @@
 
   let databasePromise = null;
   let attentionFlushPromise = null;
+  let codeWatchdogSettingsReady = Promise.resolve();
   const requestTabs = new Map();
   const tabConversations = new Map();
   const codeWatchdogOverviewSignatures = new Map();
@@ -66,6 +68,21 @@
     if (details.tabId < 0 || details.method !== 'POST') return false;
     const path = normalizePathname(details.url);
     return path === '/backend-api/f/conversation' || path === '/backend-api/conversation';
+  }
+
+  function codeWatchdogDelayMs() {
+    const configured = Number(globalThis.ChatGPTNotifierContinuationPolicy?.watchdogDelayMs?.());
+    return Number.isFinite(configured) && configured >= 6000 ? configured : DEFAULT_CODE_WATCHDOG_DELAY_MS;
+  }
+
+  function codeWatchdogMaxSends() {
+    const configured = Number(globalThis.ChatGPTNotifierContinuationPolicy?.watchdogMaxSends?.());
+    return Number.isInteger(configured) && configured >= 0 ? configured : DEFAULT_CODE_WATCHDOG_MAX_SENDS;
+  }
+
+  function currentCodeWatchdogSettings() {
+    try { return globalThis.ChatGPTNotifierContinuationPolicy?.getWatchdogSettings?.() || null; }
+    catch { return null; }
   }
 
   const clone = (value) => value ? structuredClone(value) : value;
@@ -121,7 +138,7 @@
       transaction.objectStore(storeName).delete(key);
       transaction.oncomplete = resolve;
       transaction.onerror = () => reject(transaction.error || new Error(`Could not delete ${storeName}.`));
-      transaction.onabort = () => reject(transaction.error || new Error(`${storeName} delete was aborted.`));
+      transaction.onabort = () => reject(transaction.error || new Error(`${storeName} write was aborted.`));
     });
   }
 
@@ -130,6 +147,32 @@
     const transaction = database.transaction(storeName, 'readonly');
     const records = await requestResult(transaction.objectStore(storeName).getAll(), `Could not list ${storeName}.`);
     return (Array.isArray(records) ? records : []).map(clone);
+  }
+
+  async function persistCodeWatchdogSettings(settingsValue = null) {
+    const policy = globalThis.ChatGPTNotifierContinuationPolicy;
+    if (!policy?.normalizeWatchdogSettings || !policy?.applyWatchdogSettings) return null;
+    const normalized = policy.normalizeWatchdogSettings(settingsValue || currentCodeWatchdogSettings() || {});
+    policy.applyWatchdogSettings(normalized);
+    await putRecord(PROFILE_STORE, {
+      key: WATCHDOG_SETTINGS_KEY,
+      settings: normalized,
+      updatedAt: Date.now()
+    });
+    return normalized;
+  }
+
+  async function restoreCodeWatchdogSettings() {
+    const record = await getRecord(PROFILE_STORE, WATCHDOG_SETTINGS_KEY);
+    if (!record?.settings) return currentCodeWatchdogSettings();
+    try {
+      const normalized = globalThis.ChatGPTNotifierContinuationPolicy?.normalizeWatchdogSettings?.(record.settings);
+      if (!normalized) return currentCodeWatchdogSettings();
+      globalThis.ChatGPTNotifierContinuationPolicy?.applyWatchdogSettings?.(normalized);
+      return normalized;
+    } catch {
+      return currentCodeWatchdogSettings();
+    }
   }
 
   function operatorPauseSource(source) {
@@ -307,7 +350,6 @@
     };
   }
 
-
   const codeWatchdogKey = (conversationId) => `${CODE_WATCHDOG_RECORD_PREFIX}${String(conversationId || '')}`;
   const codeWatchdogAlarmName = (conversationId) => `${CODE_WATCHDOG_ALARM_PREFIX}${encodeURIComponent(String(conversationId || ''))}`;
 
@@ -405,26 +447,19 @@
   async function parkCodeWatchdogForTerminalStatus(clean, sender, existingValue = null, automaticSentAt = 0, automaticPromptKey = '', automaticParentPromptKey = '') {
     const conversationId = String(clean?.conversationId || existingValue?.conversationId || '');
     if (!conversationId) return null;
-    const requestStartedAt = Math.max(
-      0,
-      Number(clean?.requestStartedAt || 0),
-      Number(existingValue?.lastRequestStartedAt || 0)
-    );
+    const requestStartedAt = Math.max(0, Number(clean?.requestStartedAt || 0), Number(existingValue?.lastRequestStartedAt || 0));
     await cancelCodeWatchdogAlarm(conversationId);
     return await putCodeWatchdog(conversationId, {
       ...(existingValue || {}),
       conversationUrl: String(clean?.conversationUrl || existingValue?.conversationUrl || ''),
       ownerTabId: Number.isInteger(sender?.tab?.id) ? sender.tab.id : (existingValue?.ownerTabId ?? null),
       stopped: true,
-      stopReason: `status:${String(clean?.statusCode || "terminal")}`,
+      stopReason: `status:${String(clean?.statusCode || 'terminal')}`,
       waitingForRequestStart: false,
       lastRequestStartedAt: requestStartedAt,
       lastPromptKey: String(clean?.promptKey || existingValue?.lastPromptKey || ''),
       lastStatusCode: String(clean?.statusCode || existingValue?.lastStatusCode || ''),
-      lastAutomaticSentAt: Math.max(
-        Math.max(0, Number(existingValue?.lastAutomaticSentAt || 0)),
-        Math.max(0, Number(automaticSentAt || 0))
-      ),
+      lastAutomaticSentAt: Math.max(Math.max(0, Number(existingValue?.lastAutomaticSentAt || 0)), Math.max(0, Number(automaticSentAt || 0))),
       lastAutomaticPromptKey: String(automaticPromptKey || existingValue?.lastAutomaticPromptKey || ''),
       lastAutomaticParentPromptKey: String(automaticParentPromptKey || existingValue?.lastAutomaticParentPromptKey || ''),
       deadlineAt: 0,
@@ -451,7 +486,7 @@
       lastAutomaticPromptKey: String(automaticPromptKey || ''),
       lastAutomaticParentPromptKey: String(automaticPromptKey ? (clean?.promptKey || '') : ''),
       deadlineAt: Math.max(0, Number(automaticSentAt || 0)) > 0
-        ? Math.max(0, Number(automaticSentAt || 0)) + CODE_WATCHDOG_DELAY_MS
+        ? Math.max(0, Number(automaticSentAt || 0)) + codeWatchdogDelayMs()
         : 0,
       retryAt: 0,
       retryReason: ''
@@ -463,39 +498,23 @@
     const snapshotPromptKey = String(clean?.promptKey || '');
     const currentPromptKey = String(current?.lastPromptKey || '');
     if (!snapshotPromptKey || !currentPromptKey || snapshotPromptKey === currentPromptKey) return true;
-
     const snapshotRequestStartedAt = Math.max(0, Number(clean?.requestStartedAt || 0));
     const currentRequestStartedAt = Math.max(0, Number(current?.lastRequestStartedAt || 0));
-    const targetsAutomaticParent = Boolean(
-      current?.lastAutomaticPromptKey
-      && current?.lastAutomaticParentPromptKey
-      && currentPromptKey === String(current.lastAutomaticPromptKey)
-      && snapshotPromptKey === String(current.lastAutomaticParentPromptKey)
-    );
+    const targetsAutomaticParent = Boolean(current?.lastAutomaticPromptKey && current?.lastAutomaticParentPromptKey && currentPromptKey === String(current.lastAutomaticPromptKey) && snapshotPromptKey === String(current.lastAutomaticParentPromptKey));
     if (targetsAutomaticParent) return true;
-
-    // Request phase is page-global and can advance before ChatGPT's DOM exposes
-    // the new user turn. A stale snapshot of the prior prompt can therefore carry
-    // the new request timestamp. Once a watchdog already tracks another prompt at
-    // the same/newer request time, that old prompt must not overwrite it.
     return snapshotRequestStartedAt > currentRequestStartedAt;
   }
 
   function stoppedWatchdogStillOwnsSnapshot(clean = {}, current = null) {
     if (!current?.stopped) return false;
-    // An operator stops only this timer. The first later request is a fresh
-    // interaction even before ChatGPT has rendered its new user turn.
-    if (current.stopReason === 'operator-timer-stop'
-      && Number(clean?.requestStartedAt || 0) > Number(current.lastRequestStartedAt || 0)) return false;
+    if (current.stopReason === 'operator-timer-stop' && Number(clean?.requestStartedAt || 0) > Number(current.lastRequestStartedAt || 0)) return false;
     const snapshotPromptKey = String(clean?.promptKey || '');
     const currentPromptKey = String(current?.lastPromptKey || '');
-    if (!snapshotPromptKey && Number(clean?.requestStartedAt || 0)
-      <= Number(current?.lastRequestStartedAt || 0)) return true;
+    if (!snapshotPromptKey && Number(clean?.requestStartedAt || 0) <= Number(current?.lastRequestStartedAt || 0)) return true;
     const samePrompt = Boolean(currentPromptKey) && snapshotPromptKey === currentPromptKey;
     const followsAutomaticSend = Boolean(
       (current?.lastAutomaticPromptKey && snapshotPromptKey === String(current.lastAutomaticPromptKey))
-      || (Number(current?.lastAutomaticSentAt || 0) > 0
-        && Math.abs(Math.max(0, Number(clean?.requestStartedAt || 0)) - Number(current.lastAutomaticSentAt || 0)) <= CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS)
+      || (Number(current?.lastAutomaticSentAt || 0) > 0 && Math.abs(Math.max(0, Number(clean?.requestStartedAt || 0)) - Number(current.lastAutomaticSentAt || 0)) <= CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS)
     );
     return samePrompt || followsAutomaticSend;
   }
@@ -507,57 +526,22 @@
     let current = await readCodeWatchdog(conversationId);
     const requestStartedAt = Math.max(0, Number(clean?.requestStartedAt || 0));
     const persistedRequestStartedAt = Math.max(0, Number(current?.lastRequestStartedAt || 0));
-    if (requestStartedAt > 0 && persistedRequestStartedAt > 0 && requestStartedAt < persistedRequestStartedAt) {
-      return current;
-    }
+    if (requestStartedAt > 0 && persistedRequestStartedAt > 0 && requestStartedAt < persistedRequestStartedAt) return current;
 
     const previousStatusCode = String(clean?.previousStatusCode || '');
     const previousPromptKey = String(clean?.previousPromptKey || '');
     const currentPromptKey = String(clean?.promptKey || '');
-    const isAutomaticFollowup = Boolean(
-      current?.lastAutomaticPromptKey
-      && currentPromptKey === String(current.lastAutomaticPromptKey)
-      && current?.lastAutomaticParentPromptKey
-      && previousPromptKey === String(current.lastAutomaticParentPromptKey)
-    );
-    if (
-      isAutomaticFollowup
-      && globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(previousStatusCode)
-      && globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(previousStatusCode) !== true
-    ) {
-      return await parkCodeWatchdogForTerminalStatus(
-        { ...clean, promptKey: previousPromptKey, statusCode: previousStatusCode },
-        sender,
-        current,
-        Number(current.lastAutomaticSentAt || 0),
-        String(current.lastAutomaticPromptKey || ''),
-        previousPromptKey
-      );
+    const isAutomaticFollowup = Boolean(current?.lastAutomaticPromptKey && currentPromptKey === String(current.lastAutomaticPromptKey) && current?.lastAutomaticParentPromptKey && previousPromptKey === String(current.lastAutomaticParentPromptKey));
+    if (isAutomaticFollowup && globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(previousStatusCode) && globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(previousStatusCode) !== true) {
+      return await parkCodeWatchdogForTerminalStatus({ ...clean, promptKey: previousPromptKey, statusCode: previousStatusCode }, sender, current, Number(current.lastAutomaticSentAt || 0), String(current.lastAutomaticPromptKey || ''), previousPromptKey);
     }
 
     let statusCode = String(clean?.statusCode || '');
-    // While a fresh request is starting, the page can still expose the
-    // previous turn's footer. That footer must not stop the new timer.
-    if (current?.stopped === true && current.stopReason === 'operator-timer-stop'
-      && requestStartedAt > persistedRequestStartedAt
-      && String(clean?.promptKey || '') === String(current.lastPromptKey || '')) statusCode = '';
-    if (
-      globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode)
-      && !statusSnapshotBelongsToCurrentWatchdog(clean, current)
-    ) {
-      return current;
-    }
+    if (current?.stopped === true && current.stopReason === 'operator-timer-stop' && requestStartedAt > persistedRequestStartedAt && String(clean?.promptKey || '') === String(current.lastPromptKey || '')) statusCode = '';
+    if (globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode) && !statusSnapshotBelongsToCurrentWatchdog(clean, current)) return current;
     if (globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode)) {
       if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(statusCode) === true) {
-        if (
-          current?.waitingForRequestStart === true
-          && Number(current.lastAutomaticSentAt || 0) > 0
-          && String(current.lastStatusCode || '') === statusCode
-          && requestStartedAt > 0
-          && requestStartedAt === persistedRequestStartedAt
-        ) {
-          return current;
-        }
+        if (current?.waitingForRequestStart === true && Number(current.lastAutomaticSentAt || 0) > 0 && String(current.lastStatusCode || '') === statusCode && requestStartedAt > 0 && requestStartedAt === persistedRequestStartedAt) return current;
         return await resetCodeWatchdogForIncomplete(clean, sender, current);
       }
       return await parkCodeWatchdogForTerminalStatus(clean, sender, current);
@@ -567,21 +551,12 @@
     if (current?.waitingForRequestStart === true) {
       const resetAt = Math.max(0, Number(current.resetAt || 0));
       if (requestStartedAt < resetAt - CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS) return current;
-      current = {
-        ...current,
-        sendCount: 0,
-        stopped: false,
-        stopReason: '',
-        waitingForRequestStart: false
-      };
+      current = { ...current, sendCount: 0, stopped: false, stopReason: '', waitingForRequestStart: false };
     }
 
     if (current?.stopped === true) {
       if (stoppedWatchdogStillOwnsSnapshot(clean, current)) {
-        if (
-          requestStartedAt > Number(current.lastRequestStartedAt || 0)
-          || String(clean.promptKey || '') !== String(current.lastPromptKey || '')
-        ) {
+        if (requestStartedAt > Number(current.lastRequestStartedAt || 0) || String(clean.promptKey || '') !== String(current.lastPromptKey || '')) {
           current = await putCodeWatchdog(conversationId, {
             ...current,
             lastRequestStartedAt: Math.max(requestStartedAt, Number(current.lastRequestStartedAt || 0)),
@@ -599,25 +574,15 @@
     const requestChanged = requestStartedAt !== Number(current?.lastRequestStartedAt || 0);
     if (requestChanged && current) {
       const followsAutomaticSend = (current.lastAutomaticPromptKey && String(clean.promptKey || '') === String(current.lastAutomaticPromptKey))
-        || (Number(current.lastAutomaticSentAt || 0) > 0
-          && Math.abs(requestStartedAt - Number(current.lastAutomaticSentAt || 0)) <= CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS);
+        || (Number(current.lastAutomaticSentAt || 0) > 0 && Math.abs(requestStartedAt - Number(current.lastAutomaticSentAt || 0)) <= CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS);
       if (!followsAutomaticSend) sendCount = 0;
     }
 
     const ownerTabId = Number.isInteger(sender?.tab?.id) ? sender.tab.id : (current?.ownerTabId ?? null);
     const conversationUrl = String(clean.conversationUrl || current?.conversationUrl || '');
-    if (
-      current &&
-      !requestChanged &&
-      current.waitingForRequestStart !== true &&
-      current.stopped !== true &&
-      Number(current.deadlineAt || 0) > 0 &&
-      current.ownerTabId === ownerTabId &&
-      String(current.conversationUrl || '') === conversationUrl
-    ) {
-      return current;
-    }
+    if (current && !requestChanged && current.waitingForRequestStart !== true && current.stopped !== true && Number(current.deadlineAt || 0) > 0 && current.ownerTabId === ownerTabId && String(current.conversationUrl || '') === conversationUrl) return current;
 
+    const deadlineAt = requestStartedAt + codeWatchdogDelayMs();
     const record = await putCodeWatchdog(conversationId, {
       ...(current || {}),
       conversationUrl,
@@ -629,33 +594,26 @@
       lastRequestStartedAt: requestStartedAt,
       lastPromptKey: String(clean.promptKey || ''),
       lastStatusCode: '',
-      deadlineAt: requestStartedAt + CODE_WATCHDOG_DELAY_MS
+      deadlineAt
     });
-    return await scheduleCodeWatchdog(record, requestStartedAt + CODE_WATCHDOG_DELAY_MS);
+    return await scheduleCodeWatchdog(record, deadlineAt);
   }
 
   function queueCodeWatchdogMutation(conversationIdValue, operation) {
     const conversationId = String(conversationIdValue || '');
     if (!conversationId) return Promise.resolve(null);
     const previous = codeWatchdogMutationQueues.get(conversationId) || Promise.resolve();
-    const next = previous
-      .catch(() => {})
-      .then(() => operation());
+    const next = previous.catch(() => {}).then(() => operation());
     codeWatchdogMutationQueues.set(conversationId, next);
     next.finally(() => {
-      if (codeWatchdogMutationQueues.get(conversationId) === next) {
-        codeWatchdogMutationQueues.delete(conversationId);
-      }
+      if (codeWatchdogMutationQueues.get(conversationId) === next) codeWatchdogMutationQueues.delete(conversationId);
     }).catch(() => {});
     return next;
   }
 
   function reconcileCodeWatchdog(clean, sender) {
     const conversationId = String(clean?.conversationId || '');
-    return queueCodeWatchdogMutation(
-      conversationId,
-      () => reconcileCodeWatchdogState(clean, sender)
-    );
+    return queueCodeWatchdogMutation(conversationId, () => reconcileCodeWatchdogState(clean, sender));
   }
 
   async function tabForCodeWatchdog(record) {
@@ -667,10 +625,7 @@
     }
     let tabs = [];
     try { tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] }); } catch { return null; }
-    return tabs.find((tab) => Number.isInteger(tab.id)
-      && tab.discarded !== true
-      && tab.frozen !== true
-      && conversationFromUrl(tab.url || '')?.id === record.conversationId) || null;
+    return tabs.find((tab) => Number.isInteger(tab.id) && tab.discarded !== true && tab.frozen !== true && conversationFromUrl(tab.url || '')?.id === record.conversationId) || null;
   }
 
   async function ensureCodeWatchdogPageRuntime(tabId) {
@@ -679,73 +634,37 @@
       if (result?.snapshot || result?.conversationId) return result?.snapshot || result;
     } catch {}
     try {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        files: ['status-code.js', 'status-policy.js', 'monitor-script.js', 'status-script.js']
-      });
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['status-code.js', 'status-policy.js', 'monitor-script.js', 'status-script.js'] });
       const result = await chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_MONITOR_QUERY' });
       return result?.snapshot || result || null;
-    } catch {
-      return null;
-    }
+    } catch { return null; }
   }
 
   async function queryTerminalStatusForPrompt(tabId, conversationId, promptKey = '') {
     const expectedConversationId = String(conversationId || '');
     const expectedPromptKey = String(promptKey || '');
     if (!Number.isInteger(tabId) || !expectedConversationId || !expectedPromptKey) return null;
-
     const query = async () => {
       try {
-        return await chrome.tabs.sendMessage(tabId, {
-          type: 'CHATGPT_STATUS_FOR_PROMPT_QUERY',
-          conversationId: expectedConversationId,
-          promptKey: expectedPromptKey
-        });
-      } catch {
-        return null;
-      }
+        return await chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_STATUS_FOR_PROMPT_QUERY', conversationId: expectedConversationId, promptKey: expectedPromptKey });
+      } catch { return null; }
     };
-
     let result = await query();
     if (!result?.ok) {
-      try {
-        await chrome.scripting.executeScript({
-          target: { tabId },
-          files: ['status-code.js', 'status-policy.js', 'status-script.js']
-        });
-      } catch {
-        return null;
-      }
+      try { await chrome.scripting.executeScript({ target: { tabId }, files: ['status-code.js', 'status-policy.js', 'status-script.js'] }); }
+      catch { return null; }
       result = await query();
     }
-
-    if (
-      result?.ok !== true
-      || String(result.conversationId || '') !== expectedConversationId
-      || String(result.promptKey || '') !== expectedPromptKey
-    ) return null;
+    if (result?.ok !== true || String(result.conversationId || '') !== expectedConversationId || String(result.promptKey || '') !== expectedPromptKey) return null;
     return result;
   }
 
   async function sendCodeWatchdogContinuation(tabId, conversationId, promptKey = '') {
+    try { return await chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_WATCHDOG_CONTINUE_COMMAND', conversationId, promptKey: String(promptKey || '') }); }
+    catch {}
     try {
-      return await chrome.tabs.sendMessage(tabId, {
-        type: 'CHATGPT_WATCHDOG_CONTINUE_COMMAND',
-        conversationId,
-        promptKey: String(promptKey || '')
-      });
-    } catch {}
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        files: ['status-code.js', 'status-policy.js', 'status-script.js']
-      });
-      return await chrome.tabs.sendMessage(tabId, {
-        type: 'CHATGPT_WATCHDOG_CONTINUE_COMMAND',
-        conversationId,
-        promptKey: String(promptKey || '')
-      });
+      await chrome.scripting.executeScript({ target: { tabId }, files: ['status-code.js', 'status-policy.js', 'status-script.js'] });
+      return await chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_WATCHDOG_CONTINUE_COMMAND', conversationId, promptKey: String(promptKey || '') });
     } catch (error) {
       return { ok: false, clicked: false, reason: 'watchdog-runtime-unavailable', error: String(error?.message || error) };
     }
@@ -771,36 +690,21 @@
       await clearCodeWatchdog(conversationId);
       return;
     }
-    if (Number(record.sendCount || 0) >= CODE_WATCHDOG_MAX_SENDS) {
+    if (Number(record.sendCount || 0) >= codeWatchdogMaxSends()) {
       await parkCodeWatchdog(record, 'retry-cap-reached');
       return;
     }
 
     const tab = await tabForCodeWatchdog(record);
-    if (!tab) {
-      await scheduleCodeWatchdogRetry(record, 'page-unavailable');
-      return;
-    }
-
+    if (!tab) { await scheduleCodeWatchdogRetry(record, 'page-unavailable'); return; }
     const live = await ensureCodeWatchdogPageRuntime(tab.id);
-    if (!live || String(live.conversationId || '') !== conversationId) {
-      await scheduleCodeWatchdogRetry(record, 'runtime-unavailable');
-      return;
-    }
+    if (!live || String(live.conversationId || '') !== conversationId) { await scheduleCodeWatchdogRetry(record, 'runtime-unavailable'); return; }
 
-    const exactPromptStatus = await queryTerminalStatusForPrompt(
-      tab.id,
-      conversationId,
-      String(live.promptKey || '')
-    );
+    const exactPromptStatus = await queryTerminalStatusForPrompt(tab.id, conversationId, String(live.promptKey || ''));
     const exactStatusCode = String(exactPromptStatus?.statusCode || '');
     const liveStatusCode = String(live.statusCode || '');
-    const statusCode = globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(exactStatusCode)
-      ? exactStatusCode
-      : liveStatusCode;
-    const statusSnapshot = statusCode === liveStatusCode
-      ? live
-      : { ...live, statusCode };
+    const statusCode = globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(exactStatusCode) ? exactStatusCode : liveStatusCode;
+    const statusSnapshot = statusCode === liveStatusCode ? live : { ...live, statusCode };
     if (globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode)) {
       if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(statusCode) !== true) {
         await parkCodeWatchdogForTerminalStatus(statusSnapshot, { tab }, record);
@@ -809,11 +713,8 @@
       const result = await sendCodeWatchdogContinuation(tab.id, conversationId, String(statusSnapshot.promptKey || ''));
       const automaticSentAt = result?.ok === true ? Date.now() : 0;
       record = await resetCodeWatchdogForIncomplete(statusSnapshot, { tab }, record, automaticSentAt, result?.continuationUserKey || '');
-      if (result?.ok === true) {
-        await scheduleCodeWatchdog(record, automaticSentAt + CODE_WATCHDOG_DELAY_MS);
-      } else {
-        await scheduleCodeWatchdogRetry(record, result?.reason || 'continue-send-failed');
-      }
+      if (result?.ok === true) await scheduleCodeWatchdog(record, automaticSentAt + codeWatchdogDelayMs());
+      else await scheduleCodeWatchdogRetry(record, result?.reason || 'continue-send-failed');
       return;
     }
 
@@ -826,50 +727,28 @@
     }
 
     const noCodeEligibility = codeWatchdogNoCodeEligibility(live);
-    if (noCodeEligibility.eligible !== true) {
-      await scheduleCodeWatchdogRetry(record, noCodeEligibility.reason);
-      return;
-    }
+    if (noCodeEligibility.eligible !== true) { await scheduleCodeWatchdogRetry(record, noCodeEligibility.reason); return; }
 
     const result = await sendCodeWatchdogContinuation(tab.id, conversationId, String(live.promptKey || ''));
     const racedStatusCode = String(result?.statusCode || '');
     if (globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(racedStatusCode)) {
       if (globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(racedStatusCode) === true) {
         const automaticSentAt = result?.ok === true ? Date.now() : 0;
-        record = await resetCodeWatchdogForIncomplete(
-          { ...live, statusCode: racedStatusCode },
-          { tab },
-          record,
-          automaticSentAt,
-          result?.continuationUserKey || ''
-        );
-        if (result?.ok === true) {
-          await scheduleCodeWatchdog(record, automaticSentAt + CODE_WATCHDOG_DELAY_MS);
-        } else {
-          await scheduleCodeWatchdogRetry(record, result?.reason || 'continue-send-failed');
-        }
+        record = await resetCodeWatchdogForIncomplete({ ...live, statusCode: racedStatusCode }, { tab }, record, automaticSentAt, result?.continuationUserKey || '');
+        if (result?.ok === true) await scheduleCodeWatchdog(record, automaticSentAt + codeWatchdogDelayMs());
+        else await scheduleCodeWatchdogRetry(record, result?.reason || 'continue-send-failed');
       } else {
         const automaticSentAt = result?.ok === true ? Date.now() : 0;
-        await parkCodeWatchdogForTerminalStatus(
-          { ...live, statusCode: racedStatusCode },
-          { tab },
-          record,
-          automaticSentAt,
-          result?.continuationUserKey || '',
-          String(live.promptKey || '')
-        );
+        await parkCodeWatchdogForTerminalStatus({ ...live, statusCode: racedStatusCode }, { tab }, record, automaticSentAt, result?.continuationUserKey || '', String(live.promptKey || ''));
       }
       return;
     }
 
-    if (result?.ok !== true) {
-      await scheduleCodeWatchdogRetry(record, result?.reason || 'continue-send-failed');
-      return;
-    }
+    if (result?.ok !== true) { await scheduleCodeWatchdogRetry(record, result?.reason || 'continue-send-failed'); return; }
 
     const sentAt = Date.now();
     const nextCount = Math.max(0, Number(record.sendCount || 0)) + 1;
-    const nextDeadlineAt = sentAt + CODE_WATCHDOG_DELAY_MS;
+    const nextDeadlineAt = sentAt + codeWatchdogDelayMs();
     record = {
       ...record,
       ownerTabId: tab.id,
@@ -882,7 +761,7 @@
       retryAt: 0,
       retryReason: ''
     };
-    if (nextCount >= CODE_WATCHDOG_MAX_SENDS) {
+    if (nextCount >= codeWatchdogMaxSends()) {
       await parkCodeWatchdog(record, 'retry-cap-reached');
       return;
     }
@@ -890,15 +769,10 @@
   }
 
   function handleCodeWatchdogAlarm(conversationId) {
-    return queueCodeWatchdogMutation(
-      conversationId,
-      () => handleCodeWatchdogAlarmState(conversationId)
-    );
+    return queueCodeWatchdogMutation(conversationId, () => handleCodeWatchdogAlarmState(conversationId));
   }
 
-  function closeDerivedReason(reason) {
-    return String(reason || '').includes('owner-tab-closed');
-  }
+  function closeDerivedReason(reason) { return String(reason || '').includes('owner-tab-closed'); }
 
   async function updateRun(snapshotValue, sender = {}) {
     const snapshot = sanitizedSnapshot(snapshotValue);
@@ -916,9 +790,7 @@
       }
       if (!liveOwner) return current;
     }
-    const classification = globalThis.ChatGPTNotifierContinuationPolicy?.classifyObservation?.(snapshot) || {
-      state: 'waiting', reason: 'monitor-policy-unavailable', automaticActionAllowed: false
-    };
+    const classification = globalThis.ChatGPTNotifierContinuationPolicy?.classifyObservation?.(snapshot) || { state: 'waiting', reason: 'monitor-policy-unavailable', automaticActionAllowed: false };
     const now = Date.now();
     const record = {
       ...(current || {}),
@@ -995,12 +867,7 @@
     const records = await getAll(ATTENTION_STORE);
     for (const record of records) {
       if (record.runKey !== key || record.acknowledged) continue;
-      await putRecord(ATTENTION_STORE, {
-        ...record,
-        acknowledged: true,
-        resolution: String(resolution || 'resolved'),
-        updatedAt: Date.now()
-      });
+      await putRecord(ATTENTION_STORE, { ...record, acknowledged: true, resolution: String(resolution || 'resolved'), updatedAt: Date.now() });
       try { if (typeof sendNative === 'function') sendNative({ type: 'toast.dismissEvent', notificationId: record.attentionId }); } catch {}
     }
   }
@@ -1023,15 +890,10 @@
     if (attentionFlushPromise) return await attentionFlushPromise;
     attentionFlushPromise = (async () => {
       if (typeof sendNativeRequest !== 'function') return;
-      const records = (await getAll(ATTENTION_STORE))
-        .filter((item) => !item.delivered && !item.acknowledged && !closeDerivedReason(item.reason))
-        .sort((left, right) => Number(left.createdAt || 0) - Number(right.createdAt || 0));
+      const records = (await getAll(ATTENTION_STORE)).filter((item) => !item.delivered && !item.acknowledged && !closeDerivedReason(item.reason)).sort((left, right) => Number(left.createdAt || 0) - Number(right.createdAt || 0));
       for (const record of records) {
         const currentRun = await getRecord(RUN_STORE, record.runKey);
-        if (currentRun?.state === 'detached' && currentRun?.reason === 'owner-tab-closed-quiet') {
-          await acknowledgeAttention(record.attentionId);
-          continue;
-        }
+        if (currentRun?.state === 'detached' && currentRun?.reason === 'owner-tab-closed-quiet') { await acknowledgeAttention(record.attentionId); continue; }
         const enrollment = await getEnrollment(record.conversationId);
         if (enrollment?.enabled !== true || enrollment?.userPaused === true) continue;
         const response = await sendNativeRequest({
@@ -1058,10 +920,7 @@
     const tabId = sender?.tab?.id;
     if (!Number.isInteger(tabId) || !clean.conversationId) return null;
     const provisional = await getProvisional(tabId);
-    if (!provisional) return null;
-    if (Number(provisional.armedAt || 0) <= 0) {
-      return null;
-    }
+    if (!provisional || Number(provisional.armedAt || 0) <= 0) return null;
     const identity = { id: clean.conversationId, url: clean.conversationUrl };
     const record = await setEnrollment(identity, provisional.enabled === true, provisional.userPaused ? 'operator-pause' : 'operator-provisional');
     await deleteRecord(PROFILE_STORE, provisionalKey(tabId));
@@ -1072,7 +931,6 @@
     const clean = sanitizedSnapshot(snapshot);
     if (!clean.conversationId || !clean.promptKey) return null;
     if (Number.isInteger(sender?.tab?.id)) tabConversations.set(sender.tab.id, clean.conversationId);
-
     const migratedEnrollment = await migrateProvisionalIfReady(clean, sender);
     let enrollmentChanged = Boolean(migratedEnrollment);
     let enrollment = migratedEnrollment || await getEnrollment(clean.conversationId);
@@ -1080,28 +938,15 @@
     const freshRequestEvidence = clean.requestStartedAt > 0 && ['started', 'completed', 'error'].includes(clean.requestPhase);
     const recognizedScope = freshRequestEvidence && (clean.projectStartSignal === true || clean.workStartSignal === true || statusIsValid);
     if (recognizedScope && enrollment?.enabled !== true && enrollment?.userPaused !== true) {
-      const source = clean.projectStartSignal === true
-        ? 'project-start-signal'
-        : clean.workStartSignal === true
-          ? 'work-start-signal'
-          : 'coded-turn';
-      enrollment = await setEnrollment(
-        { id: clean.conversationId, url: clean.conversationUrl },
-        true,
-        source
-      );
+      const source = clean.projectStartSignal === true ? 'project-start-signal' : clean.workStartSignal === true ? 'work-start-signal' : 'coded-turn';
+      enrollment = await setEnrollment({ id: clean.conversationId, url: clean.conversationUrl }, true, source);
       enrollmentChanged = true;
     }
-
-    const senderTarget = Number.isInteger(sender?.tab?.id)
-      ? { tab: sender.tab, id: clean.conversationId, url: clean.conversationUrl }
-      : null;
-
+    const senderTarget = Number.isInteger(sender?.tab?.id) ? { tab: sender.tab, id: clean.conversationId, url: clean.conversationUrl } : null;
     if (enrollment?.enabled !== true || enrollment?.userPaused === true) {
       if (enrollmentChanged && senderTarget) publishAutomationOverview(senderTarget).catch(() => {});
       return null;
     }
-
     const run = await updateRun(clean, sender);
     const codeWatchdog = await reconcileCodeWatchdog(clean, sender);
     const watchdogSignature = codeWatchdogOverviewSignature(codeWatchdog);
@@ -1114,17 +959,8 @@
 
   async function sendRequestPhase(tabId, phase, details, requestStartedAt = 0) {
     if (!Number.isInteger(tabId) || tabId < 0) return;
-    const message = {
-      type: 'CHATGPT_MONITOR_REQUEST_PHASE',
-      phase,
-      requestId: String(details?.requestId || ''),
-      requestStartedAt: Math.max(0, Number(requestStartedAt || 0)),
-      observedAt: Date.now()
-    };
-    try {
-      await chrome.tabs.sendMessage(tabId, message);
-      return;
-    } catch {}
+    const message = { type: 'CHATGPT_MONITOR_REQUEST_PHASE', phase, requestId: String(details?.requestId || ''), requestStartedAt: Math.max(0, Number(requestStartedAt || 0)), observedAt: Date.now() };
+    try { await chrome.tabs.sendMessage(tabId, message); return; } catch {}
     try {
       const tab = await chrome.tabs.get(tabId);
       if (tab.discarded === true || tab.frozen === true) return;
@@ -1136,18 +972,11 @@
   async function armProvisionalForRequest(tabId, requestId) {
     const provisional = await getProvisional(tabId);
     if (!provisional || provisional.enabled !== true || provisional.userPaused === true) return;
-    await putRecord(PROFILE_STORE, {
-      ...provisional,
-      armedRequestId: String(requestId || ''),
-      armedAt: Date.now(),
-      updatedAt: Date.now()
-    });
+    await putRecord(PROFILE_STORE, { ...provisional, armedRequestId: String(requestId || ''), armedAt: Date.now(), updatedAt: Date.now() });
   }
 
   async function queryHotPageRuntime(tabId) {
-    const expectedExtensionVersion = (() => {
-      try { return String(chrome.runtime.getManifest().version || ''); } catch { return ''; }
-    })();
+    const expectedExtensionVersion = (() => { try { return String(chrome.runtime.getManifest().version || ''); } catch { return ''; } })();
     let attachment = null;
     let monitor = null;
     let status = null;
@@ -1157,9 +986,7 @@
     try { status = await chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_STATUS_RUNTIME_PING' }); } catch {}
     try { bounded = await chrome.tabs.sendMessage(tabId, { type: 'CHATGPT_BOUNDED_RECOVERY_PING' }); } catch {}
     return {
-      attachmentCurrent: attachment?.ok === true
-        && Number(attachment.runtimeVersion || 0) >= HOT_PAGE_ATTACHMENT_RUNTIME_VERSION
-        && String(attachment.extensionVersion || '') === expectedExtensionVersion,
+      attachmentCurrent: attachment?.ok === true && Number(attachment.runtimeVersion || 0) >= HOT_PAGE_ATTACHMENT_RUNTIME_VERSION && String(attachment.extensionVersion || '') === expectedExtensionVersion,
       monitorCurrent: Number(monitor?.snapshot?.monitorRuntimeVersion || monitor?.monitorRuntimeVersion || 0) >= HOT_PAGE_MONITOR_RUNTIME_VERSION,
       statusCurrent: status?.ok === true && Number(status.runtimeVersion || 0) >= HOT_PAGE_STATUS_RUNTIME_VERSION,
       boundedCurrent: bounded?.ok === true && Number(bounded.runtimeVersion || 0) >= HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION
@@ -1167,10 +994,7 @@
   }
 
   function hotPageRuntimeCurrent(state) {
-    return state?.attachmentCurrent === true
-      && state?.monitorCurrent === true
-      && state?.statusCurrent === true
-      && state?.boundedCurrent === true;
+    return state?.attachmentCurrent === true && state?.monitorCurrent === true && state?.statusCurrent === true && state?.boundedCurrent === true;
   }
 
   async function ensureHotPageRuntime(tabId) {
@@ -1180,19 +1004,10 @@
     if (tab?.discarded === true || tab?.frozen === true) return false;
     const rawUrl = String(tab?.url || '');
     if (!/^https:\/\/chatgpt\.com\//i.test(rawUrl)) return false;
-
     const before = await queryHotPageRuntime(tabId);
     if (hotPageRuntimeCurrent(before)) return true;
-
-    try {
-      await chrome.scripting.executeScript({
-        target: { tabId },
-        files: [...HOT_PAGE_RUNTIME_FILES]
-      });
-    } catch {
-      return false;
-    }
-
+    try { await chrome.scripting.executeScript({ target: { tabId }, files: [...HOT_PAGE_RUNTIME_FILES] }); }
+    catch { return false; }
     return hotPageRuntimeCurrent(await queryHotPageRuntime(tabId));
   }
 
@@ -1223,9 +1038,7 @@
     return { tab, id: identity?.id || '', url: identity?.url || String(tab.url || '') };
   }
 
-  function senderChatTarget(sender) {
-    return chatTargetFromTab(sender?.tab);
-  }
+  function senderChatTarget(sender) { return chatTargetFromTab(sender?.tab); }
 
   async function activeChatTarget() {
     let tabs = [];
@@ -1238,16 +1051,22 @@
     return active?.id ? active : null;
   }
 
+  async function applyCodeWatchdogSettingsForSender(sender) {
+    const target = senderChatTarget(sender);
+    if (!target) return { ok: false, reason: 'watchdog-settings-sender-invalid' };
+    const settings = await persistCodeWatchdogSettings(currentCodeWatchdogSettings() || {});
+    const overview = await monitorOverview(target);
+    publishAutomationOverview(target, overview).catch(() => {});
+    return { ok: Boolean(settings), settings, ...overview };
+  }
+
   async function monitorOverview(identity = null) {
     const active = identity || await activeChatTarget();
     const enrollment = active?.id ? await getEnrollment(active.id) : null;
     const provisional = !active?.id && Number.isInteger(active?.tab?.id) ? await getProvisional(active.tab.id) : null;
     const state = enrollment || provisional;
     const run = active?.id ? await latestRunForConversation(active.id) : null;
-    const attention = (await getAll(ATTENTION_STORE))
-      .filter((item) => !item.acknowledged)
-      .sort((left, right) => Number(right.createdAt || 0) - Number(left.createdAt || 0))
-      .slice(0, MAX_ATTENTION);
+    const attention = (await getAll(ATTENTION_STORE)).filter((item) => !item.acknowledged).sort((left, right) => Number(right.createdAt || 0) - Number(left.createdAt || 0)).slice(0, MAX_ATTENTION);
     const profile = await readProfileState();
     const codeWatchdog = active?.id ? await readCodeWatchdog(active.id) : null;
     let helperConnected = false;
@@ -1270,7 +1089,9 @@
       attention,
       profile,
       codeWatchdog,
-      codeWatchdogMaxSends: CODE_WATCHDOG_MAX_SENDS,
+      codeWatchdogMaxSends: codeWatchdogMaxSends(),
+      codeWatchdogDelayMs: codeWatchdogDelayMs(),
+      codeWatchdogSettings: currentCodeWatchdogSettings(),
       helperConnected
     };
   }
@@ -1286,14 +1107,7 @@
       ...record,
       sendCount: 0,
       budgetResetAt: resetAt,
-      ...(timerMissing ? {
-        stopped: false,
-        stopReason: '',
-        waitingForRequestStart: false,
-        deadlineAt: resetAt + CODE_WATCHDOG_DELAY_MS,
-        retryAt: 0,
-        retryReason: ''
-      } : {})
+      ...(timerMissing ? { stopped: false, stopReason: '', waitingForRequestStart: false, deadlineAt: resetAt + codeWatchdogDelayMs(), retryAt: 0, retryReason: '' } : {})
     };
   }
 
@@ -1302,9 +1116,7 @@
     const activationAt = Math.max(0, Number(activatedAt || Date.now()));
     return await queueCodeWatchdogMutation(target.id, async () => {
       const current = await readCodeWatchdog(target.id);
-      if (current?.stopped === true && String(current.stopReason || '').startsWith('status:')) {
-        return current;
-      }
+      if (current?.stopped === true && String(current.stopReason || '').startsWith('status:')) return current;
       await cancelCodeWatchdogAlarm(target.id);
       const snapshot = sanitizedSnapshot(snapshotValue || {});
       const record = await putCodeWatchdog(target.id, {
@@ -1319,7 +1131,7 @@
         lastPromptKey: String(snapshot.promptKey || current?.lastPromptKey || ''),
         lastStatusCode: String(snapshot.statusCode || current?.lastStatusCode || ''),
         manualActivatedAt: activationAt,
-        deadlineAt: activationAt + CODE_WATCHDOG_DELAY_MS,
+        deadlineAt: activationAt + codeWatchdogDelayMs(),
         retryAt: 0,
         retryReason: ''
       });
@@ -1329,82 +1141,40 @@
   }
 
   async function resetCodeWatchdogBudgetForTarget(message, target) {
-    if (!target?.id || !Number.isInteger(target?.tab?.id)) {
-      return { ok: false, error: 'Open a monitored ChatGPT conversation to reset auto-continues.', reason: 'watchdog-target-unavailable' };
-    }
-    if (message?.conversationId && String(message.conversationId) !== String(target.id)) {
-      return { ok: false, error: 'The ChatGPT conversation changed before the reset was applied.', reason: 'target-conversation-changed' };
-    }
-
+    if (!target?.id || !Number.isInteger(target?.tab?.id)) return { ok: false, error: 'Open a monitored ChatGPT conversation to reset auto-continues.', reason: 'watchdog-target-unavailable' };
+    if (message?.conversationId && String(message.conversationId) !== String(target.id)) return { ok: false, error: 'The ChatGPT conversation changed before the reset was applied.', reason: 'target-conversation-changed' };
     const enrollment = await getEnrollment(target.id);
     if (enrollment?.enabled !== true || enrollment?.userPaused === true) {
       const overview = await monitorOverview(target);
       return { ok: false, error: 'Build automation is not active for this conversation.', reason: 'automation-not-active', requestId: String(message?.requestId || ''), ...overview };
     }
-
     const resetAt = Date.now();
     await queueCodeWatchdogMutation(target.id, async () => {
       const current = await readCodeWatchdog(target.id);
-      const base = current || {
-        conversationId: target.id,
-        conversationUrl: String(target.url || ''),
-        ownerTabId: target.tab.id,
-        sendCount: 0,
-        stopped: false,
-        stopReason: '',
-        waitingForRequestStart: false,
-        lastRequestStartedAt: 0,
-        lastPromptKey: '',
-        lastStatusCode: '',
-        deadlineAt: 0,
-        retryAt: 0,
-        retryReason: ''
-      };
+      const base = current || { conversationId: target.id, conversationUrl: String(target.url || ''), ownerTabId: target.tab.id, sendCount: 0, stopped: false, stopReason: '', waitingForRequestStart: false, lastRequestStartedAt: 0, lastPromptKey: '', lastStatusCode: '', deadlineAt: 0, retryAt: 0, retryReason: '' };
       const hadTimer = Math.max(0, Number(base.deadlineAt || 0)) > 0 || Math.max(0, Number(base.retryAt || 0)) > 0;
-      const updated = await putCodeWatchdog(target.id, codeWatchdogBudgetReset({
-        ...base,
-        conversationUrl: String(target.url || base.conversationUrl || ''),
-        ownerTabId: target.tab.id
-      }, resetAt));
+      const updated = await putCodeWatchdog(target.id, codeWatchdogBudgetReset({ ...base, conversationUrl: String(target.url || base.conversationUrl || ''), ownerTabId: target.tab.id }, resetAt));
       if (!hadTimer && Number(updated.deadlineAt || 0) > 0) {
         try { chrome.alarms.create(codeWatchdogAlarmName(target.id), { when: updated.deadlineAt }); } catch {}
       }
       return updated;
     });
-
     const overview = await monitorOverview(target);
     publishAutomationOverview(target, overview).catch(() => {});
-    return {
-      ok: true,
-      requestId: String(message?.requestId || ''),
-      reset: true,
-      ...overview
-    };
+    return { ok: true, requestId: String(message?.requestId || ''), reset: true, ...overview };
   }
 
-  async function resetSenderCodeWatchdogBudget(message, sender) {
-    return await resetCodeWatchdogBudgetForTarget(message, senderChatTarget(sender));
-  }
+  async function resetSenderCodeWatchdogBudget(message, sender) { return await resetCodeWatchdogBudgetForTarget(message, senderChatTarget(sender)); }
 
   async function stopSenderCodeWatchdogTimer(message, sender) {
     const target = senderChatTarget(sender);
-    if (!target?.id || !Number.isInteger(target?.tab?.id)
-      || (message?.conversationId && String(message.conversationId) !== target.id)) {
-      return { ok: false, reason: 'watchdog-target-unavailable' };
-    }
+    if (!target?.id || !Number.isInteger(target?.tab?.id) || (message?.conversationId && String(message.conversationId) !== target.id)) return { ok: false, reason: 'watchdog-target-unavailable' };
     const enrollment = await getEnrollment(target.id);
-    if (enrollment?.enabled !== true || enrollment?.userPaused === true) {
-      return { ok: false, reason: 'automation-not-active' };
-    }
+    if (enrollment?.enabled !== true || enrollment?.userPaused === true) return { ok: false, reason: 'automation-not-active' };
     const result = await queueCodeWatchdogMutation(target.id, async () => {
       const current = await readCodeWatchdog(target.id);
-      if (!current || current.stopped === true
-        || (Number(current.deadlineAt || 0) <= 0 && Number(current.retryAt || 0) <= 0)) {
-        return { ok: false, reason: 'no-active-timer' };
-      }
-      if (Number(message?.watchdogRevision || 0) !== Number(current.watchdogRevision || 0)) {
-        return { ok: false, reason: 'watchdog-revision-changed' };
-      }
+      if (!current || current.stopped === true || (Number(current.deadlineAt || 0) <= 0 && Number(current.retryAt || 0) <= 0)) return { ok: false, reason: 'no-active-timer' };
+      if (Number(message?.watchdogRevision || 0) !== Number(current.watchdogRevision || 0)) return { ok: false, reason: 'watchdog-revision-changed' };
       await parkCodeWatchdog(current, 'operator-timer-stop');
       return { ok: true };
     });
@@ -1414,26 +1184,17 @@
   }
 
   async function armCodeWatchdogForTarget(message, target) {
-    if (!target?.id || !Number.isInteger(target?.tab?.id)) {
-      return { ok: false, error: 'Open a monitored ChatGPT conversation to start the auto-continue timer.', reason: 'watchdog-target-unavailable' };
-    }
-    if (message?.conversationId && String(message.conversationId) !== String(target.id)) {
-      return { ok: false, error: 'The ChatGPT conversation changed before the timer was started.', reason: 'target-conversation-changed' };
-    }
-
+    if (!target?.id || !Number.isInteger(target?.tab?.id)) return { ok: false, error: 'Open a monitored ChatGPT conversation to start the auto-continue timer.', reason: 'watchdog-target-unavailable' };
+    if (message?.conversationId && String(message.conversationId) !== String(target.id)) return { ok: false, error: 'The ChatGPT conversation changed before the timer was started.', reason: 'target-conversation-changed' };
     const enrollment = await getEnrollment(target.id);
     if (enrollment?.enabled !== true || enrollment?.userPaused === true) {
       const overview = await monitorOverview(target);
       return { ok: false, error: 'Build automation is not active for this conversation.', reason: 'automation-not-active', requestId: String(message?.requestId || ''), ...overview };
     }
-
     const armedAt = Date.now();
     const armed = await queueCodeWatchdogMutation(target.id, async () => {
       const current = await readCodeWatchdog(target.id);
-      // A delayed quick/manual arm for the turn that was just stopped must not
-      // resurrect its timer. A different rendered user turn may arm normally.
-      if (current?.stopped === true && String(current.lastPromptKey || '')
-        && (!message?.promptKey || String(message.promptKey) === String(current.lastPromptKey))) return false;
+      if (current?.stopped === true && String(current.lastPromptKey || '') && (!message?.promptKey || String(message.promptKey) === String(current.lastPromptKey))) return false;
       await cancelCodeWatchdogAlarm(target.id);
       const record = await putCodeWatchdog(target.id, {
         ...(current || {}),
@@ -1450,48 +1211,31 @@
         lastAutomaticParentPromptKey: '',
         operatorPromptArmedAt: armedAt,
         operatorPromptArmSource: String(message?.source || 'operator-prompt'),
-        deadlineAt: armedAt + CODE_WATCHDOG_DELAY_MS,
+        deadlineAt: armedAt + codeWatchdogDelayMs(),
         retryAt: 0,
         retryReason: ''
       });
       try { chrome.alarms.create(codeWatchdogAlarmName(target.id), { when: record.deadlineAt }); } catch {}
       return Boolean(record);
     });
-
     const overview = await monitorOverview(target);
     publishAutomationOverview(target, overview).catch(() => {});
-    return {
-      ok: armed === true,
-      requestId: String(message?.requestId || ''),
-      armed: armed === true,
-      reason: armed === true ? '' : 'stopped-current-turn',
-      ...overview
-    };
+    return { ok: armed === true, requestId: String(message?.requestId || ''), armed: armed === true, reason: armed === true ? '' : 'stopped-current-turn', ...overview };
   }
 
-  async function armSenderCodeWatchdog(message, sender) {
-    return await armCodeWatchdogForTarget(message, senderChatTarget(sender));
-  }
+  async function armSenderCodeWatchdog(message, sender) { return await armCodeWatchdogForTarget(message, senderChatTarget(sender)); }
 
   async function publishAutomationOverview(target, overview = null) {
     if (!target || !Number.isInteger(target?.tab?.id)) return false;
     const next = overview || await monitorOverview(target);
-    try {
-      await chrome.tabs.sendMessage(target.tab.id, {
-        type: 'BUILD_AUTOMATION_STATE_CHANGED',
-        overview: next
-      });
-      return true;
-    } catch {
-      return false;
-    }
+    try { await chrome.tabs.sendMessage(target.tab.id, { type: 'BUILD_AUTOMATION_STATE_CHANGED', overview: next }); return true; }
+    catch { return false; }
   }
 
   async function setAutomationForTarget(message, target) {
     if (!target) return { ok: false, error: 'Open ChatGPT to change build automation.' };
     if (Number.isInteger(message?.tabId) && message.tabId !== target.tab.id) return { ok: false, error: 'The ChatGPT tab changed before the command was applied.', reason: 'target-tab-changed' };
     if (message?.conversationId && String(message.conversationId) !== String(target.id || '')) return { ok: false, error: 'The ChatGPT conversation changed before the command was applied.', reason: 'target-conversation-changed' };
-
     const enabled = message?.enabled === true;
     const source = enabled ? (message?.resumeExistingRun === true ? 'operator-resume' : 'operator') : 'operator-pause';
     try {
@@ -1519,23 +1263,12 @@
       return { ok: true, requestId: String(message?.requestId || ''), ...overview };
     } catch (error) {
       const overview = await monitorOverview(target).catch(() => null);
-      return {
-        ok: false,
-        error: String(error?.message || error),
-        reason: String(error?.code || 'automation-state-write-failed'),
-        requestId: String(message?.requestId || ''),
-        ...(overview || {})
-      };
+      return { ok: false, error: String(error?.message || error), reason: String(error?.code || 'automation-state-write-failed'), requestId: String(message?.requestId || ''), ...(overview || {}) };
     }
   }
 
-  async function setActiveAutomation(message) {
-    return await setAutomationForTarget(message, await activeChatTarget());
-  }
-
-  async function setSenderAutomation(message, sender) {
-    return await setAutomationForTarget(message, senderChatTarget(sender));
-  }
+  async function setActiveAutomation(message) { return await setAutomationForTarget(message, await activeChatTarget()); }
+  async function setSenderAutomation(message, sender) { return await setAutomationForTarget(message, senderChatTarget(sender)); }
 
   async function noteTabClosedQuiet(tabId) {
     const conversationId = tabConversations.get(tabId) || '';
@@ -1546,35 +1279,15 @@
     if (enrollment?.enabled !== true) return;
     const run = await latestRunForConversation(conversationId);
     if (!run || run.state === 'coded-terminal') return;
-
     let tabs = [];
     try { tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] }); } catch {}
-    const replacement = tabs.find((tab) => Number.isInteger(tab.id)
-      && tab.id !== tabId
-      && tab.discarded !== true
-      && tab.frozen !== true
-      && conversationFromUrl(tab.url || '')?.id === conversationId);
+    const replacement = tabs.find((tab) => Number.isInteger(tab.id) && tab.id !== tabId && tab.discarded !== true && tab.frozen !== true && conversationFromUrl(tab.url || '')?.id === conversationId);
     if (replacement) {
-      await putRecord(RUN_STORE, {
-        ...run,
-        ownerTabId: replacement.id,
-        ownerDocumentId: '',
-        state: 'observing',
-        reason: 'owner-transferred-after-close',
-        updatedAt: Date.now()
-      });
+      await putRecord(RUN_STORE, { ...run, ownerTabId: replacement.id, ownerDocumentId: '', state: 'observing', reason: 'owner-transferred-after-close', updatedAt: Date.now() });
       try { await chrome.scripting.executeScript({ target: { tabId: replacement.id }, files: ['status-code.js', 'status-policy.js', 'monitor-script.js'] }); } catch {}
       return;
     }
-
-    await putRecord(RUN_STORE, {
-      ...run,
-      ownerTabId: null,
-      ownerDocumentId: '',
-      state: 'detached',
-      reason: 'owner-tab-closed-quiet',
-      updatedAt: Date.now()
-    });
+    await putRecord(RUN_STORE, { ...run, ownerTabId: null, ownerDocumentId: '', state: 'detached', reason: 'owner-tab-closed-quiet', updatedAt: Date.now() });
     const attentionRecords = await getAll(ATTENTION_STORE);
     for (const record of attentionRecords) {
       if (record.runKey === run.runKey && closeDerivedReason(record.reason) && !record.acknowledged) await acknowledgeAttention(record.attentionId);
@@ -1595,9 +1308,7 @@
     const requestKey = String(details.requestId || '');
     const tracked = requestTabs.get(requestKey) || null;
     requestTabs.delete(requestKey);
-    const requestStartedAt = Math.max(0, Number(tracked?.requestStartedAt || 0))
-      || Math.max(0, Number(details?.timeStamp || 0))
-      || Date.now();
+    const requestStartedAt = Math.max(0, Number(tracked?.requestStartedAt || 0)) || Math.max(0, Number(details?.timeStamp || 0)) || Date.now();
     sendRequestPhase(details.tabId, 'completed', details, requestStartedAt).catch(() => {});
   }, REQUEST_FILTER);
 
@@ -1606,90 +1317,60 @@
     const requestKey = String(details.requestId || '');
     const tracked = requestTabs.get(requestKey) || null;
     requestTabs.delete(requestKey);
-    const requestStartedAt = Math.max(0, Number(tracked?.requestStartedAt || 0))
-      || Math.max(0, Number(details?.timeStamp || 0))
-      || Date.now();
+    const requestStartedAt = Math.max(0, Number(tracked?.requestStartedAt || 0)) || Math.max(0, Number(details?.timeStamp || 0)) || Date.now();
     sendRequestPhase(details.tabId, 'error', details, requestStartedAt).catch(() => {});
   }, REQUEST_FILTER);
 
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     if (message?.type === 'CHATGPT_MONITOR_STATE') {
-      handleSnapshot(message.snapshot, sender).then((run) => sendResponse?.({ ok: true, monitored: Boolean(run), runKey: run?.runKey || '' }))
-        .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
+      handleSnapshot(message.snapshot, sender).then((run) => sendResponse?.({ ok: true, monitored: Boolean(run), runKey: run?.runKey || '' })).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
       return true;
     }
-
     if (message?.type === 'GET_BUILD_AUTOMATION_OVERVIEW' || message?.type === 'GET_MONITOR_OVERVIEW') {
-      monitorOverview().then((overview) => sendResponse?.({ ok: true, ...overview }))
-        .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
+      monitorOverview().then((overview) => sendResponse?.({ ok: true, ...overview })).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
       return true;
     }
-
     if (message?.type === 'GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER') {
       const target = senderChatTarget(sender);
-      if (!target) {
-        sendResponse?.({ ok: false, error: 'This control is not attached to a ChatGPT tab.' });
-        return false;
-      }
-      monitorOverview(target).then((overview) => sendResponse?.({ ok: true, ...overview }))
-        .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
+      if (!target) { sendResponse?.({ ok: false, error: 'This control is not attached to a ChatGPT tab.' }); return false; }
+      monitorOverview(target).then((overview) => sendResponse?.({ ok: true, ...overview })).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
       return true;
     }
-
     if (message?.type === 'SET_BUILD_AUTOMATION_STATE') {
-      setActiveAutomation(message).then((result) => sendResponse?.(result))
-        .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
+      setActiveAutomation(message).then((result) => sendResponse?.(result)).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
       return true;
     }
-
     if (message?.type === 'SET_BUILD_AUTOMATION_STATE_FOR_SENDER') {
-      setSenderAutomation(message, sender).then((result) => sendResponse?.(result))
-        .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
+      setSenderAutomation(message, sender).then((result) => sendResponse?.(result)).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
       return true;
     }
-
     if (message?.type === 'RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER') {
-      resetSenderCodeWatchdogBudget(message, sender).then((result) => sendResponse?.(result))
-        .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error), requestId: String(message?.requestId || '') }));
+      resetSenderCodeWatchdogBudget(message, sender).then((result) => sendResponse?.(result)).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error), requestId: String(message?.requestId || '') }));
       return true;
     }
-
     if (message?.type === 'STOP_CODE_WATCHDOG_TIMER_FOR_SENDER') {
-      stopSenderCodeWatchdogTimer(message, sender).then((result) => sendResponse?.(result))
-        .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error), requestId: String(message?.requestId || '') }));
+      stopSenderCodeWatchdogTimer(message, sender).then((result) => sendResponse?.(result)).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error), requestId: String(message?.requestId || '') }));
       return true;
     }
-
     if (message?.type === 'ARM_CODE_WATCHDOG_FOR_SENDER') {
-      armSenderCodeWatchdog(message, sender).then((result) => sendResponse?.(result))
-        .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error), requestId: String(message?.requestId || '') }));
+      armSenderCodeWatchdog(message, sender).then((result) => sendResponse?.(result)).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error), requestId: String(message?.requestId || '') }));
       return true;
     }
-
     if (message?.type === 'SET_ACTIVE_CHAT_MONITORING') {
-      setActiveAutomation({
-        enabled: message.enabled === true,
-        expectedRevision: message.expectedRevision,
-        requestId: message.requestId,
-        resumeExistingRun: false
-      }).then((result) => sendResponse?.({ ...result, monitoring: result.monitoring === true }))
-        .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
+      setActiveAutomation({ enabled: message.enabled === true, expectedRevision: message.expectedRevision, requestId: message.requestId, resumeExistingRun: false }).then((result) => sendResponse?.({ ...result, monitoring: result.monitoring === true })).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
       return true;
     }
-
     if (message?.type === 'ACK_RECOVERY_ATTENTION') {
-      acknowledgeAttention(message.attentionId).then((acknowledged) => sendResponse?.({ ok: acknowledged }))
-        .catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
+      acknowledgeAttention(message.attentionId).then((acknowledged) => sendResponse?.({ ok: acknowledged })).catch((error) => sendResponse?.({ ok: false, error: String(error?.message || error) }));
       return true;
     }
-
     return false;
   });
 
   chrome.alarms.onAlarm.addListener((alarm) => {
     const conversationId = conversationIdFromCodeWatchdogAlarm(alarm?.name);
     if (!conversationId) return;
-    handleCodeWatchdogAlarm(conversationId).catch(() => {});
+    codeWatchdogSettingsReady.then(() => handleCodeWatchdogAlarm(conversationId)).catch(() => {});
   });
 
   chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -1708,10 +1389,7 @@
     if (identity) {
       (async () => {
         const provisional = await getProvisional(tabId);
-        if (!provisional) return;
-        if (Number(provisional.armedAt || 0) <= 0) {
-          return;
-        }
+        if (!provisional || Number(provisional.armedAt || 0) <= 0) return;
         await setEnrollment(identity, provisional.enabled === true, provisional.userPaused ? 'operator-pause' : 'operator-provisional');
         await deleteRecord(PROFILE_STORE, provisionalKey(tabId));
         publishAutomationOverview({ tab, id: identity.id, url: identity.url }).catch(() => {});
@@ -1725,14 +1403,12 @@
   });
 
   async function restoreCodeWatchdogAlarms(now = Date.now()) {
-    const records = (await getAll(PROFILE_STORE))
-      .filter((record) => String(record?.key || '').startsWith(CODE_WATCHDOG_RECORD_PREFIX));
+    const records = (await getAll(PROFILE_STORE)).filter((record) => String(record?.key || '').startsWith(CODE_WATCHDOG_RECORD_PREFIX));
     for (const record of records) {
       const conversationId = String(record?.conversationId || '');
       if (!conversationId || record.stopped === true) continue;
       const enrollment = await getEnrollment(conversationId);
       if (enrollment?.enabled !== true || enrollment?.userPaused === true) continue;
-
       const deadlineAt = Math.max(0, Number(record.deadlineAt || 0));
       const retryAt = Math.max(0, Number(record.retryAt || 0));
       let when = 0;
@@ -1760,6 +1436,9 @@
     monitorOverview,
     setActiveAutomation,
     setSenderAutomation,
+    applyCodeWatchdogSettingsForSender,
+    persistCodeWatchdogSettings,
+    restoreCodeWatchdogSettings,
     codeWatchdogBudgetReset,
     resetCodeWatchdogBudgetForTarget,
     resetSenderCodeWatchdogBudget,
@@ -1783,8 +1462,9 @@
     flushAttention
   });
 
+  codeWatchdogSettingsReady = restoreCodeWatchdogSettings().catch(() => currentCodeWatchdogSettings());
   injectMonitorIntoExistingTabs().catch(() => {});
-  restoreCodeWatchdogAlarms().catch(() => {});
+  codeWatchdogSettingsReady.then(() => restoreCodeWatchdogAlarms()).catch(() => {});
   pruneOldRuns().catch(() => {});
   flushAttention().catch(() => {});
 })();
