@@ -1,17 +1,20 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 3;
+  const RUNTIME_VERSION = 4;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const RETRY_DELAYS_MS = Object.freeze([0, 250, 1000, 3000]);
   const NO_STATUS_DIAGNOSTIC_DELAY_MS = 1500;
   const NO_STATUS_DIAGNOSTIC_MIN_INTERVAL_MS = 10000;
+  const SCAN_DEBOUNCE_MS = 250;
+  const MAX_SCAN_INTERVAL_MS = 1500;
 
   try { globalThis.__chatgptNotifierRenderedTerminalObserver?.dispose?.(); } catch {}
 
   const abortController = new AbortController();
   let observer = null;
   let scanTimer = null;
+  let maxScanTimer = null;
   let diagnosticTimer = null;
   let retryTimers = [];
   let deliveredKey = '';
@@ -160,6 +163,17 @@
     diagnosticTimer = null;
   }
 
+  function clearScanTimers() {
+    if (scanTimer !== null) {
+      try { clearTimeout(scanTimer); } catch {}
+      scanTimer = null;
+    }
+    if (maxScanTimer !== null) {
+      try { clearTimeout(maxScanTimer); } catch {}
+      maxScanTimer = null;
+    }
+  }
+
   async function publishDetected(current) {
     const snapshot = current?.snapshot || null;
     if (!snapshot?.conversationId || !snapshot?.promptKey || !snapshot?.assistantKey || !snapshot?.assistantRevision) return false;
@@ -248,7 +262,6 @@
   }
 
   function scan() {
-    scanTimer = null;
     const currentIdentity = latestIdentity();
     if (!currentIdentity) {
       scheduleNoStatusDiagnostic();
@@ -277,9 +290,19 @@
     }, delayMs));
   }
 
+  function runScheduledScan() {
+    clearScanTimers();
+    scan();
+  }
+
   function scheduleScan() {
-    if (scanTimer !== null) return;
-    scanTimer = setTimeout(scan, 40);
+    if (scanTimer !== null) {
+      try { clearTimeout(scanTimer); } catch {}
+    }
+    scanTimer = setTimeout(runScheduledScan, SCAN_DEBOUNCE_MS);
+    if (maxScanTimer === null) {
+      maxScanTimer = setTimeout(runScheduledScan, MAX_SCAN_INTERVAL_MS);
+    }
   }
 
   function handleRuntimeMessage(message, _sender, sendResponse) {
@@ -309,7 +332,7 @@
     dispose() {
       try { abortController.abort(); } catch {}
       try { observer?.disconnect(); } catch {}
-      try { if (scanTimer !== null) clearTimeout(scanTimer); } catch {}
+      clearScanTimers();
       clearRetryTimers();
       clearDiagnosticTimer();
       try { chrome.runtime.onMessage.removeListener(handleRuntimeMessage); } catch {}
