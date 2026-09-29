@@ -32,8 +32,10 @@ test('live terminal proof observes terminal messages, safe detector shape, and p
   assert.match(proofSource, /reason:\s*`build=\$\{commitSuffix/);
   assert.match(proofSource, /reason:\s*`status=\$\{String\(message\?\.statusCode/);
 
-  assert.match(observerSource, /RUNTIME_VERSION = 3/);
+  assert.match(observerSource, /RUNTIME_VERSION = 4/);
   assert.match(observerSource, /NO_STATUS_DIAGNOSTIC_DELAY_MS = 1500/);
+  assert.match(observerSource, /SCAN_DEBOUNCE_MS = 250/);
+  assert.match(observerSource, /MAX_SCAN_INTERVAL_MS = 1500/);
   assert.match(observerSource, /CHATGPT_RENDERED_TERMINAL_SCAN_DIAGNOSTIC/);
   assert.match(observerSource, /precedingUserCount/);
   assert.match(observerSource, /followingUserCount/);
