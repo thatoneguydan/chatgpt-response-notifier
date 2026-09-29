@@ -261,9 +261,10 @@
 
   function notifierCompatGetAttribute(name) {
     const value = nativeGetAttribute.call(this, name);
-    const normalizedName = String(name || '').toLowerCase();
-    const role = semanticRole(this);
     if (value != null) return value;
+    const normalizedName = String(name || '').toLowerCase();
+    if (normalizedName !== 'data-turn' && normalizedName !== 'data-message-author-role' && normalizedName !== 'data-testid') return value;
+    const role = semanticRole(this);
     if ((normalizedName === 'data-turn' || normalizedName === 'data-message-author-role') && role) return role;
     if (normalizedName !== 'data-testid' || !role) return value;
 
