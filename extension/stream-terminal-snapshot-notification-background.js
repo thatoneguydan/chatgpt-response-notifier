@@ -3,7 +3,7 @@
 (() => {
   if (globalThis.__chatgptNotifierStreamTerminalSnapshotNotification) return;
 
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   const RETRY_DELAYS_MS = Object.freeze([75, 350, 1200]);
   const inFlight = new Map();
 
@@ -50,7 +50,7 @@
     const requestId = String(raw.requestId || '');
     const requestStartedAt = Math.max(0, Number(raw.requestStartedAt || 0));
     if (!promptKey || !promptKey.startsWith(`${target.id}|`)) return null;
-    if (!assistantKey || !assistantRevision || !requestId || !requestStartedAt) return null;
+    if (!assistantKey || !assistantRevision) return null;
 
     return {
       conversationId: String(target.id),
@@ -66,22 +66,35 @@
     };
   }
 
-  async function exactStoppedWatchdog(statusCode, sender, target, snapshot) {
+  async function bindStoppedWatchdog(statusCode, sender, target, snapshot) {
     const api = monitor();
-    if (typeof api?.getEnrollment !== 'function' || typeof api?.readCodeWatchdog !== 'function') return false;
+    if (typeof api?.getEnrollment !== 'function' || typeof api?.readCodeWatchdog !== 'function') return null;
 
     const [enrollment, watchdog] = await Promise.all([
       api.getEnrollment(String(target.id)).catch(() => null),
       api.readCodeWatchdog(String(target.id)).catch(() => null)
     ]);
-    if (enrollment?.enabled !== true || enrollment?.userPaused === true) return false;
-    if (!watchdog || watchdog.stopped !== true) return false;
-    if (String(watchdog.stopReason || '') !== `status:${statusCode}`) return false;
-    if (Math.max(0, Number(watchdog.deadlineAt || 0)) !== 0) return false;
-    if (Number.isInteger(watchdog.ownerTabId) && watchdog.ownerTabId !== sender?.tab?.id) return false;
-    if (Math.max(0, Number(watchdog.lastRequestStartedAt || 0)) !== snapshot.requestStartedAt) return false;
-    if (String(watchdog.lastPromptKey || '') !== snapshot.promptKey) return false;
-    return true;
+    if (enrollment?.enabled !== true || enrollment?.userPaused === true) return null;
+    if (!watchdog || watchdog.stopped !== true) return null;
+    if (String(watchdog.stopReason || '') !== `status:${statusCode}`) return null;
+    if (Math.max(0, Number(watchdog.deadlineAt || 0)) !== 0) return null;
+    if (Number.isInteger(watchdog.ownerTabId) && watchdog.ownerTabId !== sender?.tab?.id) return null;
+
+    const watchdogStartedAt = Math.max(0, Number(watchdog.lastRequestStartedAt || 0));
+    if (!watchdogStartedAt) return null;
+    if (String(watchdog.lastPromptKey || '') !== snapshot.promptKey) return null;
+    if (snapshot.requestStartedAt > 0 && watchdogStartedAt !== snapshot.requestStartedAt) return null;
+
+    const exactRequestIdentity = Boolean(snapshot.requestId && snapshot.requestStartedAt > 0);
+    return {
+      ...snapshot,
+      requestStartedAt: snapshot.requestStartedAt || watchdogStartedAt,
+      requestIdentitySource: exactRequestIdentity ? 'bridged-request' : 'watchdog-upgrade-recovery'
+    };
+  }
+
+  async function exactStoppedWatchdog(statusCode, sender, target, snapshot) {
+    return Boolean(await bindStoppedWatchdog(statusCode, sender, target, snapshot));
   }
 
   async function queueExactSnapshotNotification(message, sender) {
@@ -106,22 +119,23 @@
 
     for (const delayMs of RETRY_DELAYS_MS) {
       await sleep(delayMs);
-      if (!await exactStoppedWatchdog(statusCode, sender, target, snapshot)) continue;
+      const boundSnapshot = await bindStoppedWatchdog(statusCode, sender, target, snapshot);
+      if (!boundSnapshot) continue;
 
       const queued = await queueRenderedNotification({
         ...message,
         statusCode,
         statusLine: `[GITHUB_STATUS: ${statusCode}]`,
-        snapshot
+        snapshot: boundSnapshot
       }, sender, target, statusCode, 'stream-terminal-snapshot-authority').catch(() => false);
       if (!queued) continue;
 
       record('stream-terminal-snapshot-notification-queued', {
         tabId: sender?.tab?.id,
-        reason: `status=${statusCode};delay=${delayMs};watchdog=exact-stopped-request`,
+        reason: `status=${statusCode};delay=${delayMs};watchdog=exact-stopped-request;identity=${boundSnapshot.requestIdentitySource}`,
         conversationId: target.id,
-        requestId: snapshot.requestId,
-        monitorRuntimeId: snapshot.documentId,
+        requestId: boundSnapshot.requestId,
+        monitorRuntimeId: boundSnapshot.documentId,
         chromeDocumentId: sender?.documentId
       });
       return true;
@@ -148,6 +162,7 @@
       String(sender?.documentId || ''),
       statusCode,
       snapshot?.promptKey || '',
+      snapshot?.assistantKey || '',
       snapshot?.requestId || ''
     ].join('|');
     if (inFlight.has(key)) return false;
@@ -163,6 +178,7 @@
   globalThis.__chatgptNotifierStreamTerminalSnapshotNotification = Object.freeze({
     version: RUNTIME_VERSION,
     exactSnapshot,
+    bindStoppedWatchdog,
     exactStoppedWatchdog,
     queueExactSnapshotNotification
   });
