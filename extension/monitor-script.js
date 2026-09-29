@@ -15,10 +15,13 @@
   const MISSING_FOOTER_GRACE_MS = Number(thresholds.missingFooterGraceMs || 30_000);
   const SILENT_IDLE_FIRST_MS = Number(thresholds.silentIdleFirstMs || 90_000);
   const SILENT_IDLE_CONFIRM_MS = Number(thresholds.silentIdleConfirmMs || 30_000);
+  const MUTATION_PUBLISH_DEBOUNCE_MS = 500;
+  const MUTATION_PUBLISH_MAX_INTERVAL_MS = 2000;
 
   let disposed = false;
   let observer = null;
   let publishTimer = null;
+  let publishMaxTimer = null;
   let stableFooterTimer = null;
   let silentFirstTimer = null;
   let silentSecondTimer = null;
@@ -35,6 +38,8 @@
   let stickyTerminalStatusCode = '';
   let lastPublishedPromptKey = '';
   let requestPriorPromptKey = '';
+  let cachedPreviousPromptOwnerKey = '';
+  let cachedPreviousPromptTerminal = { promptKey: '', statusCode: '' };
 
   const normalize = (value) => String(value || '').replace(/\s+/g, ' ').trim();
 
@@ -200,6 +205,10 @@
     if (previousUserIndex < 0) return { promptKey: '', statusCode: '' };
 
     const previousUserId = turnId(nodes[previousUserIndex], 'user', previousUserIndex);
+    const currentUserId = turnId(nodes[currentUserIndex], 'user', currentUserIndex);
+    const ownerKey = `${identity.id}|${previousUserId}|${currentUserId}`;
+    if (ownerKey === cachedPreviousPromptOwnerKey) return cachedPreviousPromptTerminal;
+
     let statusCode = '';
     for (let index = previousUserIndex + 1; index < currentUserIndex; index += 1) {
       if (roleOf(nodes[index]) !== 'assistant') continue;
@@ -209,10 +218,13 @@
       const candidate = String(parsed?.statusCode || domStatusCode || '');
       if (candidate) statusCode = candidate;
     }
-    return {
+    const result = {
       promptKey: `${identity.id}|${previousUserId}`,
       statusCode
     };
+    cachedPreviousPromptOwnerKey = ownerKey;
+    cachedPreviousPromptTerminal = result;
+    return result;
   }
 
   function composerElement() {
@@ -521,19 +533,38 @@
     }
   }
 
+  function clearPublishTimers() {
+    if (publishTimer !== null) {
+      clearTimeout(publishTimer);
+      publishTimer = null;
+    }
+    if (publishMaxTimer !== null) {
+      clearTimeout(publishMaxTimer);
+      publishMaxTimer = null;
+    }
+  }
+
   function publishNow() {
     if (disposed) return;
+    clearPublishTimers();
     const current = snapshot();
     scheduleStabilityChecks(current);
     try { chrome.runtime.sendMessage({ type: 'CHATGPT_MONITOR_STATE', snapshot: current }).catch(() => {}); } catch {}
   }
 
   function schedulePublish() {
-    if (disposed || publishTimer !== null) return;
+    if (disposed) return;
+    if (publishTimer !== null) clearTimeout(publishTimer);
     publishTimer = setTimeout(() => {
       publishTimer = null;
       publishNow();
-    }, 200);
+    }, MUTATION_PUBLISH_DEBOUNCE_MS);
+    if (publishMaxTimer === null) {
+      publishMaxTimer = setTimeout(() => {
+        publishMaxTimer = null;
+        publishNow();
+      }, MUTATION_PUBLISH_MAX_INTERVAL_MS);
+    }
   }
 
   function onTrustedPointer(event) {
@@ -620,7 +651,7 @@
   const root = document.querySelector('main') || document.body || document.documentElement;
   if (root && typeof MutationObserver === 'function') {
     observer = new MutationObserver(schedulePublish);
-    observer.observe(root, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['data-testid', 'aria-label', 'aria-disabled', 'aria-hidden', 'hidden', 'disabled', 'style', 'class'] });
+    observer.observe(root, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ['data-testid', 'aria-label', 'aria-disabled', 'aria-hidden', 'hidden', 'disabled'] });
   }
 
   globalThis.__chatgptNotifierMonitorRuntime = Object.freeze({
@@ -635,7 +666,7 @@
       disposed = true;
       abortController.abort();
       observer?.disconnect();
-      if (publishTimer !== null) clearTimeout(publishTimer);
+      clearPublishTimers();
       clearTimer('stable');
       clearTimer('silent-first');
       clearTimer('silent-second');

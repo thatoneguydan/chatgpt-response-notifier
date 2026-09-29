@@ -7,7 +7,8 @@
   const USER_TURN_WAIT_MS = 8000;
   const ARM_RETRY_DELAY_MS = 250;
   const ARM_RETRY_COUNT = 12;
-  const TERMINAL_DEBOUNCE_MS = 120;
+  const TERMINAL_DEBOUNCE_MS = 250;
+  const TERMINAL_MAX_INTERVAL_MS = 1500;
   const DEFINITIVE_STOP_CODES = new Set(['PLANNING_ACTIVE', 'COMPLETE_APPLIED', 'COMPLETE_NO_CHANGES', 'BLOCKED_HUMAN']);
 
   const previous = globalThis.__chatgptNotifierQuickContinueBridge;
@@ -20,6 +21,7 @@
   const abortController = new AbortController();
   let documentObserver = null;
   let terminalTimer = null;
+  let terminalMaxTimer = null;
   let actionGeneration = 0;
   let lastTerminalFingerprint = '';
   let terminalInFlightFingerprint = '';
@@ -240,9 +242,24 @@
     const generation = ++actionGeneration;
     armFreshQuickAction(action, previousUserKey, generation).catch(() => false);
   }
+  function clearTerminalTimers() {
+    if (terminalTimer !== null) {
+      clearTimeout(terminalTimer);
+      terminalTimer = null;
+    }
+    if (terminalMaxTimer !== null) {
+      clearTimeout(terminalMaxTimer);
+      terminalMaxTimer = null;
+    }
+  }
+  function runTerminalInspection() {
+    clearTerminalTimers();
+    forceDefinitiveTerminalStop().catch(() => false);
+  }
   function scheduleTerminalInspection() {
-    if (terminalTimer !== null) return;
-    terminalTimer = setTimeout(() => { terminalTimer = null; forceDefinitiveTerminalStop().catch(() => false); }, TERMINAL_DEBOUNCE_MS);
+    if (terminalTimer !== null) clearTimeout(terminalTimer);
+    terminalTimer = setTimeout(runTerminalInspection, TERMINAL_DEBOUNCE_MS);
+    if (terminalMaxTimer === null) terminalMaxTimer = setTimeout(runTerminalInspection, TERMINAL_MAX_INTERVAL_MS);
   }
   function handleRuntimeMessage(message, _sender, sendResponse) {
     if (message?.type !== 'CHATGPT_NOTIFIER_QUICK_BRIDGE_PING') return false;
@@ -273,7 +290,7 @@
     dispose() {
       try { abortController.abort(); } catch {}
       try { documentObserver?.disconnect(); } catch {}
-      try { if (terminalTimer !== null) clearTimeout(terminalTimer); } catch {}
+      try { clearTerminalTimers(); } catch {}
       try { chrome.runtime.onMessage.removeListener(handleRuntimeMessage); } catch {}
       if (globalThis.__chatgptNotifierQuickContinueBridge === runtime) delete globalThis.__chatgptNotifierQuickContinueBridge;
     }

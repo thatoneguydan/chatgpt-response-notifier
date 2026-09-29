@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_GENERATION = 2;
+  const RUNTIME_GENERATION = 3;
   let extensionVersion = '';
   try { extensionVersion = String(chrome.runtime.getManifest().version || ''); } catch {}
 
