@@ -5,6 +5,7 @@ importScripts('background.js');
 importScripts('watchdog-sole-continuation-authority-background.js');
 importScripts('watchdog-request-lifecycle-fix-background.js');
 importScripts('terminal-watchdog-authority-background.js');
+importScripts('stream-terminal-snapshot-notification-background.js');
 importScripts('terminal-live-proof-background.js');
 importScripts('response-stream-terminal-durable-fallback-background.js');
 importScripts('quick-continue-monitor-bridge-background.js');
