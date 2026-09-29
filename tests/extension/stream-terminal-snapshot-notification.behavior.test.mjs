@@ -125,7 +125,7 @@ test('queues one notification only after exact stopped watchdog and bridged requ
   const harness = buildContext();
   vm.runInContext(source, harness.context);
   const runtime = harness.context.__chatgptNotifierStreamTerminalSnapshotNotification;
-  assert.equal(runtime.version, 1);
+  assert.equal(runtime.version, 2);
 
   const result = await runtime.queueExactSnapshotNotification(terminalMessage(), sender);
   assert.equal(result, true);
@@ -134,8 +134,9 @@ test('queues one notification only after exact stopped watchdog and bridged requ
   assert.equal(harness.queued[0].sourceName, 'stream-terminal-snapshot-authority');
   assert.equal(harness.queued[0].message.snapshot.requestId, 'request-1');
   assert.equal(harness.queued[0].message.snapshot.requestStartedAt, 123456);
+  assert.equal(harness.queued[0].message.snapshot.requestIdentitySource, 'bridged-request');
   assert.equal(harness.diagnostics.at(-1).status, 'stream-terminal-snapshot-notification-queued');
-  assert.match(harness.diagnostics.at(-1).fields.reason, /watchdog=exact-stopped-request/);
+  assert.match(harness.diagnostics.at(-1).fields.reason, /identity=bridged-request/);
 });
 
 test('fails closed when stopped watchdog timestamp does not match the bridged request', async () => {
@@ -151,14 +152,46 @@ test('fails closed when stopped watchdog timestamp does not match the bridged re
   assert.equal(harness.diagnostics.at(-1).status, 'stream-terminal-snapshot-notification-unroutable');
 });
 
-test('fails closed when exact request identity is absent from the bridged snapshot', async () => {
+test('recovers an in-flight upgrade completion from exact prompt, assistant and stopped watchdog identity', async () => {
   const harness = buildContext();
   vm.runInContext(source, harness.context);
 
   const result = await harness.context.__chatgptNotifierStreamTerminalSnapshotNotification.queueExactSnapshotNotification(
-    terminalMessage({ snapshot: { requestId: '' } }),
+    terminalMessage({ snapshot: { requestId: '', requestStartedAt: 0, requestPhase: 'unknown' } }),
     sender
   );
+
+  assert.equal(result, true);
+  assert.equal(harness.queued.length, 1);
+  assert.equal(harness.queued[0].message.snapshot.requestId, '');
+  assert.equal(harness.queued[0].message.snapshot.requestStartedAt, 123456);
+  assert.equal(harness.queued[0].message.snapshot.requestIdentitySource, 'watchdog-upgrade-recovery');
+  assert.match(harness.diagnostics.at(-1).fields.reason, /identity=watchdog-upgrade-recovery/);
+});
+
+test('upgrade recovery fails closed when the stopped watchdog prompt differs', async () => {
+  const harness = buildContext({ watchdogPromptKey: 'conversation-1|other-user' });
+  vm.runInContext(source, harness.context);
+
+  const result = await harness.context.__chatgptNotifierStreamTerminalSnapshotNotification.queueExactSnapshotNotification(
+    terminalMessage({ snapshot: { requestId: '', requestStartedAt: 0, requestPhase: 'unknown' } }),
+    sender
+  );
+
+  assert.equal(result, false);
+  assert.equal(harness.queued.length, 0);
+  assert.equal(harness.diagnostics.at(-1).status, 'stream-terminal-snapshot-notification-unroutable');
+});
+
+test('upgrade recovery still requires exact assistant identity from the bridged snapshot', async () => {
+  const harness = buildContext();
+  vm.runInContext(source, harness.context);
+
+  const result = await harness.context.__chatgptNotifierStreamTerminalSnapshotNotification.queueExactSnapshotNotification(
+    terminalMessage({ snapshot: { requestId: '', requestStartedAt: 0, assistantKey: '' } }),
+    sender
+  );
+
   assert.equal(result, false);
   assert.equal(harness.queued.length, 0);
   assert.equal(harness.diagnostics.at(-1).status, 'stream-terminal-snapshot-invalid');
@@ -170,5 +203,6 @@ test('snapshot notification authority has no ChatGPT traffic or foreground autho
   assert.doesNotMatch(source, /windows\.update\([^)]*focused:\s*true/);
   assert.match(source, /lastRequestStartedAt/);
   assert.match(source, /lastPromptKey/);
+  assert.match(source, /watchdog-upgrade-recovery/);
   assert.match(source, /queueRenderedNotification/);
 });
