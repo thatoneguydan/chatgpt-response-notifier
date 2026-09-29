@@ -3,7 +3,7 @@
 (() => {
   if (globalThis.__chatgptNotifierStreamTerminalDurableFallback) return;
 
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 3;
   const RETRY_DELAYS_MS = Object.freeze([75, 350, 1200]);
   const inFlight = new Map();
 
@@ -77,6 +77,20 @@
     };
   }
 
+  function exactBridgedRequestCandidate(snapshotValue, expected) {
+    const snapshot = snapshotValue || null;
+    if (!snapshot) return null;
+    // A terminal bridge snapshot is authoritative only when it names the exact
+    // prompt tracked by the stopped watchdog. Unlike a later page query, an empty
+    // prompt key is not acceptable here because the event itself is the evidence
+    // being used to recover the request identity.
+    if (String(snapshot.promptKey || '') !== expected.promptKey) return null;
+    return exactRequestCandidate(snapshot, {
+      ...expected,
+      identitySource: 'terminal-bridge-snapshot'
+    });
+  }
+
   function exactDurableRunCandidate(runValue, expected) {
     const run = runValue || null;
     if (!run) return null;
@@ -95,7 +109,7 @@
     });
   }
 
-  async function exactStoppedRequestIdentity(statusCode, sender) {
+  async function exactStoppedRequestIdentity(statusCode, sender, bridgedSnapshot = null) {
     const target = targetForSender(sender);
     const tabId = sender?.tab?.id;
     const chromeDocumentId = String(sender?.documentId || '');
@@ -114,6 +128,7 @@
     if (!watchdog || watchdog.stopped !== true) return null;
     if (String(watchdog.stopReason || '') !== `status:${statusCode}`) return null;
     if (Math.max(0, Number(watchdog.deadlineAt || 0)) !== 0) return null;
+    if (Number.isInteger(watchdog.ownerTabId) && watchdog.ownerTabId !== tabId) return null;
 
     const requestStartedAt = Math.max(0, Number(watchdog.lastRequestStartedAt || 0));
     const promptKey = String(watchdog.lastPromptKey || '');
@@ -128,7 +143,8 @@
       identitySource: 'page-snapshot'
     };
 
-    const candidate = exactRequestCandidate(snapshot, expected)
+    const candidate = exactBridgedRequestCandidate(bridgedSnapshot, expected)
+      || exactRequestCandidate(snapshot, expected)
       || exactDurableRunCandidate(durableRun, expected);
     if (!candidate) return null;
 
@@ -147,8 +163,8 @@
     };
   }
 
-  async function queueFallbackNotification(statusCode, sender) {
-    const identity = await exactStoppedRequestIdentity(statusCode, sender);
+  async function queueFallbackNotification(statusCode, sender, bridgedSnapshot = null) {
+    const identity = await exactStoppedRequestIdentity(statusCode, sender, bridgedSnapshot);
     if (!identity) return null;
 
     const sharedDelivery = globalThis.__chatgptNotifierDeliveryDedupeHook;
@@ -226,12 +242,13 @@
     const chromeDocumentId = String(sender?.documentId || '');
     if (!Number.isInteger(tabId) || !chromeDocumentId) return null;
 
-    const key = `${tabId}|${chromeDocumentId}|${statusCode}`;
+    const bridgedSnapshot = message?.snapshot || null;
+    const key = `${tabId}|${chromeDocumentId}|${statusCode}|${String(bridgedSnapshot?.requestId || '')}|${Math.max(0, Number(bridgedSnapshot?.requestStartedAt || 0))}`;
     if (inFlight.has(key)) return await inFlight.get(key);
     const run = (async () => {
       for (const delayMs of RETRY_DELAYS_MS) {
         await sleep(delayMs);
-        const notificationId = await queueFallbackNotification(statusCode, sender);
+        const notificationId = await queueFallbackNotification(statusCode, sender, bridgedSnapshot);
         if (notificationId) return notificationId;
       }
       recordDiagnostic('response-stream-terminal-fallback-unroutable', {
