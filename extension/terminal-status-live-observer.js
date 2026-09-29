@@ -190,23 +190,30 @@
   async function publishNoStatusDiagnostic() {
     diagnosticTimer = null;
     const current = latestIdentity();
-    if (!current || detectedStatus(current)) return;
-    const snapshot = current.snapshot || {};
-    if (!snapshot.conversationId || !snapshot.promptKey || !snapshot.assistantKey || !snapshot.assistantRevision) return;
-    const shape = (() => {
+    if (current && detectedStatus(current)) return;
+
+    const snapshot = current?.snapshot || {};
+    const shape = current ? (() => {
       try { return globalThis.ChatGPTNotifierRenderedTerminalStatus?.inspect?.(current.assistantTurn) || {}; } catch { return {}; }
-    })();
-    const safeShape = {
+    })() : {};
+    const safeShape = current ? {
       turnCount: Math.max(0, Number(current.turnCount || 0)),
       rootCount: Math.max(0, Number(shape.rootCount || 0)),
       precedingUserCount: Math.max(0, Number(shape.precedingUserCount || 0)),
       followingUserCount: Math.max(0, Number(shape.followingUserCount || 0)),
       foreignAssistantCount: Math.max(0, Number(shape.foreignAssistantCount || 0)),
       boundaryReason: String(shape.boundaryReason || 'unknown').slice(0, 40)
+    } : {
+      turnCount: turns().length,
+      rootCount: 0,
+      precedingUserCount: 0,
+      followingUserCount: 0,
+      foreignAssistantCount: 0,
+      boundaryReason: 'identity-missing'
     };
     const key = [
-      snapshot.assistantKey,
-      snapshot.assistantRevision,
+      snapshot.assistantKey || 'none',
+      snapshot.assistantRevision || 'none',
       safeShape.turnCount,
       safeShape.rootCount,
       safeShape.precedingUserCount,
@@ -222,11 +229,11 @@
       await chrome.runtime.sendMessage({
         type: 'CHATGPT_RENDERED_TERMINAL_SCAN_DIAGNOSTIC',
         snapshot: {
-          conversationId: snapshot.conversationId,
-          requestId: snapshot.requestId,
-          promptKey: snapshot.promptKey,
-          assistantKey: snapshot.assistantKey,
-          assistantRevision: snapshot.assistantRevision
+          conversationId: snapshot.conversationId || '',
+          requestId: snapshot.requestId || '',
+          promptKey: snapshot.promptKey || '',
+          assistantKey: snapshot.assistantKey || '',
+          assistantRevision: snapshot.assistantRevision || ''
         },
         shape: safeShape
       });
@@ -243,7 +250,10 @@
   function scan() {
     scanTimer = null;
     const currentIdentity = latestIdentity();
-    if (!currentIdentity) return;
+    if (!currentIdentity) {
+      scheduleNoStatusDiagnostic();
+      return;
+    }
     const code = detectedStatus(currentIdentity);
     if (!code) {
       scheduleNoStatusDiagnostic();
@@ -288,7 +298,7 @@
   try { chrome.runtime.onMessage.addListener(handleRuntimeMessage); } catch {}
   try {
     observer = new MutationObserver(scheduleScan);
-    observer.observe(document.documentElement, { childList: true, subtree: true, characterData: true });
+    observer.observe(document, { childList: true, subtree: true, characterData: true });
   } catch {}
   try { document.addEventListener('visibilitychange', scheduleScan, { signal: abortController.signal }); } catch {}
 
