@@ -65,8 +65,6 @@ test('toolbar keeps a known watchdog state when a same-revision overview tempora
     }
   }, stopped), true);
 
-  // Message delivery can reverse even when worker writes were serialized. A logical
-  // watchdog revision must win when Date.now() gives both writes the same millisecond.
   assert.equal(fresh({
     activeConversationId: 'conversation-1',
     stateRevision: 4,
@@ -79,8 +77,6 @@ test('toolbar keeps a known watchdog state when a same-revision overview tempora
     }
   }, stopped), false);
 
-  // Once a revisioned record has been observed, do not let an older runtime's
-  // timestamp-only watchdog repaint it at the same enrollment revision.
   assert.equal(fresh({
     activeConversationId: 'conversation-1',
     stateRevision: 4,
@@ -92,9 +88,6 @@ test('toolbar keeps a known watchdog state when a same-revision overview tempora
     }
   }, stopped), false);
 
-  // A Pause/Resume lifecycle advances enrollment revision and clears the old
-  // watchdog record. The replacement watchdog legitimately restarts its own
-  // logical revision sequence and must not be rejected as stale.
   assert.equal(fresh({
     activeConversationId: 'conversation-1',
     stateRevision: 6,
@@ -149,21 +142,9 @@ test('terminal watchdog state is prompt-scoped across request/DOM ordering races
     stopped: false
   };
 
-  assert.equal(statusBelongs({
-    promptKey: 'conversation-1|user-old',
-    requestStartedAt: 200_000
-  }, currentActive), false);
-
-  assert.equal(statusBelongs({
-    promptKey: 'conversation-1|user-new',
-    requestStartedAt: 200_000
-  }, currentActive), true);
-
-  assert.equal(statusBelongs({
-    promptKey: 'conversation-1|user-later',
-    requestStartedAt: 200_001
-  }, currentActive), true);
-
+  assert.equal(statusBelongs({ promptKey: 'conversation-1|user-old', requestStartedAt: 200_000 }, currentActive), false);
+  assert.equal(statusBelongs({ promptKey: 'conversation-1|user-new', requestStartedAt: 200_000 }, currentActive), true);
+  assert.equal(statusBelongs({ promptKey: 'conversation-1|user-later', requestStartedAt: 200_001 }, currentActive), true);
   assert.equal(statusBelongs({
     promptKey: 'conversation-1|user-parent',
     requestStartedAt: 200_000
@@ -181,16 +162,9 @@ test('terminal watchdog state is prompt-scoped across request/DOM ordering races
     lastAutomaticSentAt: 0,
     lastAutomaticPromptKey: ''
   };
-  assert.equal(stoppedOwns({
-    promptKey: 'conversation-1|user-old',
-    requestStartedAt: 200_000
-  }, stopped), true);
+  assert.equal(stoppedOwns({ promptKey: 'conversation-1|user-old', requestStartedAt: 200_000 }, stopped), true);
   assert.equal(stopped.lastRequestStartedAt, 100_000);
-
-  assert.equal(stoppedOwns({
-    promptKey: 'conversation-1|user-new',
-    requestStartedAt: 200_000
-  }, stopped), false);
+  assert.equal(stoppedOwns({ promptKey: 'conversation-1|user-new', requestStartedAt: 200_000 }, stopped), false);
 });
 
 test('watchdog no-code path preserves genuine submission and identity vetoes', () => {
@@ -214,7 +188,7 @@ test('watchdog no-code path preserves genuine submission and identity vetoes', (
   }
 });
 
-test('30-minute no-code deadline is authoritative even while generation is active or unsettled', () => {
+test('watchdog no-code deadline remains authoritative even while generation is active or unsettled', () => {
   const eligibility = loadEligibility();
   const cases = [
     { requestPhase: 'started', stopGenerating: true, toolActivity: true, assistantKey: 'assistant-1', stableTerminal: false },
@@ -223,10 +197,7 @@ test('30-minute no-code deadline is authoritative even while generation is activ
     { requestPhase: 'completed', assistantKey: '', silentIdleConfirmations: 1 }
   ];
   for (const snapshot of cases) {
-    assert.deepEqual(
-      { ...eligibility(snapshot) },
-      { eligible: true, reason: 'deadline-no-code' }
-    );
+    assert.deepEqual({ ...eligibility(snapshot) }, { eligible: true, reason: 'deadline-no-code' });
   }
 });
 
@@ -377,10 +348,12 @@ test('watchdog command is bound to the exact prompt at both send boundaries', ()
   assert.match(statusSource, /performWatchdogContinuation\(message\?\.conversationId \|\| '', message\?\.promptKey \|\| ''\)/);
 });
 
-test('hard-deadline watchdog preserves timing and retry cap', () => {
-  assert.match(monitorSource, /CODE_WATCHDOG_DELAY_MS = 30 \* 60_000/);
+test('configurable watchdog preserves the default 30-minute deadline and three-send cap', () => {
+  assert.match(monitorSource, /DEFAULT_CODE_WATCHDOG_DELAY_MS = 30 \* 60_000/);
   assert.match(monitorSource, /CODE_WATCHDOG_RETRY_MS = 60_000/);
-  assert.match(monitorSource, /CODE_WATCHDOG_MAX_SENDS = 3/);
+  assert.match(monitorSource, /DEFAULT_CODE_WATCHDOG_MAX_SENDS = 3/);
+  assert.match(monitorSource, /function codeWatchdogDelayMs\(\)/);
+  assert.match(monitorSource, /function codeWatchdogMaxSends\(\)/);
   assert.match(monitorSource, /const noCodeEligibility = codeWatchdogNoCodeEligibility\(live\)/);
   assert.match(monitorSource, /if \(noCodeEligibility\.eligible !== true\)/);
 });
@@ -400,14 +373,15 @@ test('overdue watchdog observation retries do not replace the continuation deadl
   assert.match(monitorSource, /deadlineAt,[\s\S]*retryAt: 0,[\s\S]*retryReason: ''/);
 });
 
-test('worker startup rearms an overdue persisted deadline immediately instead of honoring an old settlement retry', () => {
+test('worker startup restores settings before rearming an overdue persisted deadline', () => {
   const start = monitorSource.indexOf('async function restoreCodeWatchdogAlarms');
   const end = monitorSource.indexOf('async function pruneOldRuns', start);
   assert.ok(start >= 0 && end > start, 'watchdog alarm restore helper must exist');
   const restore = monitorSource.slice(start, end);
   assert.match(restore, /if \(deadlineAt > 0\) when = deadlineAt <= now \? now \+ 1000 : deadlineAt/);
   assert.match(restore, /else if \(retryAt > 0\)/);
-  assert.match(monitorSource, /restoreCodeWatchdogAlarms\(\)\.catch/);
+  assert.match(monitorSource, /codeWatchdogSettingsReady = restoreCodeWatchdogSettings\(\)/);
+  assert.match(monitorSource, /codeWatchdogSettingsReady\.then\(\(\) => restoreCodeWatchdogAlarms\(\)\)/);
 });
 
 test('watchdog state cannot regress to an older request snapshot', () => {
@@ -421,26 +395,26 @@ test('watchdog state cannot regress to an older request snapshot', () => {
   assert.match(reconcile, /waitingForRequestStart === true[\s\S]*lastAutomaticSentAt[\s\S]*lastStatusCode[\s\S]*requestStartedAt === persistedRequestStartedAt/);
 });
 
-test('successful watchdog send persists only the next deadline, not a visible zero-deadline intermediate state', () => {
+test('successful watchdog send persists only the configured next deadline, not a visible zero-deadline intermediate state', () => {
   const start = monitorSource.indexOf('async function handleCodeWatchdogAlarm');
   const end = monitorSource.indexOf('function closeDerivedReason', start);
   assert.ok(start >= 0 && end > start, 'watchdog alarm handler must exist');
   const handler = monitorSource.slice(start, end);
-  assert.match(handler, /const nextDeadlineAt = sentAt \+ CODE_WATCHDOG_DELAY_MS/);
+  assert.match(handler, /const nextDeadlineAt = sentAt \+ codeWatchdogDelayMs\(\)/);
   assert.match(handler, /deadlineAt: nextDeadlineAt/);
   assert.match(handler, /scheduleCodeWatchdog\(record, nextDeadlineAt\)/);
   assert.doesNotMatch(handler, /putCodeWatchdog\(conversationId,[\s\S]{0,500}deadlineAt: 0/);
 });
 
-test('successful recoverable-code watchdog sends atomically receive the next 30-minute deadline', () => {
+test('successful recoverable-code watchdog sends atomically receive the configured next deadline', () => {
   const resetStart = monitorSource.indexOf('async function resetCodeWatchdogForIncomplete');
   const resetEnd = monitorSource.indexOf('async function reconcileCodeWatchdog', resetStart);
   const reset = monitorSource.slice(resetStart, resetEnd);
   assert.match(reset, /deadlineAt: Math\.max\(0, Number\(automaticSentAt \|\| 0\)\) > 0/);
-  assert.match(reset, /CODE_WATCHDOG_DELAY_MS/);
+  assert.match(reset, /codeWatchdogDelayMs\(\)/);
 
   const start = monitorSource.indexOf('async function handleCodeWatchdogAlarm');
   const end = monitorSource.indexOf('function closeDerivedReason', start);
   const handler = monitorSource.slice(start, end);
-  assert.match(handler, /scheduleCodeWatchdog\(record, automaticSentAt \+ CODE_WATCHDOG_DELAY_MS\)/);
+  assert.match(handler, /scheduleCodeWatchdog\(record, automaticSentAt \+ codeWatchdogDelayMs\(\)\)/);
 });
