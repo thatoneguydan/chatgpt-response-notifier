@@ -102,14 +102,7 @@
       record.type === 'attributes'
       && OWNED_MUTATION_PASSTHROUGH_ATTRIBUTES.has(String(record.attributeName || ''))
     ) return false;
-    if (isOwnedMutationNode(record.target)) return true;
-    if (record.type !== 'childList') return false;
-
-    const changedNodes = [
-      ...Array.from(record.addedNodes || []),
-      ...Array.from(record.removedNodes || [])
-    ];
-    return changedNodes.length > 0 && changedNodes.every(isOwnedMutationNode);
+    return isOwnedMutationNode(record.target);
   }
 
   function filterOwnedMutations(records) {
