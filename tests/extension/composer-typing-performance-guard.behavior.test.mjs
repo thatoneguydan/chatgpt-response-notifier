@@ -12,7 +12,7 @@ const hotUpdate = readText('extension/terminal-stop-post-update-recovery-backgro
 const compatBackground = readText('extension/page-runtime-compat-background.js');
 const rebind = readText('extension/page-runtime-rebind.js');
 
-test('composer typing guard is syntactically valid and loaded before live readers', () => {
+test('composer typing guard is syntactically valid and loaded once before all live readers', () => {
   assert.doesNotThrow(() => new vm.Script(guard));
   assert.equal(manifest.version, '0.9.100');
   const scripts = manifest.content_scripts[0]?.js || [];
@@ -20,10 +20,14 @@ test('composer typing guard is syntactically valid and loaded before live reader
   const guardIndex = scripts.indexOf('composer-typing-performance-guard.js');
   const monitorIndex = scripts.indexOf('monitor-script.js');
   const terminalIndex = scripts.indexOf('terminal-status-live-observer.js');
+  const watchdogIndex = scripts.indexOf('watchdog-page-authority-v3.js');
   assert.ok(compatIndex >= 0 && guardIndex === compatIndex + 1);
   assert.ok(monitorIndex > guardIndex);
   assert.ok(terminalIndex > guardIndex);
-  assert.deepEqual(manifest.content_scripts[1].js.slice(0, 2), ['page-dom-compat.js', 'composer-typing-performance-guard.js']);
+  assert.ok(watchdogIndex > guardIndex);
+  const allStartupScripts = manifest.content_scripts.flatMap((entry) => entry.js || []);
+  assert.equal(allStartupScripts.filter((file) => file === 'composer-typing-performance-guard.js').length, 1);
+  assert.equal(allStartupScripts.filter((file) => file === 'page-dom-compat.js').length, 1);
 });
 
 test('composer mutations are suppressed for terminal readers and transition-limited for the monitor', () => {
