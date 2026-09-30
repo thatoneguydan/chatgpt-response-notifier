@@ -84,6 +84,40 @@ function Test-WithinWindow {
     return $observed -ge $Start -and $observed -le $End
 }
 
+function Test-ExplicitlyUnenrolledTerminal {
+    param(
+        [object]$Terminal,
+        [object[]]$Diagnostics,
+        [string]$ExpectedVersion,
+        [string]$ExpectedCommitSuffix,
+        [DateTimeOffset]$TerminalAt,
+        [DateTimeOffset]$StopDeadline
+    )
+    $requiredDelays = @('50', '350', '1200')
+    $matchedDelays = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($record in $Diagnostics) {
+        if ([string](Get-PropertyValue -InputObject $record -Name 'source') -cne 'terminal-live-proof') { continue }
+        if ([string](Get-PropertyValue -InputObject $record -Name 'status') -cne 'terminal-watchdog-not-stopped-observed') { continue }
+        if ([string](Get-PropertyValue -InputObject $record -Name 'extensionVersion') -cne $ExpectedVersion) { continue }
+        if (-not (Test-BuildCommitIdentity -Record $record -ExpectedSuffix $ExpectedCommitSuffix)) { continue }
+        if (-not (Test-SameLogicalTurnIdentity -Left $record -Right $Terminal)) { continue }
+        if (-not (Test-SameRequiredIdentity -Left $record -Right $Terminal -Name 'tabId')) { continue }
+        if (-not (Test-WithinWindow -Candidate $record -Start $TerminalAt -End $StopDeadline)) { continue }
+        $reason = [string](Get-PropertyValue -InputObject $record -Name 'reason')
+        if ($reason -notmatch '(^|;)automation=off($|;)') { continue }
+        if ($reason -notmatch '(^|;)watchdog=missing($|;)') { continue }
+        if ($reason -notmatch '(^|;)stopped=false($|;)') { continue }
+        if ($reason -notmatch '(^|;)stopReason=none($|;)') { continue }
+        if ($reason -notmatch '(^|;)deadline=zero($|;)') { continue }
+        $delayMatch = [regex]::Match($reason, '(^|;)delay=(50|350|1200)($|;)')
+        if ($delayMatch.Success) { [void]$matchedDelays.Add($delayMatch.Groups[2].Value) }
+    }
+    foreach ($required in $requiredDelays) {
+        if (-not $matchedDelays.Contains($required)) { return $false }
+    }
+    return $true
+}
+
 if ($MinimumLiveDefinitiveProofs -lt 1 -or $MinimumLiveDefinitiveProofs -gt $DefinitiveStatusCodes.Count) {
     throw "MinimumLiveDefinitiveProofs must be between 1 and $($DefinitiveStatusCodes.Count)."
 }
@@ -133,6 +167,7 @@ $deliveryDiagnostics = @((Get-PropertyValue -InputObject $safe -Name 'deliveryDi
 $allRecords = @($diagnostics + $deliveryDiagnostics)
 $usedNotificationSuffixes = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
 $accepted = @()
+$ignoredUnenrolled = @()
 
 foreach ($statusCode in $DefinitiveStatusCodes) {
     $terminalCandidates = @(
@@ -150,10 +185,21 @@ foreach ($statusCode in $DefinitiveStatusCodes) {
     if ($terminalCandidates.Count -eq 0) { continue }
 
     $acceptedForCode = $null
+    $enrolledOrAmbiguousCandidateSeen = $false
     foreach ($terminal in $terminalCandidates) {
         $terminalAt = Convert-ToDateTimeOffset (Get-PropertyValue -InputObject $terminal -Name 'observedAt')
         if ($null -eq $terminalAt) { continue }
-        $stopDeadline = $terminalAt.AddSeconds([Math]::Max(1, $MaxStopLagSeconds))
+        $stopDeadline = $terminalAt.AddSeconds([Math]::Max(2, $MaxStopLagSeconds))
+        if (Test-ExplicitlyUnenrolledTerminal -Terminal $terminal -Diagnostics $diagnostics -ExpectedVersion $ExpectedVersion -ExpectedCommitSuffix $expectedCommitSuffix -TerminalAt $terminalAt -StopDeadline $stopDeadline) {
+            $ignoredUnenrolled += [pscustomobject][ordered]@{
+                statusCode = $statusCode
+                conversationSuffix = [string](Get-PropertyValue -InputObject $terminal -Name 'conversationSuffix')
+                assistantSuffix = [string](Get-PropertyValue -InputObject $terminal -Name 'assistantSuffix')
+                observedAt = [string](Get-PropertyValue -InputObject $terminal -Name 'observedAt')
+            }
+            continue
+        }
+        $enrolledOrAmbiguousCandidateSeen = $true
         $deliveryStart = $terminalAt.AddSeconds(-2)
         $deliveryEnd = $terminalAt.AddSeconds([Math]::Max(1, $MaxDeliveryLagSeconds))
 
@@ -336,10 +382,10 @@ foreach ($statusCode in $DefinitiveStatusCodes) {
         if ($null -ne $acceptedForCode) { break }
     }
 
-    if ($null -eq $acceptedForCode) {
-        throw "Live acceptance failed for ${statusCode}: exact-candidate terminal observation exists, but matching persisted watchdog stop + presented toast/helper acknowledgement evidence is incomplete."
+    if ($null -eq $acceptedForCode -and $enrolledOrAmbiguousCandidateSeen) {
+        throw "Live acceptance failed for ${statusCode}: exact-candidate enrolled/ambiguous terminal observation exists, but matching persisted watchdog stop + presented toast/helper acknowledgement evidence is incomplete."
     }
-    $accepted += $acceptedForCode
+    if ($null -ne $acceptedForCode) { $accepted += $acceptedForCode }
 }
 
 if ($accepted.Count -lt $MinimumLiveDefinitiveProofs) {
@@ -348,11 +394,12 @@ if ($accepted.Count -lt $MinimumLiveDefinitiveProofs) {
 }
 
 $acceptedCodes = @($accepted | ForEach-Object { $_.statusCode })
-Write-Host ("LIVE_TERMINAL_NOTIFICATION_ACCEPTANCE_PASS version={0}; source={1}; liveCodes={2}; liveProofs={3}; minimum={4}; uniqueNotifications={5}" -f `
+Write-Host ("LIVE_TERMINAL_NOTIFICATION_ACCEPTANCE_PASS version={0}; source={1}; liveCodes={2}; liveProofs={3}; minimum={4}; uniqueNotifications={5}; ignoredUnenrolled={6}" -f `
     $ExpectedVersion,
     $expectedCommitSuffix,
     ($acceptedCodes -join ','),
     $accepted.Count,
     $MinimumLiveDefinitiveProofs,
-    $usedNotificationSuffixes.Count)
+    $usedNotificationSuffixes.Count,
+    $ignoredUnenrolled.Count)
 $accepted | ConvertTo-Json -Depth 5 -Compress | Write-Host

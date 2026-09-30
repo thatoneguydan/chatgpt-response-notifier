@@ -32,49 +32,24 @@ function buildEvidence(mutator = null) {
     const notificationSuffix = `toast0${index + 1}`;
     const tabId = 1000 + index;
     diagnostics.push({
-      source: 'terminal-live-proof',
-      status: 'terminal-message-received',
-      observedAt: iso(base, offset),
-      extensionVersion: expectedVersion,
-      statusCode,
+      source: 'terminal-live-proof', status: 'terminal-message-received', observedAt: iso(base, offset),
+      extensionVersion: expectedVersion, statusCode,
       reason: `build=${expectedCommitSuffix};CHATGPT_RENDERED_TERMINAL_STATUS`,
-      tabId,
-      conversationSuffix,
-      promptSuffix,
-      assistantSuffix,
-      revisionSuffix
+      tabId, conversationSuffix, promptSuffix, assistantSuffix, revisionSuffix
     });
     diagnostics.push({
-      source: 'terminal-live-proof',
-      status: 'terminal-watchdog-stopped-observed',
-      observedAt: iso(base, offset + 350),
-      extensionVersion: expectedVersion,
-      statusCode,
+      source: 'terminal-live-proof', status: 'terminal-watchdog-stopped-observed', observedAt: iso(base, offset + 350),
+      extensionVersion: expectedVersion, statusCode,
       reason: `build=${expectedCommitSuffix};delay=350;automation=on;watchdog=present;stopped=true;stopReason=status:${statusCode};deadline=zero`,
-      tabId,
-      conversationSuffix,
-      promptSuffix,
-      assistantSuffix,
-      revisionSuffix
+      tabId, conversationSuffix, promptSuffix, assistantSuffix, revisionSuffix
     });
     deliveryDiagnostics.push({
-      source: 'host',
-      status: 'toast-presented',
-      observedAt: iso(base, offset + 1_500),
-      conversationSuffix,
-      notificationSuffix,
-      presented: true,
-      presentationState: 'shown'
+      source: 'host', status: 'toast-presented', observedAt: iso(base, offset + 1_500),
+      conversationSuffix, notificationSuffix, presented: true, presentationState: 'shown'
     });
     deliveryDiagnostics.push({
-      source: 'delivery-pipeline',
-      status: 'helper-durable-accepted',
-      observedAt: iso(base, offset + 1_650),
-      extensionVersion: expectedVersion,
-      conversationSuffix,
-      notificationSuffix,
-      presented: true,
-      presentationState: 'shown'
+      source: 'delivery-pipeline', status: 'helper-durable-accepted', observedAt: iso(base, offset + 1_650),
+      extensionVersion: expectedVersion, conversationSuffix, notificationSuffix, presented: true, presentationState: 'shown'
     });
   });
 
@@ -84,13 +59,9 @@ function buildEvidence(mutator = null) {
     sourceCommit: expectedSourceCommit,
     chrome: { extensionConnectionLive: true },
     safeRuntimeEvidence: {
-      state: 'read',
-      installedVersion: expectedVersion,
-      sourceCommit: expectedSourceCommit,
-      currentExtensionVersion: expectedVersion,
-      currentExtensionObservedAtUtc: new Date(now).toISOString(),
-      diagnostics,
-      deliveryDiagnostics
+      state: 'read', installedVersion: expectedVersion, sourceCommit: expectedSourceCommit,
+      currentExtensionVersion: expectedVersion, currentExtensionObservedAtUtc: new Date(now).toISOString(),
+      diagnostics, deliveryDiagnostics
     }
   };
   if (typeof mutator === 'function') mutator(evidence);
@@ -104,6 +75,14 @@ function keepOnlyCode(evidence, statusCode) {
   return evidence;
 }
 
+function keepOnlyCodes(evidence, statusCodes) {
+  const wanted = new Set(statusCodes);
+  const conversations = new Set(statusCodes.map((statusCode) => `conv0${definitiveCodes.indexOf(statusCode) + 1}`));
+  evidence.safeRuntimeEvidence.diagnostics = evidence.safeRuntimeEvidence.diagnostics.filter((record) => wanted.has(record.statusCode));
+  evidence.safeRuntimeEvidence.deliveryDiagnostics = evidence.safeRuntimeEvidence.deliveryDiagnostics.filter((record) => conversations.has(record.conversationSuffix));
+  return evidence;
+}
+
 function convertToPriorPresentedDedup(evidence, statusCode) {
   keepOnlyCode(evidence, statusCode);
   const terminal = evidence.safeRuntimeEvidence.diagnostics.find((record) => record.status === 'terminal-message-received');
@@ -111,49 +90,49 @@ function convertToPriorPresentedDedup(evidence, statusCode) {
   const host = evidence.safeRuntimeEvidence.deliveryDiagnostics.find((record) => record.source === 'host');
   const helper = evidence.safeRuntimeEvidence.deliveryDiagnostics.find((record) => record.source === 'delivery-pipeline');
   assert.ok(terminal && stop && host && helper);
-
   const terminalMs = Date.parse(terminal.observedAt);
   const priorClaimAt = terminalMs - 12 * 60_000;
   host.observedAt = new Date(priorClaimAt + 1_500).toISOString();
   helper.observedAt = new Date(priorClaimAt + 1_650).toISOString();
-
   evidence.safeRuntimeEvidence.deliveryDiagnostics.unshift(
     {
-      source: 'delivery-identity',
-      status: 'claim-accepted',
-      observedAt: new Date(priorClaimAt).toISOString(),
-      extensionVersion: expectedVersion,
-      reason: 'claimed',
-      tabId: terminal.tabId,
-      conversationSuffix: terminal.conversationSuffix,
-      promptSuffix: terminal.promptSuffix,
-      assistantSuffix: terminal.assistantSuffix,
-      revisionSuffix: terminal.revisionSuffix,
+      source: 'delivery-identity', status: 'claim-accepted', observedAt: new Date(priorClaimAt).toISOString(),
+      extensionVersion: expectedVersion, reason: 'claimed', tabId: terminal.tabId,
+      conversationSuffix: terminal.conversationSuffix, promptSuffix: terminal.promptSuffix,
+      assistantSuffix: terminal.assistantSuffix, revisionSuffix: terminal.revisionSuffix,
       notificationSuffix: helper.notificationSuffix
     },
     {
-      source: 'delivery-pipeline',
-      status: 'rendered-terminal-notification-queued',
-      observedAt: new Date(priorClaimAt + 100).toISOString(),
-      extensionVersion: expectedVersion,
-      reason: 'rendered-terminal-authority',
-      conversationSuffix: terminal.conversationSuffix,
-      notificationSuffix: helper.notificationSuffix
+      source: 'delivery-pipeline', status: 'rendered-terminal-notification-queued', observedAt: new Date(priorClaimAt + 100).toISOString(),
+      extensionVersion: expectedVersion, reason: 'rendered-terminal-authority',
+      conversationSuffix: terminal.conversationSuffix, notificationSuffix: helper.notificationSuffix
     },
     {
-      source: 'delivery-identity',
-      status: 'claim-suppressed',
-      observedAt: new Date(terminalMs + 50).toISOString(),
-      extensionVersion: expectedVersion,
-      reason: 'already-delivered-logical-turn',
-      tabId: terminal.tabId,
-      conversationSuffix: terminal.conversationSuffix,
-      promptSuffix: terminal.promptSuffix,
-      assistantSuffix: terminal.assistantSuffix,
-      revisionSuffix: terminal.revisionSuffix,
+      source: 'delivery-identity', status: 'claim-suppressed', observedAt: new Date(terminalMs + 50).toISOString(),
+      extensionVersion: expectedVersion, reason: 'already-delivered-logical-turn', tabId: terminal.tabId,
+      conversationSuffix: terminal.conversationSuffix, promptSuffix: terminal.promptSuffix,
+      assistantSuffix: terminal.assistantSuffix, revisionSuffix: terminal.revisionSuffix,
       notificationSuffix: 'suppressed-new-attempt'
     }
   );
+  return evidence;
+}
+
+function makeCodeExplicitlyUnenrolled(evidence, statusCode) {
+  const terminal = evidence.safeRuntimeEvidence.diagnostics.find((record) => record.status === 'terminal-message-received' && record.statusCode === statusCode);
+  assert.ok(terminal);
+  evidence.safeRuntimeEvidence.diagnostics = evidence.safeRuntimeEvidence.diagnostics.filter((record) => !(record.status === 'terminal-watchdog-stopped-observed' && record.statusCode === statusCode));
+  for (const delay of [50, 350, 1200]) {
+    evidence.safeRuntimeEvidence.diagnostics.push({
+      source: 'terminal-live-proof', status: 'terminal-watchdog-not-stopped-observed',
+      observedAt: new Date(Date.parse(terminal.observedAt) + delay).toISOString(),
+      extensionVersion: expectedVersion,
+      reason: `build=${expectedCommitSuffix};delay=${delay};automation=off;watchdog=missing;stopped=false;stopReason=none;deadline=zero`,
+      tabId: terminal.tabId, conversationSuffix: terminal.conversationSuffix,
+      promptSuffix: terminal.promptSuffix, assistantSuffix: terminal.assistantSuffix,
+      revisionSuffix: terminal.revisionSuffix
+    });
+  }
   return evidence;
 }
 
@@ -163,14 +142,9 @@ function runAcceptance(evidence, { sourceCommit = expectedSourceCommit, minimumP
   try {
     writeFileSync(evidencePath, JSON.stringify(evidence), 'utf8');
     return spawnSync('powershell.exe', [
-      '-NoLogo',
-      '-NoProfile',
-      '-ExecutionPolicy', 'Bypass',
-      '-File', acceptanceScript,
-      '-EvidencePath', evidencePath,
-      '-ExpectedVersion', expectedVersion,
-      '-ExpectedSourceCommit', sourceCommit,
-      '-MinimumLiveDefinitiveProofs', String(minimumProofs)
+      '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', acceptanceScript,
+      '-EvidencePath', evidencePath, '-ExpectedVersion', expectedVersion,
+      '-ExpectedSourceCommit', sourceCommit, '-MinimumLiveDefinitiveProofs', String(minimumProofs)
     ], { encoding: 'utf8' });
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -192,6 +166,34 @@ test('installed-profile acceptance supports one real live definitive proof when 
   assert.match(result.stdout, /liveCodes=BLOCKED_HUMAN/);
   assert.match(result.stdout, /liveProofs=1/);
   assert.match(result.stdout, /uniqueNotifications=1/);
+});
+
+test('installed-profile acceptance ignores an explicitly unenrolled terminal while accepting a separate enrolled proof', { skip: process.platform !== 'win32' }, () => {
+  const evidence = keepOnlyCodes(buildEvidence(), ['COMPLETE_APPLIED', 'BLOCKED_HUMAN']);
+  makeCodeExplicitlyUnenrolled(evidence, 'BLOCKED_HUMAN');
+  const result = runAcceptance(evidence);
+  assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+  assert.match(result.stdout, /liveCodes=COMPLETE_APPLIED/);
+  assert.match(result.stdout, /ignoredUnenrolled=1/);
+});
+
+test('installed-profile acceptance fails when a non-stopping terminal was enrolled instead of explicitly off', { skip: process.platform !== 'win32' }, () => {
+  const evidence = keepOnlyCodes(buildEvidence(), ['COMPLETE_APPLIED', 'BLOCKED_HUMAN']);
+  makeCodeExplicitlyUnenrolled(evidence, 'BLOCKED_HUMAN');
+  const probe = evidence.safeRuntimeEvidence.diagnostics.find((record) => record.status === 'terminal-watchdog-not-stopped-observed' && record.conversationSuffix === 'conv03');
+  probe.reason = probe.reason.replace('automation=off;watchdog=missing', 'automation=on;watchdog=present');
+  const result = runAcceptance(evidence);
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /BLOCKED_HUMAN/);
+});
+
+test('installed-profile acceptance fails when explicit unenrollment is missing one required probe', { skip: process.platform !== 'win32' }, () => {
+  const evidence = keepOnlyCodes(buildEvidence(), ['COMPLETE_APPLIED', 'BLOCKED_HUMAN']);
+  makeCodeExplicitlyUnenrolled(evidence, 'BLOCKED_HUMAN');
+  evidence.safeRuntimeEvidence.diagnostics = evidence.safeRuntimeEvidence.diagnostics.filter((record) => !(record.status === 'terminal-watchdog-not-stopped-observed' && /delay=1200/.test(record.reason)));
+  const result = runAcceptance(evidence);
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}\n${result.stderr}`, /BLOCKED_HUMAN/);
 });
 
 test('installed-profile acceptance supports prior presentation only when exact same logical turn is explicitly dedup-suppressed', { skip: process.platform !== 'win32' }, () => {
