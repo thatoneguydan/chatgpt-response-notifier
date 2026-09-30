@@ -23,22 +23,25 @@ test('composer typing guard is syntactically valid and loaded before live reader
   assert.ok(compatIndex >= 0 && guardIndex === compatIndex + 1);
   assert.ok(monitorIndex > guardIndex);
   assert.ok(terminalIndex > guardIndex);
+  assert.deepEqual(manifest.content_scripts[1].js.slice(0, 2), ['page-dom-compat.js', 'composer-typing-performance-guard.js']);
 });
 
-test('composer text mutations are removed before downstream MutationObserver callbacks', () => {
+test('composer mutations are suppressed for terminal readers and transition-limited for the monitor', () => {
   assert.match(guard, /const PreviousMutationObserver = globalThis\.MutationObserver/);
-  assert.match(guard, /mutationFilter\.isComposerTextMutation\(record\) !== true/);
+  assert.match(guard, /function isMonitorObservation\(options\)/);
+  assert.match(guard, /MONITOR_ATTRIBUTE_FILTER\.every\(\(name\) => filter\.has\(name\)\)/);
+  assert.match(guard, /state\?\.monitorObservation !== true \|\| deliveredDraftTransition/);
+  assert.match(guard, /if \(state\.lastDraftPresent === present\) continue;/);
+  assert.match(guard, /state\.lastDraftPresent = present/);
   assert.match(guard, /if \(filtered\.length\) callback\(filtered, facade\)/);
-  assert.match(guard, /takeRecords\(\) \{ return filterComposerMutations\(this\.inner\.takeRecords\(\)\); \}/);
+  assert.match(guard, /takeRecords\(\) \{ return filterComposerMutations\(this\.inner\.takeRecords\(\), this\.state\); \}/);
   assert.match(guard, /globalThis\.MutationObserver = ComposerQuietMutationObserver/);
 });
 
-test('draft safety publishes only empty/nonempty transitions and avoids layout reads', () => {
-  assert.match(guard, /document\.addEventListener\('input', handleComposerInput/);
-  assert.match(guard, /if \(present === lastDraftPresent\) return;/);
-  assert.match(guard, /lastDraftPresent = present;/);
-  assert.match(guard, /publishDraftTransition\(present\)/);
+test('draft transition routing uses text only and creates no DOM signal or layout work', () => {
   assert.match(guard, /composer\.textContent/);
+  assert.doesNotMatch(guard, /document\.addEventListener\('input'/);
+  assert.doesNotMatch(guard, /createElement|append\(|setAttribute|dispatchEvent|CustomEvent/);
   assert.doesNotMatch(guard, /innerText|getBoundingClientRect|offsetWidth|offsetHeight/);
 });
 
