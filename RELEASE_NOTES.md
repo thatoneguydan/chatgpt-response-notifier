@@ -1,6 +1,6 @@
 # ChatGPT Response Notifier 0.9.99
 
-- Prevents draft typing from waking the rendered terminal-code observer and watchdog terminal scan. Draft/upload/send controls remain observed by their existing monitor and dispatch owners.
+- Prevents draft typing from waking the rendered terminal-code observer, watchdog terminal scan and Quick Continue terminal bridge. Draft/upload/send controls remain observed by their existing monitor and dispatch owners.
 - Draft-only monitor publications reuse the submitted conversation state instead of recloning replies. They still read draft/upload/request controls; assistant changes, structural mutations and explicit safety queries read fresh conversation state.
 - Quick Continue 1.2.30 centers Simple between Continue and Project, displays its independent countdown immediately, removes redundant on/off messages, and starts on fresh chats before they receive a conversation ID.
 - Hot updates retire surviving runtime closures through a shared DOM lifecycle signal, guard queued/async work after disposal, and remove stale toolbar copies before mounting the new singleton.
