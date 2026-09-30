@@ -9,6 +9,7 @@ const CONTENT_FILES = [
   'composer-text.js',
   'send-transaction.js',
   'runtime-reset.js',
+  'config-editor-style.js',
   'content-script.js',
   'hover-edit-script.js',
   'conversation-state.js'
