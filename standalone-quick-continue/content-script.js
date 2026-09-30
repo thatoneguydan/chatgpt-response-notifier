@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 10;
+  const RUNTIME_VERSION = 11;
   const prompts = globalThis.ChatGPTQuickContinuePrompts;
   const configApi = globalThis.ChatGPTQuickContinueConfig;
   const composerApi = globalThis.ChatGPTQuickContinueComposer;
@@ -51,6 +51,7 @@
   let unsubscribeConfig = null;
   let disposed = false;
   let availabilityDirty = true;
+  let lastComposerHasDraft = null;
 
   function composerElement() {
     if (observedComposer?.isConnected && !observedComposer.disabled && observedComposer.getAttribute?.('aria-disabled') !== 'true') return observedComposer;
@@ -556,9 +557,20 @@
     button.addEventListener('mouseleave', () => { button.style.background = 'var(--main-surface-secondary, rgba(127,127,127,.10))'; });
   }
 
-  function updateAvailability(composer) {
+  function composerHasDraft(composer) {
+    if (!composer) return false;
+    try {
+      if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
+        return String(composer.value || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim().length > 0;
+      }
+      return String(composer.textContent || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim().length > 0;
+    } catch { return false; }
+  }
+
+  function updateAvailability(composer, knownHasDraft = null) {
     if (disposed) return;
-    const hasDraft = Boolean(composer && composerText(composer).trim());
+    const hasDraft = knownHasDraft === null ? composerHasDraft(composer) : Boolean(knownHasDraft);
+    lastComposerHasDraft = hasDraft;
     const unavailable = busy || !composer || hasDraft;
     for (const button of sendButtons) {
       button.disabled = unavailable;
@@ -576,6 +588,7 @@
     }
     if (observedComposer !== composer) {
       availabilityDirty = true;
+      lastComposerHasDraft = null;
       try { if (observedComposer) resizeObserver.unobserve(observedComposer); } catch {}
       observedComposer = composer || null;
       try { if (observedComposer) resizeObserver.observe(observedComposer); } catch {}
@@ -680,7 +693,15 @@
   }
 
   function handleComposerInput(event) {
-    if (event.target === observedComposer || observedComposer?.contains(event.target)) scheduleSync();
+    if (!(event.target === observedComposer || observedComposer?.contains(event.target))) return;
+    const inputType = String(event?.inputType || '');
+    let hasDraft = null;
+    if (inputType.startsWith('insert') && lastComposerHasDraft === true) return;
+    if (inputType.startsWith('insert') && lastComposerHasDraft === false && String(event?.data || '').length > 0) hasDraft = true;
+    if (hasDraft === null) hasDraft = composerHasDraft(observedComposer);
+    if (lastComposerHasDraft === hasDraft) return;
+    availabilityDirty = false;
+    updateAvailability(observedComposer, hasDraft);
   }
 
   unsubscribeConfig = configApi.subscribe((nextConfig) => {
