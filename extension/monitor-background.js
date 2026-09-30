@@ -671,15 +671,13 @@
   }
 
   function codeWatchdogNoCodeEligibility(snapshot = {}) {
-    if (snapshot.observable === false) return { eligible: false, reason: 'page-unobservable' };
     if (snapshot.online === false) return { eligible: false, reason: 'offline' };
     if (snapshot.authRequired === true) return { eligible: false, reason: 'auth-required' };
     if (snapshot.approvalRequired === true) return { eligible: false, reason: 'approval-required' };
     if (snapshot.rateLimited === true) return { eligible: false, reason: 'rate-limited' };
     if (snapshot.hasDraft === true) return { eligible: false, reason: 'draft-present' };
     if (snapshot.hasUpload === true) return { eligible: false, reason: 'upload-present' };
-    if (snapshot.applicationStateIdentityMatched === false) return { eligible: false, reason: 'application-state-identity-mismatch' };
-    return { eligible: true, reason: 'deadline-no-code' };
+    return { eligible: true, reason: 'deadline-no-code-fail-open' };
   }
 
   async function handleCodeWatchdogAlarmState(conversationId) {
