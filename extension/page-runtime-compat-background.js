@@ -28,8 +28,11 @@
       try {
         const files = Array.isArray(injection?.files) ? injection.files.map(String) : null;
         if (files && files.some((file) => NEEDS_PAGE_COMPAT.has(file))) {
-          const missingCompat = PAGE_COMPAT_FILES.filter((file) => !files.includes(file));
-          if (missingCompat.length) next = { ...injection, files: [...missingCompat, ...files] };
+          const withoutCompat = files.filter((file) => !PAGE_COMPAT_FILES.includes(file));
+          const orderedFiles = [...PAGE_COMPAT_FILES, ...withoutCompat];
+          if (orderedFiles.length !== files.length || orderedFiles.some((file, index) => file !== files[index])) {
+            next = { ...injection, files: orderedFiles };
+          }
         }
       } catch {}
       return callback === undefined
