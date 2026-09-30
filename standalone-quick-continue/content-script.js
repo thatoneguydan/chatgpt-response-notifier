@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 9;
+  const RUNTIME_VERSION = 10;
   const prompts = globalThis.ChatGPTQuickContinuePrompts;
   const configApi = globalThis.ChatGPTQuickContinueConfig;
   const composerApi = globalThis.ChatGPTQuickContinueComposer;
@@ -49,8 +49,11 @@
   let currentConfig = null;
   let configLoadPromise = null;
   let unsubscribeConfig = null;
+  let disposed = false;
+  let availabilityDirty = true;
 
   function composerElement() {
+    if (observedComposer?.isConnected && !observedComposer.disabled && observedComposer.getAttribute?.('aria-disabled') !== 'true') return observedComposer;
     for (const selector of [
       '#prompt-textarea',
       'textarea[data-testid="prompt-textarea"]',
@@ -130,7 +133,7 @@
   }
 
   function setStatus(message) {
-    if (!status) return;
+    if (disposed || !status) return;
     status.textContent = String(message || '');
     status.hidden = !message;
     if (statusTimer !== null) clearTimeout(statusTimer);
@@ -169,7 +172,7 @@
   }
 
   async function sendPrompt(text) {
-    if (busy || !text) return false;
+    if (disposed || busy || !text) return false;
     const composer = composerElement();
     if (!composer) { setStatus('ChatGPT composer not found.'); return false; }
     if (composerText(composer).trim()) {
@@ -229,14 +232,22 @@
   }
 
   function positionProjectPopover() {
-    if (!projectPopover || projectPopover.hidden || !toolbar) return;
-    const direction = preferredPopoverDirection(toolbar.getBoundingClientRect(), projectPopover.offsetHeight, window.innerHeight);
+    if (disposed || !projectPopover || projectPopover.hidden || !toolbar) return;
+    const toolbarRect = toolbar.getBoundingClientRect();
+    let occupiedTop = toolbarRect.top;
+    for (const row of toolbar.querySelectorAll('[data-chatgpt-notifier-watchdog-status-owner], #chatgpt-quick-continue-simple-countdown')) {
+      try { resizeObserver?.observe(row); } catch {}
+      if (row.hidden || getComputedStyle(row).display === 'none') continue;
+      occupiedTop = Math.min(occupiedTop, row.getBoundingClientRect().top);
+    }
+    const occupiedRect = { top: occupiedTop, bottom: toolbarRect.bottom };
+    const direction = preferredPopoverDirection(occupiedRect, projectPopover.offsetHeight, window.innerHeight);
     if (direction === 'below') {
       projectPopover.style.top = 'calc(100% + 6px)';
       projectPopover.style.bottom = 'auto';
     } else {
       projectPopover.style.top = 'auto';
-      projectPopover.style.bottom = 'calc(100% + 6px)';
+      projectPopover.style.bottom = `calc(100% + ${Math.ceil(toolbarRect.top - occupiedTop) + 6}px)`;
     }
   }
 
@@ -265,8 +276,8 @@
     return !busy && Boolean(composer) && !composerText(composer).trim();
   }
 
-  function updateProjectSendState() {
-    const canSend = canSendProject();
+  function updateProjectSendState(canSend = canSendProject()) {
+    if (disposed) return;
     if (projectSend && projectInput) projectSend.disabled = !canSend || !prompts.normalizeInline(projectInput.value);
     for (const button of projectButtons) {
       button.disabled = !canSend;
@@ -320,7 +331,7 @@
   }
 
   async function openProjectPopover() {
-    if (!projectPopover) return;
+    if (disposed || !projectPopover) return;
     projectPopover.hidden = false;
     setEditorMode(false);
     const config = await ensureConfig();
@@ -331,7 +342,7 @@
 
   async function openConfigEditor() {
     const config = await ensureConfig();
-    if (!config || !editorTextarea) return;
+    if (disposed || !config || !editorTextarea) return;
     editorTextarea.value = configApi.serialize(config);
     setEditorError('');
     setEditorMode(true);
@@ -391,6 +402,9 @@
   }
 
   function buildToolbar() {
+    // Invalidated extension worlds can leave DOM without accessible globals.
+    // Remove every stale copy before mounting the current singleton.
+    for (const stale of document.querySelectorAll(`#${TOOLBAR_ID}`)) stale.remove();
     const root = document.createElement('div');
     root.id = TOOLBAR_ID;
     root.setAttribute('role', 'toolbar');
@@ -528,6 +542,7 @@
     root.append(popover); projectPopover = popover;
     (document.body || document.documentElement).append(root);
     toolbar = root;
+    try { resizeObserver?.observe(root); } catch {}
     publishWatchdogConfig(currentConfig);
     return root;
   }
@@ -542,6 +557,7 @@
   }
 
   function updateAvailability(composer) {
+    if (disposed) return;
     const hasDraft = Boolean(composer && composerText(composer).trim());
     const unavailable = busy || !composer || hasDraft;
     for (const button of sendButtons) {
@@ -549,13 +565,17 @@
       button.style.opacity = button.disabled ? '.45' : '1';
       button.style.cursor = button.disabled ? 'default' : 'pointer';
     }
-    updateProjectSendState();
+    updateProjectSendState(!unavailable);
   }
 
   function observeGeometry(composer, anchor) {
     if (typeof ResizeObserver !== 'function') return;
-    if (!resizeObserver) resizeObserver = new ResizeObserver(scheduleSync);
+    if (!resizeObserver) {
+      resizeObserver = new ResizeObserver(schedulePosition);
+      try { if (toolbar) resizeObserver.observe(toolbar); } catch {}
+    }
     if (observedComposer !== composer) {
+      availabilityDirty = true;
       try { if (observedComposer) resizeObserver.unobserve(observedComposer); } catch {}
       observedComposer = composer || null;
       try { if (observedComposer) resizeObserver.observe(observedComposer); } catch {}
@@ -589,6 +609,7 @@
 
   function syncToolbar() {
     scheduled = null;
+    if (disposed) return;
     suppressLegacyNotifierToolbar();
     const composer = composerElement();
     const anchor = composerAnchor(composer);
@@ -599,7 +620,10 @@
     observeGeometry(composer, anchor);
     if (!composer || !anchor || !visible(anchor)) { scheduleToolbarHide(root); return; }
     cancelToolbarHide();
-    updateAvailability(composer);
+    if (availabilityDirty) {
+      availabilityDirty = false;
+      updateAvailability(composer);
+    }
     const clockText = formatClock(new Date());
     if (clock && clock.textContent !== clockText) clock.textContent = clockText;
     root.style.display = 'flex';
@@ -608,13 +632,21 @@
     const height = root.offsetHeight;
     const left = Math.max(8, Math.min(window.innerWidth - width - 8, rect.right - width));
     const top = Math.max(8, rect.top - height - 8);
-    root.style.left = `${Math.round(left)}px`;
-    root.style.top = `${Math.round(top)}px`;
+    const nextLeft = `${Math.round(left)}px`;
+    const nextTop = `${Math.round(top)}px`;
+    if (root.style.left !== nextLeft) root.style.left = nextLeft;
+    if (root.style.top !== nextTop) root.style.top = nextTop;
     root.style.visibility = 'visible';
     positionProjectPopover();
   }
 
   function scheduleSync() {
+    availabilityDirty = true;
+    schedulePosition();
+  }
+
+  function schedulePosition() {
+    if (disposed) return;
     if (scheduled !== null) return;
     if (typeof requestAnimationFrame === 'function' && document.visibilityState !== 'hidden') {
       scheduledWithAnimationFrame = true; scheduled = requestAnimationFrame(syncToolbar);
@@ -634,11 +666,25 @@
   }
 
   function handleDocumentMutations(records) {
-    if (notifierOnlyMutation(records)) return;
-    scheduleSync();
+    if (disposed) return;
+    if (notifierOnlyMutation(records)) {
+      if (projectPopover && !projectPopover.hidden) schedulePosition();
+      return;
+    }
+    if (toolbar?.isConnected && Array.from(records || []).every((record) => {
+      const node = record.target?.nodeType === 1 ? record.target : record.target?.parentElement;
+      return toolbar.contains(node) || observedComposer?.contains(node);
+    })) return;
+    if (!toolbar?.isConnected || !observedComposer?.isConnected) availabilityDirty = true;
+    schedulePosition();
+  }
+
+  function handleComposerInput(event) {
+    if (event.target === observedComposer || observedComposer?.contains(event.target)) scheduleSync();
   }
 
   unsubscribeConfig = configApi.subscribe((nextConfig) => {
+    if (disposed) return;
     currentConfig = nextConfig;
     publishWatchdogConfig(nextConfig);
     if (projectList && (!editorPanel || editorPanel.hidden)) renderProjectList(nextConfig.projects);
@@ -649,15 +695,17 @@
   observer = new MutationObserver(handleDocumentMutations);
   observer.observe(document.documentElement, { childList: true, subtree: true });
   document.addEventListener('pointerdown', handleDocumentPointerDown, true);
-  document.addEventListener('input', scheduleSync, { capture: true, passive: true });
-  document.addEventListener('scroll', scheduleSync, { capture: true, passive: true });
+  document.addEventListener('input', handleComposerInput, { capture: true, passive: true });
+  document.addEventListener('scroll', schedulePosition, { capture: true, passive: true });
   document.addEventListener('visibilitychange', scheduleSync, true);
-  window.addEventListener('resize', scheduleSync, { passive: true });
-  clockTimer = setInterval(scheduleSync, 30_000);
+  window.addEventListener('resize', schedulePosition, { passive: true });
+  clockTimer = setInterval(schedulePosition, 30_000);
 
   globalThis.__chatgptQuickContinueRuntime = Object.freeze({
     version: RUNTIME_VERSION,
     dispose() {
+      if (disposed) return;
+      disposed = true;
       try { observer?.disconnect(); } catch {}
       try { resizeObserver?.disconnect(); } catch {}
       try { unsubscribeConfig?.(); } catch {}
@@ -671,13 +719,14 @@
       try { if (toolbarHideTimer !== null) clearTimeout(toolbarHideTimer); } catch {}
       try { if (statusTimer !== null) clearTimeout(statusTimer); } catch {}
       try { document.removeEventListener('pointerdown', handleDocumentPointerDown, true); } catch {}
-      try { document.removeEventListener('input', scheduleSync, true); } catch {}
-      try { document.removeEventListener('scroll', scheduleSync, true); } catch {}
+      try { document.removeEventListener('input', handleComposerInput, true); } catch {}
+      try { document.removeEventListener('scroll', schedulePosition, true); } catch {}
       try { document.removeEventListener('visibilitychange', scheduleSync, true); } catch {}
-      try { window.removeEventListener('resize', scheduleSync); } catch {}
-      try { toolbar?.remove(); } catch {}
+      try { window.removeEventListener('resize', schedulePosition); } catch {}
+      discardToolbar();
     }
   });
 
+  globalThis.__chatgptQuickContinueLifecycle?.register?.(globalThis.__chatgptQuickContinueRuntime);
   scheduleSync();
 })();

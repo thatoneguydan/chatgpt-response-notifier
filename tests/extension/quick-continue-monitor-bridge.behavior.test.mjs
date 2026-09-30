@@ -15,7 +15,7 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   const pageAuthority = readText('extension/watchdog-page-authority-v3.js');
   const backgroundAuthority = readText('extension/watchdog-authority-v3-background.js');
 
-  assert.equal(manifest.version, '0.9.98');
+  assert.equal(manifest.version, '0.9.99');
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-monitor-bridge.js')));
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-fallback.js')));
   assert.ok(!manifest.content_scripts.some((entry) => entry.js?.includes('quick-continue-status-stabilizer.js')));
@@ -28,7 +28,7 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   assert.match(bootstrap, /importScripts\('watchdog-authority-v3-background\.js'\)/);
   assert.match(background, /BRIDGE_FILE = 'quick-continue-monitor-bridge\.js'/);
   assert.match(background, /STATUS_FILE = 'quick-continue-status-owner-v6\.js'/);
-  assert.match(background, /BRIDGE_RUNTIME_VERSION = 4/);
+  assert.match(background, /BRIDGE_RUNTIME_VERSION = 5/);
   assert.match(background, /STATUS_RUNTIME_VERSION = 8/);
   const bridgeRuntimeVersion = Number(bridge.match(/const RUNTIME_VERSION = (\d+)/)?.[1] || 0);
   const requiredBridgeRuntimeVersion = Number(background.match(/const BRIDGE_RUNTIME_VERSION = (\d+)/)?.[1] || 0);
@@ -105,6 +105,59 @@ test('definitive rendered statuses have both legacy and v3 authoritative stop ro
   assert.match(pageAuthority, /type:\s*'FORCE_PARK_CODE_WATCHDOG_TERMINAL_V3'/);
   assert.match(backgroundAuthority, /monitor\.parkCodeWatchdogForTerminalStatus/);
   assert.match(backgroundAuthority, /terminal-stop-not-persisted/);
+});
+
+test('Quick Continue bridge leaves draft typing quiet but still parks on a changed assistant terminal', async () => {
+  let observerCallback;
+  let scans = 0;
+  let statusCode = '';
+  let timerId = 0;
+  const timers = new Map();
+  const messages = [];
+  const composer = {};
+  const assistant = {};
+  const context = vm.createContext({
+    AbortController, URL, location: { href: 'https://chatgpt.com/c/bridge-performance', pathname: '/c/bridge-performance' },
+    document: { documentElement: {}, getElementById: () => null, querySelectorAll: () => [], addEventListener() {} },
+    window: { addEventListener() {} },
+    MutationObserver: class {
+      constructor(callback) { observerCallback = callback; }
+      observe() {}
+      disconnect() {}
+    },
+    setTimeout(callback) { const id = ++timerId; timers.set(id, callback); return id; },
+    clearTimeout(id) { timers.delete(id); },
+    ChatGPTNotifierOwnedDomMutationFilter: { isComposerTextMutation: (record) => record.target === composer },
+    __chatgptNotifierStatusDom: { latestAssistantSnapshot() {
+      scans += 1;
+      return { statusCode, conversationId: 'bridge-performance', promptKey: 'fresh-prompt' };
+    } },
+    chrome: { runtime: {
+      onMessage: { addListener() {}, removeListener() {} },
+      async sendMessage(message) { messages.push(message); return { ok: true }; }
+    } }
+  });
+  vm.runInContext(readText('extension/quick-continue-monitor-bridge.js'), context);
+  const settle = async () => {
+    while (timers.size) {
+      const callback = timers.values().next().value;
+      callback();
+      await Promise.resolve();
+    }
+    await Promise.resolve();
+  };
+  await settle();
+  assert.equal(scans, 1);
+  for (let index = 0; index < 40; index += 1) observerCallback([{ type: 'childList', target: composer }]);
+  await settle();
+  assert.equal(scans, 1, 'draft edits must not clone/read submitted assistant content');
+  statusCode = 'COMPLETE_APPLIED';
+  observerCallback([{ type: 'characterData', target: composer }, { type: 'characterData', target: assistant }]);
+  await settle();
+  assert.equal(scans, 2, 'a real assistant change must still be inspected');
+  assert.equal(messages.length, 1);
+  assert.equal(messages[0].type, 'PARK_CODE_WATCHDOG_FOR_TERMINAL_STATUS_FOR_SENDER');
+  assert.equal(messages[0].statusCode, 'COMPLETE_APPLIED');
 });
 
 test('status presentation has one durable DOM owner and quarantines stale pre-v8 timer surfaces', () => {

@@ -10,12 +10,12 @@ When ChatGPT Response Notifier is enabled, it can add its own smart monitoring-s
 
 - **Continue** immediately sends the configured Continue template.
 - **Project** opens the non-modal project picker and **Project > Edit** opens the live JSON config editor.
-- **Simple** toggles the fallback watchdog for the current saved ChatGPT conversation. Gray is off; green is on.
+- **Simple**, between Continue and Project, starts or stops the fallback watchdog. Gray is off; green is on. Its own countdown appears immediately, independently of smart monitoring or response state.
 - Click the **time at the right side of the toolbar** to toggle timestamps for ordinary manually typed ChatGPT messages.
 
 Continue and Project use the configured `{time}` placeholder. Project also replaces `{project}`. Manual timestamping uses both `{time}` and `{message}`. JSON `\n` escapes remain real line breaks.
 
-Manual timestamp mode is remembered independently for each ChatGPT conversation. The Simple watchdog also stays bound to the exact conversation/tab where it was enabled; changing chats or closing that tab disables that Simple run rather than allowing it to act in another conversation.
+Manual timestamp mode is remembered independently for each ChatGPT conversation. Simple can start before a new chat is saved and binds to that tab's first conversation ID without restarting its timer. After binding, changing chats or closing the tab disables the run.
 
 ## Simple fallback watchdog
 
@@ -33,7 +33,7 @@ Turning **Simple** on starts a fresh timer and resets its attempt count. Every a
 
 The phase, deadline, attempt count, conversation identity, and settings snapshot are persisted in Chrome local extension storage. Chrome's extension alarm system owns the phase deadlines, so a page refresh or ordinary MV3 service-worker sleep does not erase the loop.
 
-This mode is intentionally less cautious than normal Continue/Project actions: at the send phase it can replace an existing composer draft because the fallback contract is "send when due" rather than "decide whether sending is safe." It still remains mechanically scoped to the same saved conversation so it cannot continue a different chat after navigation.
+At the send phase Simple can replace an existing composer draft under its "send when due" contract. It remains scoped to the same tab and, once created, the same conversation.
 
 If smart monitoring is also enabled, both systems remain independent and can act on their own schedules. Use Simple by itself when you want the deterministic fallback behavior and do not want the smart watchdog competing with it.
 

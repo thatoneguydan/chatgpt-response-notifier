@@ -68,7 +68,7 @@ function loadTurnHelpers(source, endMarker, normalizerName) {
 
 for (const [name, source, endMarker, normalizerName, expectedVersion] of [
   ['status', statusSource, 'function terminalStatusCodeFromRenderedText', 'inline', 17],
-  ['monitor', monitorSource, 'function assistantHasStatusEvidence', 'normalize', 13]
+  ['monitor', monitorSource, 'function assistantHasStatusEvidence', 'normalize', 14]
 ]) {
   test(`${name} runtime reads current data-turn semantic nodes as real conversation turns`, () => {
     const helpers = loadTurnHelpers(source, endMarker, normalizerName);

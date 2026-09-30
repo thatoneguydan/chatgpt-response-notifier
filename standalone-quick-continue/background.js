@@ -9,12 +9,12 @@ const SIMPLE_GET_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_GET';
 const SIMPLE_ACTION_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_ACTION';
 const SIMPLE_STATE_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATE';
 const CONTENT_FILES = [
+  'runtime-reset.js',
   'dom-compat.js',
   'prompt-format.js',
   'config.js',
   'composer-text.js',
   'send-transaction.js',
-  'runtime-reset.js',
   'config-editor-style.js',
   'content-script.js',
   'hover-edit-script.js',
@@ -154,6 +154,7 @@ function publicSimpleState(state, extras = {}) {
   if (!state) return { enabled: false, ...extras };
   return {
     enabled: state.enabled === true,
+    conversationId: String(state.conversationId || ''),
     phase: String(state.phase || ''),
     attemptsUsed: Number(state.attemptsUsed || 0),
     attemptsRemaining: Math.max(0, Number(state.settings?.attempts || 0) - Number(state.attemptsUsed || 0)),
@@ -202,7 +203,6 @@ async function setSimpleWatchdog(sender, message) {
   if (message?.enabled !== true) return clearSimpleState(tabId);
 
   const conversationId = String(message?.conversationId || '').trim();
-  if (!conversationId) return { enabled: false, reason: 'Open a saved chat before enabling Simple.' };
   if (conversationIdFromUrl(sender?.tab?.url) !== conversationId) {
     return { enabled: false, reason: 'Chat changed before Simple could start.' };
   }
@@ -215,9 +215,10 @@ async function setSimpleWatchdog(sender, message) {
     enabled: true,
     tabId,
     conversationId,
+    initialUrl: String(sender?.tab?.url || '').split('#')[0],
     phase: 'countdown',
     attemptsUsed: 0,
-    nextAt: Date.now() + (settings.timerMinutes * 60 * 1000),
+    nextAt: Math.min(Date.now(), Math.max(Date.now() - 10_000, Number(message.startedAt) || Date.now())) + (settings.timerMinutes * 60 * 1000),
     settings
   };
   return saveAndScheduleSimpleState(state);
@@ -230,7 +231,11 @@ async function getSimpleWatchdog(sender, message) {
   const state = states[stateKey(tabId)];
   if (!state?.enabled) return { enabled: false };
   const conversationId = String(message?.conversationId || '').trim();
-  if (!conversationId || state.conversationId !== conversationId || conversationIdFromUrl(sender?.tab?.url) !== conversationId) {
+  if (!state.conversationId && conversationId && conversationIdFromUrl(sender?.tab?.url) === conversationId) {
+    state.conversationId = conversationId;
+    await writeSimpleStates(states);
+  }
+  if (state.conversationId !== conversationId || conversationIdFromUrl(sender?.tab?.url) !== conversationId) {
     return clearSimpleState(tabId, { reason: 'chat-changed' });
   }
   return publicSimpleState(state);
@@ -239,7 +244,11 @@ async function getSimpleWatchdog(sender, message) {
 async function tabForSimpleState(state) {
   let tab = null;
   try { tab = await chrome.tabs.get(state.tabId); } catch {}
-  if (!tab || conversationIdFromUrl(tab.url) !== state.conversationId) return null;
+  if (!tab) return null;
+  const currentId = conversationIdFromUrl(tab.url);
+  if (!state.conversationId && currentId) state.conversationId = currentId;
+  if (currentId !== state.conversationId) return null;
+  if (!currentId && String(tab.url || '').split('#')[0] !== state.initialUrl) return null;
   return tab;
 }
 

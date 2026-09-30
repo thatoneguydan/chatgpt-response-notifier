@@ -320,7 +320,9 @@
 
   try { chrome.runtime.onMessage.addListener(handleRuntimeMessage); } catch {}
   try {
-    observer = new MutationObserver(scheduleScan);
+    observer = new MutationObserver((records) => {
+      if (Array.from(records || []).some((record) => !globalThis.ChatGPTNotifierOwnedDomMutationFilter?.isComposerTextMutation?.(record))) scheduleScan();
+    });
     observer.observe(document, { childList: true, subtree: true, characterData: true });
   } catch {}
   try { document.addEventListener('visibilitychange', scheduleScan, { signal: abortController.signal }); } catch {}

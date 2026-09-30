@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 4;
+  const RUNTIME_VERSION = 5;
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const USER_TURN_WAIT_MS = 8000;
@@ -267,7 +267,9 @@
     return false;
   }
   function handleDocumentMutations(records) {
-    if (Array.from(records || []).some((record) => record?.type === 'attributes' && record?.attributeName === 'data-watchdog-settings')) {
+    const relevant = Array.from(records || []).filter((record) => globalThis.ChatGPTNotifierOwnedDomMutationFilter?.isComposerTextMutation?.(record) !== true);
+    if (!relevant.length) return;
+    if (relevant.some((record) => record?.type === 'attributes' && record?.attributeName === 'data-watchdog-settings')) {
       syncWatchdogSettings().catch(() => false);
     }
     scheduleTerminalInspection();

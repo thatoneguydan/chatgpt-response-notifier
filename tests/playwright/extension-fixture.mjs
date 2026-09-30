@@ -1,6 +1,7 @@
 import { test as base, chromium, expect } from '@playwright/test';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
+import os from 'node:os';
 import fs from 'node:fs/promises';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -315,18 +316,70 @@ export async function extensionWorldDiagnostics(page) {
   }
 }
 
+export async function extensionWorker(context, name) {
+  for (const worker of context.serviceWorkers()) {
+    if (!worker.url().startsWith('chrome-extension://')) continue;
+    const workerName = await worker.evaluate(() => chrome.runtime.getManifest().name).catch(() => '');
+    if (workerName === name) return worker;
+  }
+  return null;
+}
+
+async function nativeExtensionDiagnostics(context) {
+  const page = await context.newPage();
+  try {
+    await page.goto('chrome://extensions/');
+    return await page.evaluate(async () => {
+      const extensions = await chrome.developerPrivate.getExtensionsInfo({ includeDisabled: true, includeTerminated: true });
+      return extensions.map(({ id, name, state, version, manifestErrors, runtimeErrors, views }) => ({ id, name, state, version, manifestErrors, runtimeErrors, views }));
+    });
+  } finally {
+    await page.close();
+  }
+}
+
+async function requireExtensionWorkers(context, testInfo, chromiumLog) {
+  const knownNames = ['ChatGPT Quick Continue', 'ChatGPT Response Notifier'];
+  try {
+    await expect.poll(async () => {
+      const workers = await Promise.all(knownNames.map((name) => extensionWorker(context, name)));
+      return workers.every(Boolean);
+    }, { timeout: 10_000, message: 'Both native MV3 background workers must start before testing extension behavior.' }).toBe(true);
+  } catch (error) {
+    // Read only this disposable profile's native extension errors. Content
+    // scripts alone do not prove that the background service worker registered.
+    let nativeDiagnostics;
+    try {
+      nativeDiagnostics = await nativeExtensionDiagnostics(context);
+    } catch (diagnosticError) {
+      nativeDiagnostics = { error: String(diagnosticError) };
+    }
+    const log = await fs.readFile(chromiumLog, 'utf8').catch(() => '');
+    const diagnostics = { workers: context.serviceWorkers().map((worker) => worker.url()), nativeDiagnostics, chromiumLog: log.slice(-12000) };
+    await testInfo.attach('extension-worker-startup.json', { body: JSON.stringify(diagnostics, null, 2), contentType: 'application/json' });
+    throw new Error(`${error.message}\nNative extension worker diagnostics: ${JSON.stringify(diagnostics)}`);
+  }
+}
+
 export const test = base.extend({
   extensionContext: async ({}, use, testInfo) => {
-    const profile = testInfo.outputPath('chromium-profile');
-    await fs.rm(profile, { recursive: true, force: true });
+    // Windows Chromium cache/LevelDB paths exceed MAX_PATH when the profile is
+    // nested under the runner checkout plus Playwright's long test directory.
+    // Content scripts can load despite those failures while both workers fail.
+    const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'cgpt-mv3-'));
+    const chromiumLog = testInfo.outputPath('chromium-worker-startup.log');
     const extensions = [notifierExtensionPath, quickContinueExtensionPath].join(',');
     const context = await chromium.launchPersistentContext(profile, {
       channel: 'chromium',
       headless: true,
+      ignoreDefaultArgs: ['--disable-extensions'],
       viewport: { width: 1280, height: 900 },
       args: [
         `--disable-extensions-except=${extensions}`,
         `--load-extension=${extensions}`,
+        '--disable-gpu',
+        '--enable-logging=file',
+        `--log-file=${chromiumLog}`,
         '--proxy-server=http://127.0.0.1:9',
         '--proxy-bypass-list=<-loopback>'
       ]
@@ -340,9 +393,11 @@ export const test = base.extend({
       // prevents the machine's live managed updater from replacing exact-head
       // extension bytes while the isolated browser regression is running.
       await new Promise((resolve) => setTimeout(resolve, 1500));
+      await requireExtensionWorkers(context, testInfo, chromiumLog);
       await use(context);
     } finally {
       await context.close();
+      await fs.rm(profile, { recursive: true, force: true });
     }
   },
 

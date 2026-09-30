@@ -387,7 +387,9 @@
   try { window.addEventListener('focus', scheduleTerminalInspection, { signal: abortController.signal }); } catch {}
 
   if (typeof MutationObserver === 'function') {
-    documentObserver = new MutationObserver(scheduleTerminalInspection);
+    documentObserver = new MutationObserver((records) => {
+      if (Array.from(records || []).some((record) => !globalThis.ChatGPTNotifierOwnedDomMutationFilter?.isComposerTextMutation?.(record))) scheduleTerminalInspection();
+    });
     const root = document.documentElement || document;
     documentObserver.observe(root, { childList: true, subtree: true, characterData: true });
   }

@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 5;
+  const RUNTIME_VERSION = 6;
   try { globalThis.__chatgptNotifierPageDomCompat?.dispose?.(); } catch {}
 
   if (typeof Document === 'undefined' || typeof Element === 'undefined') return;
@@ -107,6 +107,24 @@
 
   function filterOwnedMutations(records) {
     return Array.from(records || []).filter((record) => !isOwnedMutation(record));
+  }
+
+  function isComposerTextMutation(record) {
+    // Terminal-code readers never need draft text. Preserve structural composer
+    // replacement, attributes and send/Stop controls for their real owners.
+    if (!['childList', 'characterData'].includes(record?.type)) return false;
+    const element = elementForMutationNode(record.target);
+    if (!element) return false;
+    const composer = nativeClosestTo(element, '#prompt-textarea, [contenteditable="true"], textarea');
+    if (!composer) return false;
+    if (nativeClosestTo(composer, SEMANTIC_ROLE_SELECTOR) || nativeClosestTo(composer, LEGACY_TURN_SELECTOR)) return false;
+    // Speaker-label-only turns have synthetic roles rather than native role
+    // attributes. Keep their inline editors visible without rescanning labels
+    // on every keystroke in the actual composer.
+    for (let ancestor = composer; ancestor; ancestor = ancestor.parentElement) {
+      if (speakerRoles.has(ancestor)) return false;
+    }
+    return true;
   }
 
   class NotifierFilteredMutationObserver {
@@ -383,6 +401,7 @@
     isOwnedNode: isOwnedMutationNode,
     isOwnedMutation,
     filterRecords: filterOwnedMutations,
+    isComposerTextMutation,
     mutationObserverFiltered: globalThis.MutationObserver === NotifierFilteredMutationObserver
   });
 

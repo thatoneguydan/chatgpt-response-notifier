@@ -29,8 +29,8 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.permissions].sort(), ['alarms', 'scripting', 'storage', 'tabs'].sort());
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
-  assert.deepEqual(manifest.content_scripts[0].js, ['dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'send-transaction.js', 'runtime-reset.js', 'config-editor-style.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.29');
+  assert.deepEqual(manifest.content_scripts[0].js, ['runtime-reset.js', 'dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'send-transaction.js', 'config-editor-style.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
+  assert.equal(manifest.version, '1.2.30');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -56,7 +56,8 @@ test('managed updater talks only to loopback, reloads itself only for a newer in
 
 test('current ChatGPT UI compatibility loads first and covers semantic composer and send controls', () => {
   assert.doesNotThrow(() => new vm.Script(domCompatSource));
-  assert.equal(manifest.content_scripts[0].js[0], 'dom-compat.js');
+  assert.equal(manifest.content_scripts[0].js[0], 'runtime-reset.js');
+  assert.equal(manifest.content_scripts[0].js[1], 'dom-compat.js');
   assert.match(domCompatSource, /data-message-author-role/);
   assert.match(domCompatSource, /data-lexical-editor/);
   assert.match(domCompatSource, /role="textbox"/);
@@ -72,8 +73,15 @@ test('current ChatGPT UI compatibility loads first and covers semantic composer 
 test('runtime reset disposes stale page runtimes before current scripts rebind to the config API', () => {
   assert.doesNotThrow(() => new vm.Script(runtimeResetSource));
   const disposed = [];
+  const listeners = new Map();
   const context = {
     globalThis: {},
+    Event,
+    document: {
+      dispatchEvent(event) { listeners.get(event.type)?.(); },
+      addEventListener(type, listener) { listeners.set(type, listener); },
+      removeEventListener(type) { listeners.delete(type); }
+    },
     __chatgptQuickContinueRuntime: { dispose: () => disposed.push('content') },
     __chatgptQuickContinueHoverEditRuntime: { dispose: () => disposed.push('hover') },
     __chatgptQuickContinueConversationStateRuntime: { dispose: () => disposed.push('conversation') }
@@ -84,6 +92,9 @@ test('runtime reset disposes stale page runtimes before current scripts rebind t
   assert.equal('__chatgptQuickContinueRuntime' in context, false);
   assert.equal('__chatgptQuickContinueHoverEditRuntime' in context, false);
   assert.equal('__chatgptQuickContinueConversationStateRuntime' in context, false);
+  context.__chatgptQuickContinueLifecycle.register({ dispose: () => disposed.push('lost-global-runtime') });
+  context.document.dispatchEvent(new Event('chatgpt-quick-continue-runtime-reset'));
+  assert.equal(disposed.at(-1), 'lost-global-runtime');
 });
 
 test('bundled JSON contains editable prompt templates, saved projects, and Simple fallback timing', () => {
@@ -257,7 +268,7 @@ test('inline pencil controls are removed while Project Edit remains the JSON edi
   assert.match(contentSource, /editButton\.textContent = 'Edit'/);
   assert.match(contentSource, /editButton\.setAttribute\('aria-label', 'Edit Quick Continue JSON'\)/);
   assert.match(contentSource, /openConfigEditor\(\)/);
-  assert.match(hoverEditSource, /new MutationObserver\(scheduleToolbarSync\)/);
+  assert.match(hoverEditSource, /!clockToggle\?\.isConnected/);
   assert.match(hoverEditSource, /requestAnimationFrame/);
   assert.doesNotMatch(hoverEditSource, /XMLHttpRequest|WebSocket|fetch\(/);
 });
@@ -353,11 +364,11 @@ test('prompt and config APIs are versioned so reinjection cannot retain stale gl
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
   assert.match(configSource, /chrome\.storage\.onChanged\.removeListener\(handleStorageChanged\)/);
-  assert.match(contentSource, /const RUNTIME_VERSION = 9/);
-  assert.match(hoverEditSource, /const RUNTIME_VERSION = 9/);
+  assert.match(contentSource, /const RUNTIME_VERSION = 10/);
+  assert.match(hoverEditSource, /const RUNTIME_VERSION = 10/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
-  assert.match(conversationStateSource, /const RUNTIME_VERSION = 4/);
+  assert.match(conversationStateSource, /const RUNTIME_VERSION = 5/);
   assert.match(conversationStateSource, /__chatgptQuickContinueConversationStateRuntime/);
 });
 
@@ -555,7 +566,7 @@ test('toolbar self-heals missing core controls and recovers from transient compo
 });
 
 test('standalone runtime hot-replaces stale generations, restores a detached toolbar, and ignores notifier-only churn', () => {
-  assert.match(contentSource, /const RUNTIME_VERSION = 9/);
+  assert.match(contentSource, /const RUNTIME_VERSION = 10/);
   assert.match(contentSource, /const previousRuntime = globalThis\.__chatgptQuickContinueRuntime/);
   assert.match(contentSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.doesNotMatch(contentSource, /__chatgptQuickContinueInstalled/);
@@ -567,10 +578,10 @@ test('standalone runtime hot-replaces stale generations, restores a detached too
   assert.match(contentSource, /new MutationObserver\(handleDocumentMutations\)/);
   assert.match(contentSource, /document\.addEventListener\('pointerdown', handleDocumentPointerDown, true\)/);
   assert.match(contentSource, /document\.removeEventListener\('pointerdown', handleDocumentPointerDown, true\)/);
-  assert.match(contentSource, /document\.removeEventListener\('input', scheduleSync, true\)/);
-  assert.match(contentSource, /document\.removeEventListener\('scroll', scheduleSync, true\)/);
+  assert.match(contentSource, /document\.removeEventListener\('input', handleComposerInput, true\)/);
+  assert.match(contentSource, /document\.removeEventListener\('scroll', schedulePosition, true\)/);
   assert.match(contentSource, /document\.removeEventListener\('visibilitychange', scheduleSync, true\)/);
-  assert.match(contentSource, /window\.removeEventListener\('resize', scheduleSync\)/);
+  assert.match(contentSource, /window\.removeEventListener\('resize', schedulePosition\)/);
 });
 
 test('project popover opens above when it fits, flips below near the top, and chooses the roomier side if neither fits', () => {
@@ -581,7 +592,7 @@ test('project popover opens above when it fits, flips below near the top, and ch
   assert.match(contentSource, /projectPopover\.style\.top = 'calc\(100% \+ 6px\)'/);
   assert.match(contentSource, /projectPopover\.style\.bottom = 'auto'/);
   assert.match(contentSource, /projectPopover\.style\.top = 'auto'/);
-  assert.match(contentSource, /projectPopover\.style\.bottom = 'calc\(100% \+ 6px\)'/);
+  assert.match(contentSource, /Math\.ceil\(toolbarRect\.top - occupiedTop\) \+ 6/);
   assert.match(contentSource, /root\.style\.visibility = 'visible';\s+positionProjectPopover\(\);/);
   assert.match(contentSource, /setEditorMode\(true\);\s+positionProjectPopover\(\);/);
 });

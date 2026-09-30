@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 9;
+  const RUNTIME_VERSION = 10;
   const previousRuntime = globalThis.__chatgptQuickContinueHoverEditRuntime;
   if (Number(previousRuntime?.version || 0) === RUNTIME_VERSION) return;
   const restoredTimestampState = Boolean(previousRuntime?.manualTimestampEnabled);
@@ -26,6 +26,7 @@
   let unsubscribeConfig = null;
   let scheduledSync = null;
   let scheduledWithAnimationFrame = false;
+  let disposed = false;
 
   function applyManualTimestampConfig(config) {
     const next = String(config?.manualTimestampText ?? '').replace(/\r\n?/g, '\n').trim();
@@ -173,7 +174,7 @@
   }
 
   function updateClockToggleStyle() {
-    if (!clockToggle) return;
+    if (disposed || !clockToggle) return;
     clockToggle.setAttribute('role', 'button');
     clockToggle.setAttribute('tabindex', '0');
     clockToggle.setAttribute('aria-pressed', String(manualTimestampEnabled));
@@ -240,6 +241,7 @@
   }
 
   function syncToolbar() {
+    if (disposed) return;
     const nextToolbar = document.getElementById(TOOLBAR_ID);
     if (nextToolbar === toolbar) {
       if (nextToolbar) attachClockToggle(nextToolbar);
@@ -250,7 +252,7 @@
   }
 
   function scheduleToolbarSync() {
-    if (scheduledSync !== null) return;
+    if (disposed || scheduledSync !== null) return;
     if (typeof requestAnimationFrame === 'function' && document.visibilityState !== 'hidden') {
       scheduledWithAnimationFrame = true;
       scheduledSync = requestAnimationFrame(() => {
@@ -271,7 +273,9 @@
     configApi.load().then(applyManualTimestampConfig).catch(() => {});
   } catch {}
 
-  observer = new MutationObserver(scheduleToolbarSync);
+  observer = new MutationObserver(() => {
+    if (!disposed && (!clockToggle?.isConnected || document.getElementById(TOOLBAR_ID) !== toolbar)) scheduleToolbarSync();
+  });
   observer.observe(document.documentElement, { childList: true, subtree: true });
   document.addEventListener('click', handleManualSendClick, true);
   document.addEventListener('keydown', handleManualSendKeydown, true);
@@ -283,6 +287,8 @@
       return manualTimestampEnabled;
     },
     dispose() {
+      if (disposed) return;
+      disposed = true;
       try { observer?.disconnect(); } catch {}
       try { unsubscribeConfig?.(); } catch {}
       unsubscribeConfig = null;
@@ -298,4 +304,5 @@
       detachToolbar();
     }
   });
+  globalThis.__chatgptQuickContinueLifecycle?.register?.(globalThis.__chatgptQuickContinueHoverEditRuntime);
 })();

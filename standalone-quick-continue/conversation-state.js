@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 4;
+  const RUNTIME_VERSION = 5;
   const STORAGE_PREFIX = 'quick-continue:manual-timestamp:';
   const CLOCK_SELECTOR = '[aria-label="Current local time"]';
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
@@ -26,6 +26,13 @@
   let simpleEnabled = false;
   let simpleButton = null;
   let simpleRestoreGeneration = 0;
+  let simpleRequestGeneration = 0;
+  let simpleState = null;
+  let simpleRow = null;
+  let simpleTickTimer = null;
+  let simpleConfig = null;
+  let unsubscribeConfig = null;
+  let disposed = false;
   let scheduled = false;
   let observer = null;
 
@@ -59,6 +66,7 @@
   }
 
   function applyDesiredState() {
+    if (disposed) return false;
     const clock = document.querySelector(CLOCK_SELECTOR);
     if (!clock) return false;
     if (currentEnabled() === desiredEnabled) return true;
@@ -97,7 +105,7 @@
 
     let stored = { found: false, enabled: false };
     try { stored = await readStoredState(nextConversationId); } catch {}
-    if (generation !== restoreGeneration || activeConversationId !== nextConversationId) return;
+    if (disposed || generation !== restoreGeneration || activeConversationId !== nextConversationId) return;
 
     if (stored.found) {
       desiredEnabled = stored.enabled;
@@ -123,6 +131,7 @@
   }
 
   function showStatus(message) {
+    if (disposed) return;
     try {
       const status = document.getElementById(TOOLBAR_ID)?.querySelector?.('[role="status"]');
       if (!status) return;
@@ -141,10 +150,34 @@
     } catch {}
   }
 
-  function renderSimpleState(enabled) {
-    simpleEnabled = enabled === true;
+  function renderSimpleCountdown() {
+    if (disposed || !simpleRow) return;
+    const active = simpleState?.enabled === true;
+    const remaining = Math.max(0, Number(simpleState?.attemptsRemaining || 0));
+    const seconds = Math.max(0, Math.ceil((Number(simpleState?.nextAt || 0) - Date.now()) / 1000));
+    const countdown = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
+    const phase = simpleState?.phase;
+    const label = phase === 'stop-wait' ? 'Refresh in' : phase === 'refresh-wait' ? 'Continue in' : 'Next auto-continue';
+    const text = active ? `${label} ${countdown} · ${remaining} auto-continues left`
+      : simpleState?.exhausted === true ? 'Auto-continues exhausted' : '';
+    if (simpleRow.textContent !== text) simpleRow.textContent = text;
+    if (simpleRow.hidden !== !text) simpleRow.hidden = !text;
+    const root = simpleRow.parentElement;
+    const showing = String(Boolean(text));
+    if (root && root.getAttribute('data-simple-watchdog-active') !== showing) root.setAttribute('data-simple-watchdog-active', showing);
+  }
+
+  function renderSimpleState(state) {
+    if (disposed) return;
+    simpleState = state && typeof state === 'object' ? state : { enabled: state === true };
+    simpleEnabled = simpleState.enabled === true;
+    if (simpleEnabled && simpleTickTimer === null) simpleTickTimer = setInterval(renderSimpleCountdown, 1000);
+    if (!simpleEnabled && simpleTickTimer !== null) { clearInterval(simpleTickTimer); simpleTickTimer = null; }
+    renderSimpleCountdown();
     if (!simpleButton) return;
-    simpleButton.setAttribute('aria-pressed', String(simpleEnabled));
+    const pressed = String(simpleEnabled);
+    if (simpleButton.getAttribute('aria-pressed') === pressed) return;
+    simpleButton.setAttribute('aria-pressed', pressed);
     Object.assign(simpleButton.style, {
       background: simpleEnabled ? '#16a34a' : 'var(--main-surface-secondary, rgba(127,127,127,.10))',
       color: simpleEnabled ? '#fff' : 'inherit'
@@ -165,31 +198,35 @@
   }
 
   async function setSimpleEnabled(nextEnabled) {
+    if (disposed) return;
+    const generation = ++simpleRequestGeneration;
+    simpleRestoreGeneration += 1;
+    const startedAt = Date.now();
     const conversationId = conversationIdFromUrl();
-    if (nextEnabled && !conversationId) {
-      renderSimpleState(false);
-      showStatus('Open a saved chat before enabling Simple.');
-      return;
-    }
-    let config = null;
-    try { config = await configApi?.load?.(); } catch {}
-    if (!config?.simpleWatchdog) {
+    let config = simpleConfig;
+    if (nextEnabled && !config) { try { config = await configApi?.load?.(); } catch {} }
+    if (disposed || generation !== simpleRequestGeneration) return;
+    if (nextEnabled && !config?.simpleWatchdog) {
       showStatus('Simple watchdog config unavailable.');
       return;
     }
+    renderSimpleState(nextEnabled ? {
+      enabled: true, phase: 'countdown', attemptsRemaining: config.simpleWatchdog.attempts,
+      nextAt: startedAt + config.simpleWatchdog.timerMinutes * 60_000
+    } : { enabled: false });
     let response = null;
     try {
       response = await chrome.runtime.sendMessage({
         type: SIMPLE_SET_MESSAGE,
         enabled: nextEnabled === true,
         conversationId,
-        settings: config.simpleWatchdog
+        startedAt,
+        settings: config?.simpleWatchdog
       });
     } catch {}
-    renderSimpleState(response?.enabled === true);
-    if (response?.enabled === true) showStatus('Simple watchdog on.');
-    else if (nextEnabled) showStatus(String(response?.reason || 'Simple watchdog could not start.'));
-    else showStatus('Simple watchdog off.');
+    if (disposed || generation !== simpleRequestGeneration || conversationIdFromUrl() !== conversationId) return;
+    renderSimpleState(response);
+    if (nextEnabled && response?.enabled !== true) showStatus(String(response?.reason || 'Simple watchdog could not start.'));
   }
 
   function handleSimpleButtonClick(event) {
@@ -199,15 +236,28 @@
   }
 
   function ensureSimpleButton() {
+    if (disposed) return;
     const root = document.getElementById(TOOLBAR_ID);
     if (!root) {
       simpleButton = null;
+      simpleRow = null;
       return;
+    }
+    simpleRow = root.querySelector('#chatgpt-quick-continue-simple-countdown');
+    if (!simpleRow) {
+      simpleRow = document.createElement('div');
+      simpleRow.id = 'chatgpt-quick-continue-simple-countdown';
+      simpleRow.hidden = true;
+      simpleRow.setAttribute('role', 'group');
+      simpleRow.setAttribute('aria-label', 'Simple auto-continue timer');
+      root.append(simpleRow);
     }
     const existing = root.querySelector(`#${SIMPLE_BUTTON_ID}`);
     if (existing) {
       simpleButton = existing;
-      renderSimpleState(simpleEnabled);
+      const project = root.querySelector('button[aria-label="Project Continue"]');
+      if (project && simpleButton.nextElementSibling !== project) root.insertBefore(simpleButton, project);
+      renderSimpleState(simpleState);
       return;
     }
     const button = document.createElement('button');
@@ -217,25 +267,20 @@
     button.setAttribute('aria-label', 'Toggle simple fallback watchdog');
     button.setAttribute('aria-pressed', String(simpleEnabled));
     styleSimpleButton(button);
-    renderSimpleState(simpleEnabled);
     button.addEventListener('click', handleSimpleButtonClick);
     const project = root.querySelector('button[aria-label="Project Continue"]');
-    if (project?.nextSibling) root.insertBefore(button, project.nextSibling);
+    if (project) root.insertBefore(button, project);
     else root.append(button);
     simpleButton = button;
-    renderSimpleState(simpleEnabled);
+    renderSimpleState(simpleState);
   }
 
   async function restoreSimpleForConversation(conversationId) {
     const generation = ++simpleRestoreGeneration;
-    if (!conversationId) {
-      renderSimpleState(false);
-      return;
-    }
     let response = null;
     try { response = await chrome.runtime.sendMessage({ type: SIMPLE_GET_MESSAGE, conversationId }); } catch {}
-    if (generation !== simpleRestoreGeneration || activeConversationId !== conversationId) return;
-    renderSimpleState(response?.enabled === true);
+    if (disposed || generation !== simpleRestoreGeneration || activeConversationId !== conversationId) return;
+    renderSimpleState(response);
   }
 
   function composerElement() {
@@ -287,9 +332,10 @@
   }
 
   function handleRuntimeMessage(message, _sender, sendResponse) {
+    if (disposed) return false;
     if (message?.type === SIMPLE_STATE_MESSAGE) {
-      renderSimpleState(message?.state?.enabled === true);
-      if (message?.state?.exhausted === true) showStatus('Simple watchdog attempts exhausted.');
+      simpleRestoreGeneration += 1;
+      if (!message.state?.conversationId || message.state.conversationId === conversationIdFromUrl()) renderSimpleState(message.state);
       sendResponse?.({ ok: true });
       return false;
     }
@@ -308,6 +354,7 @@
 
   function syncRouteAndToggle() {
     scheduled = false;
+    if (disposed) return;
     ensureSimpleButton();
     const nextConversationId = conversationIdFromUrl();
     if (nextConversationId !== activeConversationId) {
@@ -321,7 +368,7 @@
   }
 
   function scheduleSync() {
-    if (scheduled) return;
+    if (disposed || scheduled) return;
     scheduled = true;
     queueMicrotask(syncRouteAndToggle);
   }
@@ -370,7 +417,19 @@
     applyDesiredState();
   }
 
-  observer = new MutationObserver(scheduleSync);
+  function handleDocumentMutations() {
+    if (disposed) return;
+    // Typing, streamed answer text and timer ticks cannot change toolbar/route
+    // ownership. Only remounts or actual navigation need a toggle sync.
+    if (conversationIdFromUrl() !== activeConversationId || !simpleButton?.isConnected
+      || document.getElementById(TOOLBAR_ID) !== simpleButton?.parentElement) scheduleSync();
+  }
+
+  try {
+    unsubscribeConfig = configApi?.subscribe?.((config) => { if (!disposed) simpleConfig = config; });
+    configApi?.load?.().then((config) => { if (!disposed) simpleConfig = config; }).catch(() => {});
+  } catch {}
+  observer = new MutationObserver(handleDocumentMutations);
   observer.observe(document.documentElement, { childList: true, subtree: true });
   document.addEventListener('click', persistUserChoiceSoon, true);
   document.addEventListener('keydown', handleClockKeydown, true);
@@ -387,6 +446,14 @@
     get desiredEnabled() { return desiredEnabled; },
     get simpleEnabled() { return simpleEnabled; },
     dispose() {
+      if (disposed) return;
+      disposed = true;
+      restoreGeneration += 1;
+      simpleRestoreGeneration += 1;
+      simpleRequestGeneration += 1;
+      try { unsubscribeConfig?.(); } catch {}
+      try { if (simpleTickTimer !== null) clearInterval(simpleTickTimer); } catch {}
+      try { simpleRow?.remove(); } catch {}
       try { observer?.disconnect(); } catch {}
       try { document.removeEventListener('click', persistUserChoiceSoon, true); } catch {}
       try { document.removeEventListener('keydown', handleClockKeydown, true); } catch {}
@@ -399,4 +466,5 @@
       simpleButton = null;
     }
   });
+  globalThis.__chatgptQuickContinueLifecycle?.register?.(globalThis.__chatgptQuickContinueConversationStateRuntime);
 })();

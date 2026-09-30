@@ -6,7 +6,7 @@ const root = new URL('../../', import.meta.url);
 const source = readFileSync(new URL('extension/page-dom-compat.js', root), 'utf8');
 
 test('page DOM compatibility keeps speaker-label recovery conditional and cached', () => {
-  assert.match(source, /const RUNTIME_VERSION = 5;/);
+  assert.match(source, /const RUNTIME_VERSION = 6;/);
   assert.match(source, /const SPEAKER_CACHE_MS = 500;/);
   assert.match(source, /const speakerTurnCache = new WeakMap\(\);/);
   assert.match(source, /function hydrateLegacyTurnRoles\(root, legacy\)/);

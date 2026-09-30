@@ -54,15 +54,20 @@ test('notifier recovers current ChatGPT turns from screen-reader speaker labels 
       text: String(turn.innerText || turn.textContent || '').replace(/\\s+/g, ' ').trim()
     }));
     const assistant = turns.find((turn) => String(turn.getAttribute('data-turn') || turn.getAttribute('data-message-author-role') || '') === 'assistant');
+    const editor = document.createElement('div');
+    editor.contentEditable = 'true';
+    turns[0].append(editor);
     return {
       compatVersion: Number(globalThis.__chatgptNotifierPageDomCompat?.version || 0),
+      preservesSubmittedTurnEdits: globalThis.ChatGPTNotifierOwnedDomMutationFilter.isComposerTextMutation({ type: 'childList', target: editor }) === false,
       count: turns.length,
       labels,
       terminal: String(globalThis.ChatGPTNotifierRenderedTerminalStatus?.detect?.(assistant) || '')
     };
   })()`);
 
-  expect(recovered.compatVersion).toBe(5);
+  expect(recovered.compatVersion).toBe(6);
+  expect(recovered.preservesSubmittedTurnEdits).toBe(true);
   expect(recovered.count).toBe(2);
   expect(recovered.labels.map((entry) => entry.tag)).toEqual(['section', 'section']);
   expect(recovered.labels.map((entry) => entry.role)).toEqual(['user', 'assistant']);
@@ -120,7 +125,7 @@ test('notifier hydrates existing legacy turn wrappers from speaker labels and pr
     };
   })()`);
 
-  expect(recovered.compatVersion).toBe(5);
+  expect(recovered.compatVersion).toBe(6);
   expect(recovered.count).toBe(3);
   expect(recovered.roles).toEqual(['user', 'assistant', 'user']);
   expect(recovered.terminal).toBe('COMPLETE_APPLIED');

@@ -155,4 +155,5 @@
   };
 
   globalThis.__chatgptQuickContinueDomCompat = runtime;
+  globalThis.__chatgptQuickContinueLifecycle?.register?.(runtime);
 })();

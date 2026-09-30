@@ -28,9 +28,9 @@ class FakeNode {
     if (name === 'aria-hidden') return this.hidden ? 'true' : null;
     return null;
   }
-  matches(selector) { return selector === `[data-message-author-role="${this.role}"]`; }
+  matches(selector) { return String(selector).split(',').some((part) => part.trim() === `[data-message-author-role="${this.role}"]`); }
   querySelector(selector) {
-    if (selector === `[data-message-author-role="${this.role}"]`) return this;
+    if (this.matches(selector)) return this;
     return null;
   }
   querySelectorAll() { return []; }
@@ -50,8 +50,12 @@ class FakeNode {
   cloneNode() { return new FakeNode({ role: this.role, id: this.id, text: this._text }); }
 }
 
-function harness({ turns, semanticNodes, href = 'https://chatgpt.com/c/conversation-1', focused = false, visibilityState = 'hidden' }) {
+function harness({ turns, semanticNodes, composer = null, href = 'https://chatgpt.com/c/conversation-1', focused = false, visibilityState = 'hidden' }) {
   const runtimeListeners = [];
+  const publications = [];
+  const timers = new Map();
+  let nextTimer = 0;
+  let onMutation = null;
   const location = { href, pathname: new URL(href).pathname };
   const documentElement = new FakeNode({ id: 'root' });
   const document = {
@@ -67,6 +71,7 @@ function harness({ turns, semanticNodes, href = 'https://chatgpt.com/c/conversat
     },
     querySelector(selector) {
       if (selector === 'main') return null;
+      if (selector === '#prompt-textarea') return composer;
       return null;
     },
     addEventListener() {},
@@ -94,13 +99,14 @@ function harness({ turns, semanticNodes, href = 'https://chatgpt.com/c/conversat
     document,
     navigator: { onLine: true },
     getComputedStyle: (node) => node.styleState,
-    MutationObserver: class { observe() {} disconnect() {} },
-    setTimeout: () => 1,
-    clearTimeout: () => {},
+    MutationObserver: class { constructor(callback) { onMutation = callback; } observe() {} disconnect() {} takeRecords() { return []; } },
+    setTimeout: (callback, delay) => { const id = ++nextTimer; timers.set(id, { callback, delay }); return id; },
+    clearTimeout: (id) => timers.delete(id),
+    ChatGPTNotifierOwnedDomMutationFilter: { isComposerTextMutation: (record) => Boolean(composer && record.target === composer && ['childList', 'characterData'].includes(record.type)) },
     window: { addEventListener() {} },
     chrome: {
       runtime: {
-        sendMessage: async () => ({}),
+        sendMessage: async (message) => { if (message?.type === 'CHATGPT_MONITOR_STATE') publications.push(message.snapshot); return {}; },
         onMessage: {
           addListener(listener) { runtimeListeners.push(listener); },
           removeListener() {}
@@ -119,7 +125,14 @@ function harness({ turns, semanticNodes, href = 'https://chatgpt.com/c/conversat
     const listener = runtimeListeners.at(-1);
     listener({ type: 'CHATGPT_MONITOR_REQUEST_PHASE', phase, requestId, observedAt: Date.now() }, {}, () => {});
   };
-  return { context, runtime, snapshot, inspect, requestPhase, location };
+  const flushPublication = () => {
+    const entry = [...timers].find(([, timer]) => timer.delay === 500);
+    assert.ok(entry, 'Expected a scheduled monitor publication');
+    timers.delete(entry[0]);
+    entry[1].callback();
+    return publications.at(-1);
+  };
+  return { context, runtime, snapshot, inspect, requestPhase, location, mutate: (records) => onMutation(records), flushPublication };
 }
 
 function turn(role, n, text = '') {
@@ -133,6 +146,36 @@ function alertFor(owner, text, overrides = {}) {
 function expectedFrom(snapshot) {
   return { conversationId: snapshot.conversationId, documentId: snapshot.documentId, promptKey: snapshot.promptKey };
 }
+
+test('draft-only publications avoid recloning submitted turns while still publishing draft safeguards and later assistant changes', () => {
+  const user = turn('user', 1, 'current request');
+  const assistant = turn('assistant', 2, 'A reply in progress');
+  const composer = new FakeNode();
+  let clones = 0;
+  const clone = assistant.cloneNode.bind(assistant);
+  assistant.cloneNode = () => { clones += 1; return clone(); };
+  const h = harness({ turns: [user, assistant], semanticNodes: [], composer });
+  const initial = h.flushPublication();
+  assert.ok(clones > 0);
+  clones = 0;
+  composer.textContent = 'A draft that blocks recovery';
+  h.mutate([{ type: 'childList', target: composer }]);
+  const draft = h.flushPublication();
+  assert.equal(clones, 0);
+  assert.equal(draft.hasDraft, true);
+  assert.equal(draft.assistantRevision, initial.assistantRevision);
+
+  assistant.textContent = 'The actual assistant changed';
+  h.mutate([{ type: 'characterData', target: assistant }]);
+  const changed = h.flushPublication();
+  assert.ok(clones > 0);
+  assert.notEqual(changed.assistantRevision, initial.assistantRevision);
+  assert.equal(changed.hasDraft, true);
+
+  clones = 0;
+  h.snapshot();
+  assert.ok(clones > 0, 'Explicit safety queries must still read fresh submitted turns');
+});
 
 test('historical, hidden, detached and quoted interruption text is ignored', () => {
   const oldUser = turn('user', 1, 'old');
