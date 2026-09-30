@@ -167,23 +167,31 @@ test('terminal watchdog state is prompt-scoped across request/DOM ordering races
   assert.equal(stoppedOwns({ promptKey: 'conversation-1|user-new', requestStartedAt: 200_000 }, stopped), false);
 });
 
-test('watchdog no-code path preserves genuine submission and identity vetoes', () => {
+test('watchdog no-code path preserves explicit blockers while observation uncertainty fails open', () => {
   const eligibility = loadEligibility();
-  const cases = [
-    ['observable', false, 'page-unobservable'],
+  const blockers = [
     ['online', false, 'offline'],
     ['authRequired', true, 'auth-required'],
     ['approvalRequired', true, 'approval-required'],
     ['rateLimited', true, 'rate-limited'],
     ['hasDraft', true, 'draft-present'],
-    ['hasUpload', true, 'upload-present'],
-    ['applicationStateIdentityMatched', false, 'application-state-identity-mismatch']
+    ['hasUpload', true, 'upload-present']
   ];
-  for (const [field, value, reason] of cases) {
+  for (const [field, value, reason] of blockers) {
     assert.deepEqual(
       { ...eligibility({ requestPhase: 'completed', assistantKey: 'assistant-1', stableTerminal: true, [field]: value }) },
       { eligible: false, reason },
       field
+    );
+  }
+
+  for (const snapshot of [
+    { observable: false },
+    { applicationStateIdentityMatched: false }
+  ]) {
+    assert.deepEqual(
+      { ...eligibility({ requestPhase: 'completed', assistantKey: 'assistant-1', stableTerminal: true, ...snapshot }) },
+      { eligible: true, reason: 'deadline-no-code-fail-open' }
     );
   }
 });
@@ -197,7 +205,7 @@ test('watchdog no-code deadline remains authoritative even while generation is a
     { requestPhase: 'completed', assistantKey: '', silentIdleConfirmations: 1 }
   ];
   for (const snapshot of cases) {
-    assert.deepEqual({ ...eligibility(snapshot) }, { eligible: true, reason: 'deadline-no-code' });
+    assert.deepEqual({ ...eligibility(snapshot) }, { eligible: true, reason: 'deadline-no-code-fail-open' });
   }
 });
 
