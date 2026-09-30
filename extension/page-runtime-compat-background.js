@@ -15,7 +15,6 @@
     'watchdog-page-authority-v3.js'
   ]);
   const PAGE_COMPAT_FILE = 'page-dom-compat.js';
-  const OWNED_DOM_FILTER_FILE = 'owned-dom-mutation-filter.js';
 
   const originalExecuteScript = chrome.scripting?.executeScript?.bind(chrome.scripting);
   const originalReload = chrome.tabs?.reload?.bind(chrome.tabs);
@@ -25,11 +24,8 @@
       let next = injection;
       try {
         const files = Array.isArray(injection?.files) ? injection.files.map(String) : null;
-        if (files && files.some((file) => NEEDS_PAGE_COMPAT.has(file))) {
-          const prefix = [];
-          if (!files.includes(OWNED_DOM_FILTER_FILE)) prefix.push(OWNED_DOM_FILTER_FILE);
-          if (!files.includes(PAGE_COMPAT_FILE)) prefix.push(PAGE_COMPAT_FILE);
-          if (prefix.length) next = { ...injection, files: [...prefix, ...files] };
+        if (files && files.some((file) => NEEDS_PAGE_COMPAT.has(file)) && !files.includes(PAGE_COMPAT_FILE)) {
+          next = { ...injection, files: [PAGE_COMPAT_FILE, ...files] };
         }
       } catch {}
       return callback === undefined
@@ -54,9 +50,8 @@
   }
 
   globalThis.__chatgptNotifierPageRuntimeCompatBackground = Object.freeze({
-    version: 3,
+    version: 2,
     pageCompatFile: PAGE_COMPAT_FILE,
-    ownedDomFilterFile: OWNED_DOM_FILTER_FILE,
     hardReloads: true
   });
 })();
