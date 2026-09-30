@@ -17,6 +17,26 @@ if (!extensionPath || !fs.existsSync(path.join(extensionPath, 'manifest.json')))
 } else {
   let browser;
   try {
+    const config = JSON.parse(fs.readFileSync(path.join(extensionPath, 'config.json'), 'utf8'));
+    if (config?.watchdog?.timerMinutes !== 30 || config?.watchdog?.attempts !== 3) {
+      throw new Error('watchdog-json-defaults-missing');
+    }
+    const requiredStopCodes = [
+      'PLANNING_ACTIVE',
+      'COMPLETE_APPLIED',
+      'COMPLETE_NO_CHANGES',
+      'BLOCKED_HUMAN',
+      'INCOMPLETE_LIMIT',
+      'INCOMPLETE_TOOL_FAILURE',
+      'INCOMPLETE_HANDOFF',
+      'INCOMPLETE_CONTINUE'
+    ];
+    for (const code of requiredStopCodes) {
+      if (typeof config?.watchdog?.stopOnStatus?.[code] !== 'boolean') {
+        throw new Error(`watchdog-status-policy-missing:${code}`);
+      }
+    }
+
     browser = await puppeteer.launch({
       executablePath: browserExecutablePath,
       headless: true,
@@ -25,6 +45,7 @@ if (!extensionPath || !fs.existsSync(path.join(extensionPath, 'manifest.json')))
 
     console.log(`SYSTEM_CHROME_VERSION ${await browser.version()}`);
     const page = await browser.newPage();
+    await page.setViewport({ width: 1000, height: 800 });
     await page.setContent(`<!doctype html>
       <html><body>
         <main id="conversation"></main>
@@ -101,6 +122,43 @@ if (!extensionPath || !fs.existsSync(path.join(extensionPath, 'manifest.json')))
     if (sendResult.submits !== 1) throw new Error(`form-submit-count:${sendResult.submits}`);
     if (sendResult.decoyClicks !== 0) throw new Error(`decoy-send-was-activated:${sendResult.decoyClicks}`);
     if (JSON.stringify(sendResult.userTurns) !== JSON.stringify(['first line\nsecond line'])) throw new Error(`user-turn-mismatch:${JSON.stringify(sendResult.userTurns)}`);
+
+    await page.evaluate(() => {
+      const toolbar = document.getElementById('chatgpt-quick-continue-toolbar');
+      const popover = document.createElement('div');
+      popover.setAttribute('aria-label', 'Project Continue');
+      const editor = document.createElement('div');
+      const textarea = document.createElement('textarea');
+      textarea.setAttribute('aria-label', 'Quick Continue JSON');
+      textarea.style.background = 'rgb(245, 245, 245)';
+      editor.append(textarea);
+      popover.append(editor);
+      toolbar.append(popover);
+    });
+    await page.addScriptTag({ path: path.join(extensionPath, 'config-editor-style.js') });
+    const editorStyle = await page.evaluate(() => {
+      const textarea = document.querySelector('textarea[aria-label="Quick Continue JSON"]');
+      const popover = document.querySelector('[aria-label="Project Continue"]');
+      const textareaStyle = getComputedStyle(textarea);
+      const popoverStyle = getComputedStyle(popover);
+      const rect = textarea.getBoundingClientRect();
+      return {
+        width: Math.round(rect.width),
+        height: Math.round(rect.height),
+        caretColor: textareaStyle.caretColor,
+        textColor: textareaStyle.color,
+        backgroundColor: textareaStyle.backgroundColor,
+        popoverWidth: Math.round(popover.getBoundingClientRect().width),
+        popoverCssWidth: popoverStyle.width,
+      };
+    });
+    console.log(`EDITOR_STYLE_RESULT ${JSON.stringify(editorStyle)}`);
+    if (editorStyle.width < 700 || editorStyle.height < 500) {
+      throw new Error(`config-editor-not-large-enough:${editorStyle.width}x${editorStyle.height}`);
+    }
+    if (!editorStyle.caretColor || editorStyle.caretColor === editorStyle.backgroundColor) {
+      throw new Error(`config-editor-caret-low-contrast:${editorStyle.caretColor}`);
+    }
 
     await page.evaluate(() => {
       globalThis.ChatGPTQuickContinuePrompts = Object.freeze({
