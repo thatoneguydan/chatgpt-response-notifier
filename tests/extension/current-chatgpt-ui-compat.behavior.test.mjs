@@ -12,7 +12,7 @@ const refreshPolicy = read('extension/recovery-refresh-policy-background.js');
 const bootstrap = read('extension/diagnostics-bootstrap.js');
 
 test('current ChatGPT UI compatibility loads before page readers and stays page-local', () => {
-  assert.equal(manifest.version, '0.9.99');
+  assert.equal(manifest.version, '0.9.100');
   assert.equal(manifest.content_scripts[0].js[0], 'page-dom-compat.js');
   assert.match(domCompat, /RUNTIME_VERSION = 6/);
   assert.match(domCompat, /OWNED_ROOT_SELECTOR = '#chatgpt-quick-continue-toolbar'/);
