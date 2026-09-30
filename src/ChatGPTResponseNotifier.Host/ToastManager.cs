@@ -37,7 +37,7 @@ internal sealed class ToastManager
         foreach (var record in _store.Load().OrderBy(item => item.CompletedAt))
         {
             var deliveryTombstone = DeliveryTombstone(record);
-            if (deliveryTombstone is not null && _acceptedStore.ContainsRecent(deliveryTombstone, SameCompletionDedupeWindow))
+            if (deliveryTombstone is not null && _acceptedStore.Contains(deliveryTombstone))
             {
                 continue;
             }
