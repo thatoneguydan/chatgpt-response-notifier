@@ -30,7 +30,7 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['runtime-reset.js', 'dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'send-transaction.js', 'config-editor-style.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.30');
+  assert.equal(manifest.version, '1.2.31');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -364,7 +364,7 @@ test('prompt and config APIs are versioned so reinjection cannot retain stale gl
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
   assert.match(configSource, /chrome\.storage\.onChanged\.removeListener\(handleStorageChanged\)/);
-  assert.match(contentSource, /const RUNTIME_VERSION = 10/);
+  assert.match(contentSource, /const RUNTIME_VERSION = 11/);
   assert.match(hoverEditSource, /const RUNTIME_VERSION = 10/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
@@ -553,6 +553,19 @@ test('toolbar sync does not continuously retrigger itself through unchanged cloc
   assert.doesNotMatch(contentSource, /if \(clock\) clock\.textContent = formatClock\(new Date\(\)\)/);
 });
 
+test('composer typing changes availability only at empty/non-empty transitions and never schedules toolbar geometry', () => {
+  assert.match(contentSource, /let lastComposerHasDraft = null/);
+  assert.match(contentSource, /function composerHasDraft\(composer\)/);
+  assert.match(contentSource, /if \(lastComposerHasDraft === hasDraft\) return/);
+  assert.match(contentSource, /updateAvailability\(observedComposer, hasDraft\)/);
+  assert.match(contentSource, /lastComposerHasDraft = null;[\s\S]*observedComposer = composer \|\| null/);
+  const start = contentSource.indexOf('function handleComposerInput');
+  const end = contentSource.indexOf('unsubscribeConfig =', start);
+  assert.ok(start >= 0 && end > start, 'composer input handler must exist');
+  const handler = contentSource.slice(start, end);
+  assert.doesNotMatch(handler, /scheduleSync\(|schedulePosition\(|requestAnimationFrame|getBoundingClientRect|offsetWidth|offsetHeight/);
+});
+
 test('toolbar self-heals missing core controls and recovers from transient composer rerenders', () => {
   assert.match(contentSource, /const TOOLBAR_HIDE_GRACE_MS = 600/);
   assert.match(contentSource, /function toolbarStructureIntact\(root\)/);
@@ -566,7 +579,7 @@ test('toolbar self-heals missing core controls and recovers from transient compo
 });
 
 test('standalone runtime hot-replaces stale generations, restores a detached toolbar, and ignores notifier-only churn', () => {
-  assert.match(contentSource, /const RUNTIME_VERSION = 10/);
+  assert.match(contentSource, /const RUNTIME_VERSION = 11/);
   assert.match(contentSource, /const previousRuntime = globalThis\.__chatgptQuickContinueRuntime/);
   assert.match(contentSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.doesNotMatch(contentSource, /__chatgptQuickContinueInstalled/);
