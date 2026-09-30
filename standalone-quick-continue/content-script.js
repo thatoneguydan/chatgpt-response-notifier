@@ -558,7 +558,13 @@
   }
 
   function composerHasDraft(composer) {
-    return Boolean(composer && composerText(composer).trim());
+    if (!composer) return false;
+    try {
+      if (composer instanceof HTMLTextAreaElement || composer instanceof HTMLInputElement) {
+        return String(composer.value || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim().length > 0;
+      }
+      return String(composer.textContent || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim().length > 0;
+    } catch { return false; }
   }
 
   function updateAvailability(composer, knownHasDraft = null) {
@@ -688,7 +694,11 @@
 
   function handleComposerInput(event) {
     if (!(event.target === observedComposer || observedComposer?.contains(event.target))) return;
-    const hasDraft = composerHasDraft(observedComposer);
+    const inputType = String(event?.inputType || '');
+    let hasDraft = null;
+    if (inputType.startsWith('insert') && lastComposerHasDraft === true) return;
+    if (inputType.startsWith('insert') && lastComposerHasDraft === false && String(event?.data || '').length > 0) hasDraft = true;
+    if (hasDraft === null) hasDraft = composerHasDraft(observedComposer);
     if (lastComposerHasDraft === hasDraft) return;
     availabilityDirty = false;
     updateAvailability(observedComposer, hasDraft);
