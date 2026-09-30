@@ -40,17 +40,7 @@
         "bounded-recovery-script.js",
         "status-script.js",
         "terminal-status-live-observer.js",
-        "recovery-script.js"
-      ],
-      "run_at": "document_start"
-    },
-    {
-      "matches": [
-        "https://chatgpt.com/*"
-      ],
-      "js": [
-        "page-dom-compat.js",
-        "composer-typing-performance-guard.js",
+        "recovery-script.js",
         "watchdog-page-authority-v3.js"
       ],
       "run_at": "document_start"
