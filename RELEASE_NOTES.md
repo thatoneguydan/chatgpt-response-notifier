@@ -1,4 +1,11 @@
-# ChatGPT Response Notifier 0.9.97
+# ChatGPT Response Notifier 0.9.98
+
+- Stops the notifier's own once-per-second countdown/status DOM updates from waking its expensive conversation and terminal-status MutationObservers. On long chats, those self-induced scans could repeatedly traverse and clone the conversation even while ChatGPT itself was idle, causing typing and scrolling lag.
+- Installs one isolated-world MutationObserver filter before live readers. Mutations wholly inside the Quick Continue/notifier toolbar are dropped, while real ChatGPT page mutations and the notifier's `data-watchdog-settings` control signal still pass through.
+- Applies the same filter during hot-tab runtime replacement, after stale observers are disposed and before new monitor/status/watchdog observers are created, so already-open ChatGPT tabs do not retain the unfiltered generation after an update.
+- Adds deterministic ordering checks and a Chromium regression that produces repeated toolbar churn with zero observer callbacks, then mutates a real assistant turn and proves the observer still fires.
+
+## Previous: 0.9.97
 
 - Stops ordinary trusted clicks and keystrokes on ChatGPT from dismissing every native completion notification for the current conversation. Live Glass helper evidence from 0.9.96 showed `toast-dismiss-conversation-applied` firing repeatedly during normal interaction, which could erase a correctly presented toast before it was seen.
 - Removes the rendered-terminal detector's arbitrary four-ancestor limit. A visible final GitHub status can now be found through arbitrarily deep presentation wrappers while still stopping at the first ancestor containing a different user or assistant turn.

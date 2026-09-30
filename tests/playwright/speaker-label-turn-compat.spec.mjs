@@ -62,7 +62,7 @@ test('notifier recovers current ChatGPT turns from screen-reader speaker labels 
     };
   })()`);
 
-  expect(recovered.compatVersion).toBe(4);
+  expect(recovered.compatVersion).toBe(5);
   expect(recovered.count).toBe(2);
   expect(recovered.labels.map((entry) => entry.tag)).toEqual(['section', 'section']);
   expect(recovered.labels.map((entry) => entry.role)).toEqual(['user', 'assistant']);
@@ -120,7 +120,7 @@ test('notifier hydrates existing legacy turn wrappers from speaker labels and pr
     };
   })()`);
 
-  expect(recovered.compatVersion).toBe(4);
+  expect(recovered.compatVersion).toBe(5);
   expect(recovered.count).toBe(3);
   expect(recovered.roles).toEqual(['user', 'assistant', 'user']);
   expect(recovered.terminal).toBe('COMPLETE_APPLIED');

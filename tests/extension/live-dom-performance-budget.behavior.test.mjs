@@ -56,3 +56,33 @@ test('mutation-driven live readers use quiet debounces with hard ceilings', () =
     assert.match(source, /terminalMaxTimer === null/);
   }
 });
+
+test('extension-owned countdown mutations are filtered before expensive live observers', () => {
+  const compat = readText('extension/page-dom-compat.js');
+  const manifest = JSON.parse(readText('extension/manifest.json'));
+  const compatBackground = readText('extension/page-runtime-compat-background.js');
+  const postUpdate = readText('extension/terminal-stop-post-update-recovery-background.js');
+
+  assert.match(compat, /RUNTIME_VERSION = 5/);
+  assert.match(compat, /OWNED_ROOT_SELECTOR = '#chatgpt-quick-continue-toolbar'/);
+  assert.match(compat, /OWNED_MUTATION_PASSTHROUGH_ATTRIBUTES = new Set\(\['data-watchdog-settings'\]\)/);
+  assert.match(compat, /class NotifierFilteredMutationObserver/);
+  assert.match(compat, /if \(filtered\.length\) callback\(filtered, facade\)/);
+  assert.match(compat, /globalThis\.MutationObserver = NotifierFilteredMutationObserver/);
+  assert.match(compat, /globalThis\.ChatGPTNotifierOwnedDomMutationFilter = mutationFilter/);
+  assert.match(compat, /globalThis\.MutationObserver === NotifierFilteredMutationObserver/);
+
+  const documentStartReaders = manifest.content_scripts[0]?.js || [];
+  assert.equal(documentStartReaders[0], 'page-dom-compat.js');
+  assert.ok(documentStartReaders.indexOf('page-dom-compat.js') < documentStartReaders.indexOf('monitor-script.js'));
+  assert.ok(documentStartReaders.indexOf('page-dom-compat.js') < documentStartReaders.indexOf('terminal-status-live-observer.js'));
+
+  assert.match(compatBackground, /PAGE_COMPAT_FILE = 'page-dom-compat\.js'/);
+  assert.match(compatBackground, /files: \[PAGE_COMPAT_FILE, \.\.\.files\]/);
+
+  const rebindIndex = postUpdate.indexOf("'page-runtime-rebind.js'");
+  const compatIndex = postUpdate.indexOf("'page-dom-compat.js'");
+  const monitorIndex = postUpdate.indexOf("'monitor-script.js'");
+  assert.ok(rebindIndex >= 0 && compatIndex > rebindIndex && monitorIndex > compatIndex,
+    'hot-tab reinjection must dispose old runtimes, patch MutationObserver through page compatibility, then recreate live readers');
+});
