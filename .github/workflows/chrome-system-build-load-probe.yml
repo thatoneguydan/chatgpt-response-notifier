@@ -72,8 +72,12 @@ jobs:
           $version = [Diagnostics.FileVersionInfo]::GetVersionInfo($chrome).ProductVersion
           if ([string]::IsNullOrWhiteSpace($version)) { throw 'Installed Chrome product version is unavailable.' }
           $major = [int]($version.Split('.')[0])
-          if ($major -ne 153) { throw "Expected Chrome major 153 for this incident, observed $major." }
-          Write-Host "Installed Chrome product version: $version"
+          $manifest = Get-Content -LiteralPath '.\extension\manifest.json' -Raw -Encoding UTF8 | ConvertFrom-Json -ErrorAction Stop
+          $minimumMajor = [int]([string]$manifest.minimum_chrome_version).Split('.')[0]
+          if ($major -lt $minimumMajor) {
+            throw "Installed Chrome major $major is below extension minimum $minimumMajor."
+          }
+          Write-Host "Installed Chrome product version: $version (extension minimum major: $minimumMajor)"
           "SYSTEM_CHROME_EXE=$chrome" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
           "SYSTEM_CHROME_VERSION=$version" | Out-File $env:GITHUB_ENV -Encoding utf8 -Append
 
