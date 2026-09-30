@@ -95,6 +95,26 @@ test('repeated hot updates retire old closures even when their globals are lost'
   expect(await fixturePage.evaluate(() => window.__fixture.submits[0].text)).toMatch(/^\[.*\] One submission after three updates$/);
 });
 
+test('a native extension reload replaces controls on the open page without refreshing it', async ({ fixturePage, extensionContext }) => {
+  await fixturePage.getByRole('button', { name: 'Current local time', exact: true }).click();
+  await expect(fixturePage.getByRole('button', { name: 'Current local time', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  const worker = await extensionWorker(extensionContext, 'ChatGPT Quick Continue');
+  await worker.evaluate(() => chrome.runtime.reload()).catch((error) => {
+    if (!/closed|destroyed|restarted/i.test(error.message)) throw error;
+  });
+  await expect.poll(async () => {
+    const current = await extensionWorker(extensionContext, 'ChatGPT Quick Continue');
+    return Boolean(current && current !== worker);
+  }, { timeout: 10_000 }).toBe(true);
+  await expect(fixturePage.locator(toolbar)).toHaveCount(1);
+  await expect(fixturePage.locator(simple)).toHaveCount(1);
+  await expect(fixturePage.getByRole('button', { name: 'Current local time', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await fixturePage.locator('#prompt-textarea').fill('One submission after native extension reload');
+  await fixturePage.locator('#prompt-textarea').press('Enter');
+  await expect.poll(() => fixturePage.evaluate(() => window.__fixture.submits.length)).toBe(1);
+  expect(await fixturePage.evaluate(() => window.__fixture.submits[0].text)).toMatch(/^\[.*\] One submission after native extension reload$/);
+});
+
 test('scrolling never rereads a draft and typing does not trigger terminal scans', async ({ fixturePage, extensionContext }) => {
   await evaluateInExtensionWorld(fixturePage, 'ChatGPT Quick Continue', `(() => {
     const original = globalThis.ChatGPTQuickContinueComposer;

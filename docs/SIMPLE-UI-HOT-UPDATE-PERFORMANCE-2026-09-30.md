@@ -20,11 +20,11 @@ Simple owns the visible countdown while enabled; the independent smart watchdog 
 
 Existing deterministic suites plus new cases cover the fixed phase sequence, no-code independence, click deadline, unsaved-to-saved binding and immediate cancellation.
 
-The traffic-inert Playwright suite adds real MV3 checks for button order and independent activation with an existing draft and terminal footer; fresh-chat activation; JSON clearance; three consecutive hot replacements after losing old globals; exactly one timestamped submission afterward; zero draft reads for forty scroll frames; and zero terminal scans or submitted-turn clones during forty draft changes while draft safeguards still publish.
+The traffic-inert Playwright suite adds real MV3 checks for button order and independent activation with an existing draft and terminal footer; fresh-chat activation; JSON clearance; three consecutive hot replacements after losing old globals and a native extension reload without page refresh; exactly one timestamped submission afterward; zero draft reads for forty scroll frames; and zero terminal scans or submitted-turn clones during forty draft changes while draft safeguards still publish.
 
 Local deterministic validation: 592 tests, 578 passed, 14 existing skips, zero failures. Syntax and whitespace checks pass.
 
-The first browser run exposed that the old harness proved content scripts but never required either native background worker. Native diagnostics show both extensions enabled with no manifest/runtime errors and inactive workers. The harness now resolves workers by extension identity, attempts native startup in its disposable profile, and emits native registration/error diagnostics if either worker is missing. It does not inject a replacement background implementation.
+The first browser run exposed that the old harness proved content scripts but never required either native background worker. Chrome's own startup log showed cache/LevelDB creation failures under the long Windows runner checkout/test-result profile path. The harness now uses a short disposable OS temporary profile, requires both actual native workers by extension identity, and emits Chrome/native extension diagnostics if either is missing. It does not inject a replacement background implementation.
 
 Next: pass all Glass exact-source browser/build/package gates on PR #261, apply through the established managed releases, and verify publication/Glass installation evidence. Record actual deployment results in the PR before claiming completion.
 
