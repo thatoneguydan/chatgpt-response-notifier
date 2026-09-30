@@ -74,6 +74,9 @@
     catch { return false; }
   }
   function cadenceBudgetReset(previous, next) { return explicitOperatorReset(previous, next) || incompleteBudgetReset(previous, next); }
+  function cadenceReservationReleased(previous, next) {
+    return number(next?.cadenceReservationReleasedAt) > number(previous?.cadenceReservationReleasedAt);
+  }
   function terminalStatusCode(record) {
     if (record?.stopped !== true) return '';
     const reason = String(record?.stopReason || '');
@@ -163,7 +166,13 @@
       next.sendCount = 0; next.cadenceSendCount = 0; next.cadenceAttempt = null; next.nextSendEligibleAt = 0; next.deadlineAt = 0; next.retryAt = 0; next.retryReason = '';
       return next;
     }
-    if (cadenceBudgetReset(previous, next)) {
+    if (cadenceReservationReleased(previous, next)) {
+      next.cadenceSendCount = number(next.cadenceSendCount);
+      next.sendCount = number(next.sendCount);
+      next.cadenceEpoch = Math.max(1, number(next.cadenceEpoch), number(previous?.cadenceEpoch) + 1);
+      next.cadenceAttempt = null;
+      next.nextSendEligibleAt = number(next.nextSendEligibleAt);
+    } else if (cadenceBudgetReset(previous, next)) {
       next.cadenceSendCount = number(next.sendCount); next.cadenceEpoch = Math.max(1, number(previous?.cadenceEpoch), number(next.cadenceEpoch)) + 1; next.cadenceAttempt = null;
     } else {
       next.cadenceSendCount = Math.max(number(next.cadenceSendCount), number(previous?.cadenceSendCount));
@@ -241,9 +250,13 @@
           const epoch = Math.max(1, number(current.cadenceEpoch)); const nextCount = consumed + 1;
           const next = applyCadenceInvariant(current, {
             ...current, cadenceSchemaVersion: CADENCE_SCHEMA_VERSION, cadenceEpoch: epoch, cadenceSendCount: nextCount, sendCount: nextCount,
-            lastAutomaticSentAt: Math.max(number(current.lastAutomaticSentAt), now), lastAutomaticParentPromptKey: promptKey,
             waitingForRequestStart: false, nextSendEligibleAt: conservativeFloor, deadlineAt: conservativeFloor, retryAt: 0, retryReason: '',
-            cadenceAttempt: { attemptId, epoch, tabId, documentId, promptKey, reservedAt: now, authorizationExpiresAt, outcome: 'reserved', nextSendEligibleAt: conservativeFloor }, cadenceLastReservationAt: now
+            cadenceAttempt: {
+              attemptId, epoch, tabId, documentId, promptKey, reservedAt: now, authorizationExpiresAt, outcome: 'reserved', nextSendEligibleAt: conservativeFloor,
+              priorSendCount: consumed, priorDeadlineAt: deadlineAt, priorNextSendEligibleAt: floor,
+              priorWaitingForRequestStart: current.waitingForRequestStart === true
+            },
+            cadenceLastReservationAt: now
           }, now);
           persistAndReturn(next, { ok: true, granted: true, attemptId, epoch, authorizationExpiresAt, nextSendEligibleAt: conservativeFloor, sendCount: nextCount });
         };
@@ -271,8 +284,28 @@
         const clicked = message?.clicked === true; const reportedClickedAt = number(message?.clickedAt);
         const validClickedAt = clicked && reportedClickedAt >= number(attempt.reservedAt) && reportedClickedAt <= number(attempt.authorizationExpiresAt) && reportedClickedAt <= now + 1000;
         const confirmed = clicked && message?.ok === true && validClickedAt;
-        const finalFloor = confirmed ? reportedClickedAt + watchdogDelayMs() : Math.max(number(attempt.nextSendEligibleAt), number(attempt.authorizationExpiresAt) + watchdogDelayMs());
         const outcomeName = clicked ? (confirmed ? 'confirmed' : 'unknown') : 'definitively-not-clicked';
+        if (!clicked) {
+          const releasedCount = number(attempt.priorSendCount);
+          const releasedDeadlineAt = number(attempt.priorDeadlineAt);
+          const releasedFloor = number(attempt.priorNextSendEligibleAt);
+          const next = applyCadenceInvariant(current, {
+            ...current,
+            sendCount: releasedCount, cadenceSendCount: releasedCount,
+            waitingForRequestStart: attempt.priorWaitingForRequestStart === true,
+            nextSendEligibleAt: releasedFloor, deadlineAt: releasedDeadlineAt, retryAt: 0, retryReason: '',
+            cadenceAttempt: null, cadenceEpoch: Math.max(1, number(current.cadenceEpoch) + 1),
+            cadenceReservationReleasedAt: now, cadenceLastOutcome: outcomeName, cadenceLastFinalizedAt: now,
+            cadenceLastReleasedAttemptId: attemptId, cadenceLastReleaseReason: String(message?.reason || '').slice(0, 96)
+          }, now);
+          profile.put(next);
+          outcome = {
+            ok: true, finalized: true, outcome: outcomeName, released: true, attemptConsumed: false,
+            nextSendEligibleAt: number(next.nextSendEligibleAt), sendCount: number(next.cadenceSendCount)
+          };
+          return;
+        }
+        const finalFloor = confirmed ? reportedClickedAt + watchdogDelayMs() : Math.max(number(attempt.nextSendEligibleAt), number(attempt.authorizationExpiresAt) + watchdogDelayMs());
         const next = applyCadenceInvariant(current, {
           ...current, lastAutomaticSentAt: validClickedAt ? Math.max(number(current.lastAutomaticSentAt), reportedClickedAt) : number(current.lastAutomaticSentAt),
           lastAutomaticPromptKey: String(message?.continuationUserKey || current.lastAutomaticPromptKey || ''), lastAutomaticParentPromptKey: promptKey,
@@ -280,7 +313,7 @@
           cadenceAttempt: { ...attempt, outcome: outcomeName, clickedAt: validClickedAt ? reportedClickedAt : 0, finalizedAt: now, nextSendEligibleAt: finalFloor, pageReason: String(message?.reason || '').slice(0, 96) },
           cadenceLastOutcome: outcomeName, cadenceLastFinalizedAt: now
         }, now);
-        profile.put(next); wakeAt = finalFloor; outcome = { ok: true, finalized: true, outcome: outcomeName, nextSendEligibleAt: finalFloor, sendCount: number(next.cadenceSendCount) };
+        profile.put(next); wakeAt = finalFloor; outcome = { ok: true, finalized: true, outcome: outcomeName, released: false, attemptConsumed: true, nextSendEligibleAt: finalFloor, sendCount: number(next.cadenceSendCount) };
       };
       transaction.oncomplete = () => { if (wakeAt > 0) { try { chrome.alarms.create(alarmName(conversationId), { when: wakeAt }); } catch {} } resolve(clone(outcome)); };
       transaction.onerror = () => reject(transaction.error || new Error('Watchdog cadence finalization failed.'));
