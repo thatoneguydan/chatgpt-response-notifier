@@ -3,7 +3,6 @@
 (() => {
   for (const key of [
     '__chatgptQuickContinueRuntime',
-    '__chatgptQuickContinueSimpleWatchdogRuntime',
     '__chatgptQuickContinueHoverEditRuntime',
     '__chatgptQuickContinueConversationStateRuntime'
   ]) {
