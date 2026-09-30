@@ -3,11 +3,10 @@
 (() => {
   if (globalThis.__chatgptNotifierTerminalStopPostUpdateRecovery) return;
 
-  const RUNTIME_VERSION = 4;
+  const RUNTIME_VERSION = 3;
   const REFRESH_DELAYS_MS = Object.freeze([0, 250, 1000, 3000]);
   const HOT_RUNTIME_FILES = Object.freeze([
     'page-runtime-rebind.js',
-    'owned-dom-mutation-filter.js',
     'page-dom-compat.js',
     'attachment-script.js',
     'content-script.js',
