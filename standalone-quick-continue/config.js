@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 7;
+  const RUNTIME_VERSION = 8;
   const previousRuntime = globalThis.ChatGPTQuickContinueConfig;
   if (Number(previousRuntime?.runtimeVersion || 0) === RUNTIME_VERSION) return;
   try { previousRuntime?.dispose?.(); } catch {}
@@ -33,6 +33,12 @@
     timerMinutes: 30,
     attempts: 3,
     stopOnStatus: DEFAULT_STOP_ON_STATUS
+  });
+  const DEFAULT_SIMPLE_WATCHDOG = Object.freeze({
+    timerMinutes: 30,
+    attempts: 3,
+    stopToRefreshSeconds: 30,
+    refreshToContinueSeconds: 30
   });
   const listeners = new Set();
   let current = null;
@@ -101,6 +107,37 @@
     });
   }
 
+  function normalizeSimpleWatchdog(value) {
+    const raw = value == null ? {} : value;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('"simpleWatchdog" must be an object.');
+    const timerMinutes = raw.timerMinutes == null ? DEFAULT_SIMPLE_WATCHDOG.timerMinutes : Number(raw.timerMinutes);
+    if (!Number.isFinite(timerMinutes) || timerMinutes < 0.1 || timerMinutes > 1440) {
+      throw new Error('"simpleWatchdog.timerMinutes" must be between 0.1 and 1440.');
+    }
+    const attempts = raw.attempts == null ? DEFAULT_SIMPLE_WATCHDOG.attempts : Number(raw.attempts);
+    if (!Number.isInteger(attempts) || attempts < 0 || attempts > 20) {
+      throw new Error('"simpleWatchdog.attempts" must be an integer between 0 and 20.');
+    }
+    const stopToRefreshSeconds = raw.stopToRefreshSeconds == null
+      ? DEFAULT_SIMPLE_WATCHDOG.stopToRefreshSeconds
+      : Number(raw.stopToRefreshSeconds);
+    if (!Number.isFinite(stopToRefreshSeconds) || stopToRefreshSeconds < 0 || stopToRefreshSeconds > 3600) {
+      throw new Error('"simpleWatchdog.stopToRefreshSeconds" must be between 0 and 3600.');
+    }
+    const refreshToContinueSeconds = raw.refreshToContinueSeconds == null
+      ? DEFAULT_SIMPLE_WATCHDOG.refreshToContinueSeconds
+      : Number(raw.refreshToContinueSeconds);
+    if (!Number.isFinite(refreshToContinueSeconds) || refreshToContinueSeconds < 0 || refreshToContinueSeconds > 3600) {
+      throw new Error('"simpleWatchdog.refreshToContinueSeconds" must be between 0 and 3600.');
+    }
+    return Object.freeze({
+      timerMinutes: Math.round(timerMinutes * 1000) / 1000,
+      attempts,
+      stopToRefreshSeconds: Math.round(stopToRefreshSeconds * 1000) / 1000,
+      refreshToContinueSeconds: Math.round(refreshToContinueSeconds * 1000) / 1000
+    });
+  }
+
   function normalizeConfig(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Config must be a JSON object.');
     const continueText = ensureTimePlaceholder(value.continueText);
@@ -117,6 +154,7 @@
       projectText,
       manualTimestampText,
       watchdog: normalizeWatchdog(value.watchdog),
+      simpleWatchdog: normalizeSimpleWatchdog(value.simpleWatchdog),
       projects: Object.freeze(normalizeProjectList(value.projects))
     });
   }
@@ -130,6 +168,12 @@
         timerMinutes: value.watchdog.timerMinutes,
         attempts: value.watchdog.attempts,
         stopOnStatus: { ...value.watchdog.stopOnStatus }
+      },
+      simpleWatchdog: {
+        timerMinutes: value.simpleWatchdog.timerMinutes,
+        attempts: value.simpleWatchdog.attempts,
+        stopToRefreshSeconds: value.simpleWatchdog.stopToRefreshSeconds,
+        refreshToContinueSeconds: value.simpleWatchdog.refreshToContinueSeconds
       },
       projects: [...value.projects]
     };
@@ -212,6 +256,7 @@
     subscribe,
     normalizeConfig,
     normalizeWatchdog,
+    normalizeSimpleWatchdog,
     statusCodes: STATUS_CODES,
     dispose() {
       try { chrome.storage.onChanged.removeListener(handleStorageChanged); } catch {}
