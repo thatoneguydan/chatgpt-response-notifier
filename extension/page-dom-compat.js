@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 4;
+  const RUNTIME_VERSION = 5;
   try { globalThis.__chatgptNotifierPageDomCompat?.dispose?.(); } catch {}
 
   if (typeof Document === 'undefined' || typeof Element === 'undefined') return;
@@ -28,6 +28,8 @@
     'section'
   ].join(',');
   const SPEAKER_CACHE_MS = 500;
+  const OWNED_ROOT_SELECTOR = '#chatgpt-quick-continue-toolbar';
+  const OWNED_MUTATION_PASSTHROUGH_ATTRIBUTES = new Set(['data-watchdog-settings']);
   const LEGACY_COMPOSER_SELECTORS = new Set([
     '#prompt-textarea',
     'textarea[data-testid="prompt-textarea"]',
@@ -47,6 +49,7 @@
   const nativeElementQuerySelectorAll = Element.prototype.querySelectorAll;
   const nativeClosest = Element.prototype.closest;
   const nativeGetAttribute = Element.prototype.getAttribute;
+  const nativeMutationObserver = globalThis.MutationObserver;
   const speakerRoles = new WeakMap();
   const speakerTurnCache = new WeakMap();
   const syntheticTurnIds = new WeakMap();
@@ -74,6 +77,66 @@
 
   function isSemanticRoleSelector(value) {
     return normalizedSelector(value) === NORMALIZED_SEMANTIC_ROLE_SELECTOR;
+  }
+
+  function elementForMutationNode(node) {
+    if (!node) return null;
+    if (node.nodeType === 1) return node;
+    return node.parentElement || null;
+  }
+
+  function isOwnedMutationNode(node) {
+    const element = elementForMutationNode(node);
+    if (!element) return false;
+    try {
+      return element.matches?.(OWNED_ROOT_SELECTOR) === true
+        || Boolean(element.closest?.(OWNED_ROOT_SELECTOR));
+    } catch {
+      return false;
+    }
+  }
+
+  function isOwnedMutation(record) {
+    if (!record) return false;
+    if (
+      record.type === 'attributes'
+      && OWNED_MUTATION_PASSTHROUGH_ATTRIBUTES.has(String(record.attributeName || ''))
+    ) return false;
+    if (isOwnedMutationNode(record.target)) return true;
+    if (record.type !== 'childList') return false;
+
+    const changedNodes = [
+      ...Array.from(record.addedNodes || []),
+      ...Array.from(record.removedNodes || [])
+    ];
+    return changedNodes.length > 0 && changedNodes.every(isOwnedMutationNode);
+  }
+
+  function filterOwnedMutations(records) {
+    return Array.from(records || []).filter((record) => !isOwnedMutation(record));
+  }
+
+  class NotifierFilteredMutationObserver {
+    constructor(callback) {
+      if (typeof callback !== 'function') throw new TypeError('MutationObserver callback must be a function');
+      const facade = this;
+      this.nativeObserver = new nativeMutationObserver((records) => {
+        const filtered = filterOwnedMutations(records);
+        if (filtered.length) callback(filtered, facade);
+      });
+    }
+
+    observe(target, options) {
+      return this.nativeObserver.observe(target, options);
+    }
+
+    disconnect() {
+      return this.nativeObserver.disconnect();
+    }
+
+    takeRecords() {
+      return filterOwnedMutations(this.nativeObserver.takeRecords());
+    }
   }
 
   function speakerLabelRole(node) {
@@ -319,6 +382,16 @@
   Element.prototype.querySelectorAll = notifierCompatElementQuerySelectorAll;
   Element.prototype.closest = notifierCompatClosest;
   Element.prototype.getAttribute = notifierCompatGetAttribute;
+  if (typeof nativeMutationObserver === 'function') globalThis.MutationObserver = NotifierFilteredMutationObserver;
+
+  const mutationFilter = Object.freeze({
+    version: RUNTIME_VERSION,
+    ownedRootSelector: OWNED_ROOT_SELECTOR,
+    isOwnedNode: isOwnedMutationNode,
+    isOwnedMutation,
+    filterRecords: filterOwnedMutations,
+    mutationObserverFiltered: globalThis.MutationObserver === NotifierFilteredMutationObserver
+  });
 
   const runtime = {
     version: RUNTIME_VERSION,
@@ -328,6 +401,7 @@
     fallbackComposer,
     fallbackSend,
     fallbackStop,
+    mutationFilter,
     dispose() {
       if (Document.prototype.querySelector === notifierCompatDocumentQuerySelector) Document.prototype.querySelector = nativeDocumentQuerySelector;
       if (Document.prototype.querySelectorAll === notifierCompatDocumentQuerySelectorAll) Document.prototype.querySelectorAll = nativeDocumentQuerySelectorAll;
@@ -335,9 +409,12 @@
       if (Element.prototype.querySelectorAll === notifierCompatElementQuerySelectorAll) Element.prototype.querySelectorAll = nativeElementQuerySelectorAll;
       if (Element.prototype.closest === notifierCompatClosest) Element.prototype.closest = nativeClosest;
       if (Element.prototype.getAttribute === notifierCompatGetAttribute) Element.prototype.getAttribute = nativeGetAttribute;
+      if (globalThis.MutationObserver === NotifierFilteredMutationObserver) globalThis.MutationObserver = nativeMutationObserver;
+      if (globalThis.ChatGPTNotifierOwnedDomMutationFilter === mutationFilter) delete globalThis.ChatGPTNotifierOwnedDomMutationFilter;
       if (globalThis.__chatgptNotifierPageDomCompat === runtime) delete globalThis.__chatgptNotifierPageDomCompat;
     }
   };
 
+  globalThis.ChatGPTNotifierOwnedDomMutationFilter = mutationFilter;
   globalThis.__chatgptNotifierPageDomCompat = runtime;
 })();
