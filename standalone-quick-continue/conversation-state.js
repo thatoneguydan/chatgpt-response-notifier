@@ -1,18 +1,31 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 3;
+  const RUNTIME_VERSION = 4;
   const STORAGE_PREFIX = 'quick-continue:manual-timestamp:';
   const CLOCK_SELECTOR = '[aria-label="Current local time"]';
+  const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
+  const SIMPLE_BUTTON_ID = 'chatgpt-quick-continue-simple-watchdog';
+  const SIMPLE_ACTION_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_ACTION';
+  const SIMPLE_STATE_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATE';
+  const SIMPLE_SET_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_SET';
+  const SIMPLE_GET_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_GET';
   const previousRuntime = globalThis.__chatgptQuickContinueConversationStateRuntime;
   if (Number(previousRuntime?.version || 0) === RUNTIME_VERSION) return;
   try { previousRuntime?.dispose?.(); } catch {}
+
+  const prompts = globalThis.ChatGPTQuickContinuePrompts;
+  const configApi = globalThis.ChatGPTQuickContinueConfig;
+  const sendApi = globalThis.ChatGPTQuickContinueSend;
 
   let activeConversationId = null;
   let desiredEnabled = false;
   let provisionalEnabled = false;
   let provisionalTouched = false;
   let restoreGeneration = 0;
+  let simpleEnabled = false;
+  let simpleButton = null;
+  let simpleRestoreGeneration = 0;
   let scheduled = false;
   let observer = null;
 
@@ -109,13 +122,199 @@
     applyDesiredState();
   }
 
+  function showStatus(message) {
+    try {
+      const status = document.getElementById(TOOLBAR_ID)?.querySelector?.('[role="status"]');
+      if (!status) return;
+      const text = String(message || '');
+      status.textContent = text;
+      status.hidden = !text;
+      if (!text) return;
+      setTimeout(() => {
+        try {
+          if (status.textContent === text) {
+            status.textContent = '';
+            status.hidden = true;
+          }
+        } catch {}
+      }, 2200);
+    } catch {}
+  }
+
+  function renderSimpleState(enabled) {
+    simpleEnabled = enabled === true;
+    if (!simpleButton) return;
+    simpleButton.setAttribute('aria-pressed', String(simpleEnabled));
+    Object.assign(simpleButton.style, {
+      background: simpleEnabled ? '#16a34a' : 'var(--main-surface-secondary, rgba(127,127,127,.10))',
+      color: simpleEnabled ? '#fff' : 'inherit'
+    });
+  }
+
+  function styleSimpleButton(button) {
+    Object.assign(button.style, {
+      border: '1px solid var(--border-light, rgba(127,127,127,.25))',
+      borderRadius: '6px',
+      padding: '5px 7px',
+      background: 'var(--main-surface-secondary, rgba(127,127,127,.10))',
+      color: 'inherit',
+      font: 'inherit',
+      fontWeight: '600',
+      cursor: 'pointer'
+    });
+  }
+
+  async function setSimpleEnabled(nextEnabled) {
+    const conversationId = conversationIdFromUrl();
+    if (nextEnabled && !conversationId) {
+      renderSimpleState(false);
+      showStatus('Open a saved chat before enabling Simple.');
+      return;
+    }
+    let config = null;
+    try { config = await configApi?.load?.(); } catch {}
+    if (!config?.simpleWatchdog) {
+      showStatus('Simple watchdog config unavailable.');
+      return;
+    }
+    let response = null;
+    try {
+      response = await chrome.runtime.sendMessage({
+        type: SIMPLE_SET_MESSAGE,
+        enabled: nextEnabled === true,
+        conversationId,
+        settings: config.simpleWatchdog
+      });
+    } catch {}
+    renderSimpleState(response?.enabled === true);
+    if (response?.enabled === true) showStatus('Simple watchdog on.');
+    else if (nextEnabled) showStatus(String(response?.reason || 'Simple watchdog could not start.'));
+    else showStatus('Simple watchdog off.');
+  }
+
+  function handleSimpleButtonClick(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    setSimpleEnabled(!simpleEnabled).catch(() => {});
+  }
+
+  function ensureSimpleButton() {
+    const root = document.getElementById(TOOLBAR_ID);
+    if (!root) {
+      simpleButton = null;
+      return;
+    }
+    const existing = root.querySelector(`#${SIMPLE_BUTTON_ID}`);
+    if (existing) {
+      simpleButton = existing;
+      renderSimpleState(simpleEnabled);
+      return;
+    }
+    const button = document.createElement('button');
+    button.id = SIMPLE_BUTTON_ID;
+    button.type = 'button';
+    button.textContent = 'Simple';
+    button.setAttribute('aria-label', 'Toggle simple fallback watchdog');
+    button.setAttribute('aria-pressed', String(simpleEnabled));
+    styleSimpleButton(button);
+    renderSimpleState(simpleEnabled);
+    button.addEventListener('click', handleSimpleButtonClick);
+    const project = root.querySelector('button[aria-label="Project Continue"]');
+    if (project?.nextSibling) root.insertBefore(button, project.nextSibling);
+    else root.append(button);
+    simpleButton = button;
+    renderSimpleState(simpleEnabled);
+  }
+
+  async function restoreSimpleForConversation(conversationId) {
+    const generation = ++simpleRestoreGeneration;
+    if (!conversationId) {
+      renderSimpleState(false);
+      return;
+    }
+    let response = null;
+    try { response = await chrome.runtime.sendMessage({ type: SIMPLE_GET_MESSAGE, conversationId }); } catch {}
+    if (generation !== simpleRestoreGeneration || activeConversationId !== conversationId) return;
+    renderSimpleState(response?.enabled === true);
+  }
+
+  function composerElement() {
+    for (const selector of [
+      '#prompt-textarea',
+      'textarea[data-testid="prompt-textarea"]',
+      '[contenteditable="true"][data-testid="prompt-textarea"]',
+      '[contenteditable="true"][data-lexical-editor="true"]'
+    ]) {
+      let node = null;
+      try { node = document.querySelector(selector); } catch {}
+      if (!node || node.disabled || node.getAttribute?.('aria-disabled') === 'true') continue;
+      if (node instanceof HTMLTextAreaElement || node instanceof HTMLInputElement || node.isContentEditable) return node;
+    }
+    return null;
+  }
+
+  function clickChatGptStop() {
+    for (const selector of [
+      'button[data-testid="stop-button"]',
+      'button[aria-label="Stop generating"]',
+      'button[aria-label="Stop response"]',
+      'button[aria-label="Stop"]'
+    ]) {
+      let button = null;
+      try { button = document.querySelector(selector); } catch {}
+      if (!button || button.disabled || button.getAttribute?.('aria-disabled') === 'true') continue;
+      try {
+        button.click();
+        return true;
+      } catch {}
+    }
+    return false;
+  }
+
+  async function forceSendContinue() {
+    const composer = composerElement();
+    if (!composer) return { ok: false, reason: 'composer-not-found' };
+    let config = null;
+    try { config = await configApi?.load?.(); } catch {}
+    if (!config?.continueText || !prompts || !sendApi) return { ok: false, reason: 'runtime-unavailable' };
+    const text = prompts.continuePrompt(config.continueText, new Date());
+    if (!text) return { ok: false, reason: 'continue-text-empty' };
+    try {
+      return await sendApi.submit(composer, text, { replace: true, timeoutMs: 5000 });
+    } catch {
+      return { ok: false, reason: 'send-threw' };
+    }
+  }
+
+  function handleRuntimeMessage(message, _sender, sendResponse) {
+    if (message?.type === SIMPLE_STATE_MESSAGE) {
+      renderSimpleState(message?.state?.enabled === true);
+      if (message?.state?.exhausted === true) showStatus('Simple watchdog attempts exhausted.');
+      sendResponse?.({ ok: true });
+      return false;
+    }
+    if (message?.type !== SIMPLE_ACTION_MESSAGE) return false;
+    if (message.action === 'stop') {
+      sendResponse?.({ ok: true, clicked: clickChatGptStop() });
+      return false;
+    }
+    if (message.action === 'send-continue') {
+      forceSendContinue().then((result) => sendResponse?.(result)).catch(() => sendResponse?.({ ok: false, reason: 'send-failed' }));
+      return true;
+    }
+    sendResponse?.({ ok: false, reason: 'unknown-action' });
+    return false;
+  }
+
   function syncRouteAndToggle() {
     scheduled = false;
+    ensureSimpleButton();
     const nextConversationId = conversationIdFromUrl();
     if (nextConversationId !== activeConversationId) {
       const previousConversationId = activeConversationId || '';
       activeConversationId = nextConversationId;
       restoreForConversation(nextConversationId, previousConversationId).catch(() => {});
+      restoreSimpleForConversation(nextConversationId).catch(() => {});
     } else {
       applyDesiredState();
     }
@@ -179,12 +378,14 @@
   window.addEventListener('hashchange', scheduleSync, true);
   try { globalThis.navigation?.addEventListener?.('navigatesuccess', scheduleSync); } catch {}
   try { chrome.storage.onChanged.addListener(handleStorageChanged); } catch {}
+  try { chrome.runtime.onMessage.addListener(handleRuntimeMessage); } catch {}
   scheduleSync();
 
   globalThis.__chatgptQuickContinueConversationStateRuntime = Object.freeze({
     version: RUNTIME_VERSION,
     get activeConversationId() { return activeConversationId || ''; },
     get desiredEnabled() { return desiredEnabled; },
+    get simpleEnabled() { return simpleEnabled; },
     dispose() {
       try { observer?.disconnect(); } catch {}
       try { document.removeEventListener('click', persistUserChoiceSoon, true); } catch {}
@@ -193,6 +394,9 @@
       try { window.removeEventListener('hashchange', scheduleSync, true); } catch {}
       try { globalThis.navigation?.removeEventListener?.('navigatesuccess', scheduleSync); } catch {}
       try { chrome.storage.onChanged.removeListener(handleStorageChanged); } catch {}
+      try { chrome.runtime.onMessage.removeListener(handleRuntimeMessage); } catch {}
+      try { simpleButton?.removeEventListener('click', handleSimpleButtonClick); } catch {}
+      simpleButton = null;
     }
   });
 })();
