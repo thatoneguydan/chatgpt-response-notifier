@@ -106,6 +106,10 @@ test('a native extension reload replaces controls on the open page without refre
   const settings = await extensionContext.newPage();
   try {
     await settings.goto('chrome://extensions/');
+    // Command-line loading starts unpacked extensions with developer mode off.
+    // A later native reload then disables them instead of completing. Enable
+    // the disposable profile's normal unpacked-extension setting first.
+    await settings.evaluate(() => chrome.developerPrivate.updateProfileConfiguration({ inDeveloperMode: true }));
     const loadError = await settings.evaluate((id) => chrome.developerPrivate.reload(id, { failQuietly: true, populateErrorForUnpacked: true }), extensionId);
     expect(loadError, 'Chrome must complete the native unpacked-extension reload').toBeFalsy();
   } finally {
@@ -162,17 +166,25 @@ test('scrolling never rereads a draft and typing does not trigger terminal scans
     const original = globalThis.ChatGPTNotifierRenderedTerminalStatus;
     const clone = Element.prototype.cloneNode;
     const send = chrome.runtime.sendMessage;
-    let detections = 0;
     const detectionSources = [];
-    let turnClones = 0;
+    const turnCloneSources = [];
+    const independentDiagnosticSources = [];
     const draftPublications = [];
     globalThis.ChatGPTNotifierRenderedTerminalStatus = Object.freeze({ ...original, detect(...args) {
-      detections += 1;
-      detectionSources.push(new Error().stack);
+      const source = new Error().stack;
+      // The existing no-status diagnostic has its own delayed timer and asks
+      // for a fresh snapshot. Attribute that exact path separately; mutation
+      // scans and all other submitted-turn work must still fail this check.
+      if (source.includes('publishNoStatusDiagnostic')) independentDiagnosticSources.push(source);
+      else detectionSources.push(source);
       return original.detect(...args);
     }});
     Element.prototype.cloneNode = function (...args) {
-      if (this.closest('[data-testid^="conversation-turn-"]')) turnClones += 1;
+      if (this.closest('[data-testid^="conversation-turn-"]')) {
+        const source = new Error().stack;
+        if (source.includes('publishNoStatusDiagnostic')) independentDiagnosticSources.push(source);
+        else turnCloneSources.push(source);
+      }
       return clone.apply(this, args);
     };
     chrome.runtime.sendMessage = function (...args) {
@@ -187,7 +199,7 @@ test('scrolling never rereads a draft and typing does not trigger terminal scans
         await new Promise(resolve => setTimeout(resolve, 10));
       }
       await new Promise(resolve => setTimeout(resolve, 650));
-      return { detections, detectionSources, turnClones, draftPublications };
+      return { detectionSources, turnCloneSources, independentDiagnosticSources, draftPublications };
     } finally {
       globalThis.ChatGPTNotifierRenderedTerminalStatus = original;
       Element.prototype.cloneNode = clone;
@@ -195,7 +207,7 @@ test('scrolling never rereads a draft and typing does not trigger terminal scans
     }
   })()`);
   expect(work.detectionSources, 'Draft mutations must not schedule terminal scans').toEqual([]);
-  expect(work.turnClones).toBe(0);
+  expect(work.turnCloneSources, 'Draft publications must reuse submitted-turn state').toEqual([]);
   expect(work.draftPublications.length).toBeGreaterThan(0);
   expect(work.draftPublications.every(Boolean)).toBe(true);
 });
