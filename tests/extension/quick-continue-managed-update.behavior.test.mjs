@@ -95,9 +95,12 @@ test('release workflow publishes a hashed standalone runtime package and update 
   assert.match(quickWorkflow, /sourceCommit = \$sourceCommit/);
 });
 
-test('both release feeds serialize publication and rebase feed-only commits onto current main', () => {
+test('release feeds use independent serialized queues and rebase feed-only commits onto current main', () => {
+  assert.match(notifierWorkflow, /group: chatgpt-extension-release-publish/);
+  assert.match(quickWorkflow, /group: quick-continue-release-publish/);
+  assert.doesNotMatch(quickWorkflow, /group: chatgpt-extension-release-publish/);
+
   for (const workflow of [quickWorkflow, notifierWorkflow]) {
-    assert.match(workflow, /group: chatgpt-extension-release-publish/);
     assert.match(workflow, /cancel-in-progress: false/);
     assert.match(workflow, /git fetch origin main/);
     assert.match(workflow, /origin\/main/);
