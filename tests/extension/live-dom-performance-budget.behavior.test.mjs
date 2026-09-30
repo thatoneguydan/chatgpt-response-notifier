@@ -74,15 +74,19 @@ test('extension-owned countdown and ordinary composer mutations are filtered bef
   assert.match(compat, /globalThis\.ChatGPTNotifierOwnedDomMutationFilter = mutationFilter/);
   assert.match(compat, /globalThis\.MutationObserver === NotifierFilteredMutationObserver/);
 
+  assert.match(typingGuard, /RUNTIME_VERSION = 2/);
   assert.match(typingGuard, /class ComposerQuietMutationObserver/);
-  assert.match(typingGuard, /mutationFilter\.isComposerTextMutation\(record\) !== true/);
-  assert.match(typingGuard, /if \(present === lastDraftPresent\) return/);
+  assert.match(typingGuard, /function isMonitorObservation\(options\)/);
+  assert.match(typingGuard, /state\?\.monitorObservation !== true \|\| deliveredDraftTransition/);
+  assert.match(typingGuard, /if \(state\.lastDraftPresent === present\) continue/);
+  assert.doesNotMatch(typingGuard, /createElement|dispatchEvent|document\.addEventListener\('input'/);
 
   const documentStartReaders = manifest.content_scripts[0]?.js || [];
   assert.equal(documentStartReaders[0], 'page-dom-compat.js');
   assert.equal(documentStartReaders[1], 'composer-typing-performance-guard.js');
   assert.ok(documentStartReaders.indexOf('composer-typing-performance-guard.js') < documentStartReaders.indexOf('monitor-script.js'));
   assert.ok(documentStartReaders.indexOf('composer-typing-performance-guard.js') < documentStartReaders.indexOf('terminal-status-live-observer.js'));
+  assert.deepEqual(manifest.content_scripts[1].js.slice(0, 2), ['page-dom-compat.js', 'composer-typing-performance-guard.js']);
 
   assert.match(compatBackground, /PAGE_COMPAT_FILES = Object\.freeze/);
   assert.match(compatBackground, /'page-dom-compat\.js'/);
