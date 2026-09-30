@@ -36,11 +36,11 @@ test('config editor caret uses high-contrast theme text instead of a fixed dark-
 test('watchdog JSON exposes editable timer, attempt cap, and all GitHub status stop policies', () => {
   assert.equal(config.watchdog.timerMinutes, 30);
   assert.equal(config.watchdog.attempts, 3);
-  assert.deepEqual(Object.keys(config.watchdog.githubStatusStops).sort(), definitiveCodes.sort());
+  assert.deepEqual(Object.keys(config.watchdog.stopOnStatus).sort(), definitiveCodes.sort());
   for (const code of ['PLANNING_ACTIVE', 'COMPLETE_APPLIED', 'COMPLETE_NO_CHANGES', 'BLOCKED_HUMAN']) {
-    assert.equal(config.watchdog.githubStatusStops[code], true);
+    assert.equal(config.watchdog.stopOnStatus[code], true);
   }
   for (const code of ['INCOMPLETE_LIMIT', 'INCOMPLETE_TOOL_FAILURE', 'INCOMPLETE_HANDOFF', 'INCOMPLETE_CONTINUE']) {
-    assert.equal(config.watchdog.githubStatusStops[code], false);
+    assert.equal(config.watchdog.stopOnStatus[code], false);
   }
 });
