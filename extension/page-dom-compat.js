@@ -118,6 +118,12 @@
     const composer = nativeClosestTo(element, '#prompt-textarea, [contenteditable="true"], textarea');
     if (!composer) return false;
     if (nativeClosestTo(composer, SEMANTIC_ROLE_SELECTOR) || nativeClosestTo(composer, LEGACY_TURN_SELECTOR)) return false;
+    // Speaker-label-only turns have synthetic roles rather than native role
+    // attributes. Keep their inline editors visible without rescanning labels
+    // on every keystroke in the actual composer.
+    for (let ancestor = composer; ancestor; ancestor = ancestor.parentElement) {
+      if (speakerRoles.has(ancestor)) return false;
+    }
     return true;
   }
 
