@@ -16,22 +16,42 @@ function loadManagedUpdatePolicy(runningVersion = '1.2.26') {
     globalThis: null,
     Number,
     String,
+    Object,
     Promise,
+    Math,
+    Date,
+    URL,
+    decodeURIComponent,
+    structuredClone,
     setTimeout: () => 1,
     clearTimeout: () => {},
     fetch: async () => ({ ok: false }),
     chrome: {
       alarms: {
         create: () => {},
+        clear: async () => true,
         onAlarm: { addListener: () => {} }
       },
       runtime: {
         getManifest: () => ({ version: runningVersion }),
         reload: () => {},
+        onMessage: { addListener: () => {} },
         onStartup: { addListener: () => {} },
         onInstalled: { addListener: () => {} }
       },
-      tabs: { query: async () => [] },
+      storage: {
+        local: {
+          get: async () => ({}),
+          set: async () => {}
+        }
+      },
+      tabs: {
+        query: async () => [],
+        get: async () => null,
+        reload: async () => {},
+        sendMessage: async () => ({ ok: true }),
+        onRemoved: { addListener: () => {} }
+      },
       scripting: { executeScript: async () => {} }
     }
   };
