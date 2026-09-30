@@ -337,7 +337,7 @@ async function nativeExtensionDiagnostics(context) {
   }
 }
 
-async function requireExtensionWorkers(context, testInfo) {
+async function requireExtensionWorkers(context, testInfo, chromiumLog) {
   const startupEvents = [];
   const knownNames = ['ChatGPT Quick Continue', 'ChatGPT Response Notifier'];
   try {
@@ -372,7 +372,8 @@ async function requireExtensionWorkers(context, testInfo) {
     } catch (diagnosticError) {
       nativeDiagnostics = { error: String(diagnosticError) };
     }
-    const diagnostics = { workers: context.serviceWorkers().map((worker) => worker.url()), nativeDiagnostics, startupEvents };
+    const log = await fs.readFile(chromiumLog, 'utf8').catch(() => '');
+    const diagnostics = { workers: context.serviceWorkers().map((worker) => worker.url()), nativeDiagnostics, startupEvents, chromiumLog: log.slice(-12000) };
     await testInfo.attach('extension-worker-startup.json', { body: JSON.stringify(diagnostics, null, 2), contentType: 'application/json' });
     throw new Error(`${error.message}\nNative extension worker diagnostics: ${JSON.stringify(diagnostics)}`);
   }
@@ -381,15 +382,19 @@ async function requireExtensionWorkers(context, testInfo) {
 export const test = base.extend({
   extensionContext: async ({}, use, testInfo) => {
     const profile = testInfo.outputPath('chromium-profile');
+    const chromiumLog = testInfo.outputPath('chromium-worker-startup.log');
     await fs.rm(profile, { recursive: true, force: true });
     const extensions = [notifierExtensionPath, quickContinueExtensionPath].join(',');
     const context = await chromium.launchPersistentContext(profile, {
       channel: 'chromium',
       headless: true,
+      ignoreDefaultArgs: ['--disable-extensions'],
       viewport: { width: 1280, height: 900 },
       args: [
         `--disable-extensions-except=${extensions}`,
         `--load-extension=${extensions}`,
+        '--enable-logging=file',
+        `--log-file=${chromiumLog}`,
         '--proxy-server=http://127.0.0.1:9',
         '--proxy-bypass-list=<-loopback>'
       ]
@@ -403,7 +408,7 @@ export const test = base.extend({
       // prevents the machine's live managed updater from replacing exact-head
       // extension bytes while the isolated browser regression is running.
       await new Promise((resolve) => setTimeout(resolve, 1500));
-      await requireExtensionWorkers(context, testInfo);
+      await requireExtensionWorkers(context, testInfo, chromiumLog);
       await use(context);
     } finally {
       await context.close();
