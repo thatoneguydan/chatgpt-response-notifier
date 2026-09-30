@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 3;
+  const RUNTIME_VERSION = 4;
   try { globalThis.__chatgptNotifierPageDomCompat?.dispose?.(); } catch {}
 
   if (typeof Document === 'undefined' || typeof Element === 'undefined') return;
@@ -13,6 +13,7 @@
     '[data-turn="user"]',
     '[data-turn="assistant"]'
   ].join(',');
+  const NORMALIZED_SEMANTIC_ROLE_SELECTOR = SEMANTIC_ROLE_SELECTOR.replace(/\s*,\s*/g, ',');
   const SPEAKER_LABEL_SELECTOR = [
     'h1.sr-only', 'h2.sr-only', 'h3.sr-only', 'h4.sr-only', 'h5.sr-only', 'h6.sr-only',
     'h1.visually-hidden', 'h2.visually-hidden', 'h3.visually-hidden', 'h4.visually-hidden', 'h5.visually-hidden', 'h6.visually-hidden',
@@ -65,6 +66,14 @@
 
   function nativeClosestTo(node, selector) {
     try { return nativeClosest.call(node, selector); } catch { return null; }
+  }
+
+  function normalizedSelector(value) {
+    return String(value || '').replace(/\s*,\s*/g, ',');
+  }
+
+  function isSemanticRoleSelector(value) {
+    return normalizedSelector(value) === NORMALIZED_SEMANTIC_ROLE_SELECTOR;
   }
 
   function speakerLabelRole(node) {
@@ -148,11 +157,28 @@
     return Array.from(new Set(combined)).sort(compareDomOrder);
   }
 
+  function hydrateLegacyTurnRoles(root, legacy) {
+    if (!legacy.some((turn) => !semanticRole(turn))) return;
+    // Current ChatGPT still emits stable conversation-turn wrappers in some
+    // layouts while moving speaker identity to an exact screen-reader label.
+    // Recover only those existing wrappers; never infer identity from prose.
+    speakerLabelTurns(root);
+  }
+
   function compatibleTurns(root) {
     const legacy = nativeQueryAll(root, LEGACY_TURN_SELECTOR);
     const roles = nativeQueryAll(root, SEMANTIC_ROLE_SELECTOR).filter((node) => semanticRole(node));
+    hydrateLegacyTurnRoles(root, legacy);
     if (legacy.length || roles.length) return semanticTurns(legacy, roles);
     return speakerLabelTurns(root);
+  }
+
+  function compatibleRoleNodes(root) {
+    const legacy = nativeQueryAll(root, LEGACY_TURN_SELECTOR);
+    const roles = nativeQueryAll(root, SEMANTIC_ROLE_SELECTOR).filter((node) => semanticRole(node));
+    hydrateLegacyTurnRoles(root, legacy);
+    if (legacy.length || roles.length) return semanticTurns(legacy, roles).filter((node) => semanticRole(node));
+    return speakerLabelTurns(root).filter((node) => semanticRole(node));
   }
 
   function visibleEnough(node) {
@@ -232,6 +258,7 @@
   function notifierCompatDocumentQuerySelectorAll(selector) {
     const value = String(selector || '');
     if (value === LEGACY_TURN_SELECTOR) return compatibleTurns(this);
+    if (isSemanticRoleSelector(value)) return compatibleRoleNodes(this);
     return nativeDocumentQuerySelectorAll.call(this, selector);
   }
 
@@ -242,6 +269,7 @@
   function notifierCompatElementQuerySelectorAll(selector) {
     const value = String(selector || '');
     if (value === LEGACY_TURN_SELECTOR) return compatibleTurns(this);
+    if (isSemanticRoleSelector(value)) return compatibleRoleNodes(this);
     return nativeElementQuerySelectorAll.call(this, selector);
   }
 
@@ -287,6 +315,7 @@
   const runtime = {
     version: RUNTIME_VERSION,
     compatibleTurns,
+    compatibleRoleNodes,
     speakerLabelTurns,
     fallbackComposer,
     fallbackSend,
