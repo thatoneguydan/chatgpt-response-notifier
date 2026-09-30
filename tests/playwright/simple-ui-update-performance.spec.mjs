@@ -99,14 +99,18 @@ test('a native extension reload replaces controls on the open page without refre
   await fixturePage.getByRole('button', { name: 'Current local time', exact: true }).click();
   await expect(fixturePage.getByRole('button', { name: 'Current local time', exact: true })).toHaveAttribute('aria-pressed', 'true');
   const worker = await extensionWorker(extensionContext, 'ChatGPT Quick Continue');
-  await worker.evaluate(() => chrome.runtime.reload()).catch((error) => {
+  const token = `native-reload-${Date.now()}`;
+  await fixturePage.locator(toolbar).evaluate((root, value) => { root.dataset.nativeReloadMarker = value; }, token);
+  await worker.evaluate((value) => { globalThis.__nativeReloadProbe = value; chrome.runtime.reload(); }, token).catch((error) => {
     if (!/closed|destroyed|restarted/i.test(error.message)) throw error;
   });
   await expect.poll(async () => {
     const current = await extensionWorker(extensionContext, 'ChatGPT Quick Continue');
-    return Boolean(current && current !== worker);
+    // Chrome/Playwright may reuse the Worker handle across a native reload.
+    return current ? current.evaluate((value) => globalThis.__nativeReloadProbe !== value, token).catch(() => false) : false;
   }, { timeout: 10_000 }).toBe(true);
   await expect(fixturePage.locator(toolbar)).toHaveCount(1);
+  await expect(fixturePage.locator(toolbar)).not.toHaveAttribute('data-native-reload-marker', token);
   await expect(fixturePage.locator(simple)).toHaveCount(1);
   await expect(fixturePage.getByRole('button', { name: 'Current local time', exact: true })).toHaveAttribute('aria-pressed', 'true');
   await fixturePage.locator('#prompt-textarea').fill('One submission after native extension reload');
@@ -139,7 +143,13 @@ test('scrolling never rereads a draft and typing does not trigger terminal scans
   expect(scrollReads).toBe(0);
   // Put the composer under the same main root as the real ChatGPT page so its
   // draft mutations exercise the monitor's observer as well as terminal readers.
-  await fixturePage.evaluate(() => document.querySelector('main').append(document.querySelector('form[data-type="unified-composer"]')));
+  await fixturePage.evaluate(() => {
+    document.querySelector('main').append(document.querySelector('form[data-type="unified-composer"]'));
+    // Let the earlier terminal-notification retries settle before measuring work
+    // caused by typing. The separate Simple test retains the terminal footer.
+    document.querySelector('.rendered-footer').remove();
+    document.querySelector('[data-message-author-role="assistant"] .markdown').textContent = 'A quiet assistant reply for draft performance measurements.';
+  });
   await evaluateInExtensionWorld(fixturePage, 'ChatGPT Response Notifier', `new Promise(resolve => setTimeout(resolve, 2200))`);
   const work = await evaluateInExtensionWorld(fixturePage, 'ChatGPT Response Notifier', `(async () => {
     const original = globalThis.ChatGPTNotifierRenderedTerminalStatus;
