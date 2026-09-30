@@ -86,7 +86,10 @@ test('extension-owned countdown and ordinary composer mutations are filtered bef
   assert.equal(documentStartReaders[1], 'composer-typing-performance-guard.js');
   assert.ok(documentStartReaders.indexOf('composer-typing-performance-guard.js') < documentStartReaders.indexOf('monitor-script.js'));
   assert.ok(documentStartReaders.indexOf('composer-typing-performance-guard.js') < documentStartReaders.indexOf('terminal-status-live-observer.js'));
-  assert.deepEqual(manifest.content_scripts[1].js.slice(0, 2), ['page-dom-compat.js', 'composer-typing-performance-guard.js']);
+  assert.ok(documentStartReaders.indexOf('composer-typing-performance-guard.js') < documentStartReaders.indexOf('watchdog-page-authority-v3.js'));
+  const allStartupScripts = manifest.content_scripts.flatMap((entry) => entry.js || []);
+  assert.equal(allStartupScripts.filter((file) => file === 'composer-typing-performance-guard.js').length, 1);
+  assert.equal(allStartupScripts.filter((file) => file === 'page-dom-compat.js').length, 1);
 
   assert.match(compatBackground, /PAGE_COMPAT_FILES = Object\.freeze/);
   assert.match(compatBackground, /'page-dom-compat\.js'/);
