@@ -8,6 +8,32 @@
   const style = document.createElement('style');
   style.id = STYLE_ID;
   style.textContent = `
+#chatgpt-quick-continue-toolbar [hidden] {
+  display: none !important;
+}
+#chatgpt-quick-continue-simple-countdown {
+  position: absolute;
+  box-sizing: border-box;
+  width: calc(100% + 2px);
+  left: -1px;
+  bottom: calc(100% + 4px);
+  padding: 3px 4px;
+  border: 1px solid var(--border-light, rgba(0,0,0,.14));
+  border-radius: 6px;
+  background: var(--main-surface-primary, #fff);
+  color: #111;
+  box-shadow: 0 1px 4px rgba(0,0,0,.14);
+  font-size: 11px;
+  line-height: 1.25;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+#chatgpt-quick-continue-simple-countdown[hidden],
+#chatgpt-quick-continue-toolbar[data-simple-watchdog-active="true"] [data-chatgpt-notifier-watchdog-status-owner] {
+  display: none !important;
+}
 #chatgpt-quick-continue-toolbar [aria-label="Project Continue"]:has(div:not([hidden]) > textarea[aria-label="Quick Continue JSON"]) {
   width: min(780px, calc(100vw - 32px)) !important;
   min-width: min(780px, calc(100vw - 32px)) !important;

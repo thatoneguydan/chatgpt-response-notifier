@@ -63,7 +63,7 @@ test('extension-owned countdown mutations are filtered before expensive live obs
   const compatBackground = readText('extension/page-runtime-compat-background.js');
   const postUpdate = readText('extension/terminal-stop-post-update-recovery-background.js');
 
-  assert.match(compat, /RUNTIME_VERSION = 5/);
+  assert.match(compat, /RUNTIME_VERSION = 6/);
   assert.match(compat, /OWNED_ROOT_SELECTOR = '#chatgpt-quick-continue-toolbar'/);
   assert.match(compat, /OWNED_MUTATION_PASSTHROUGH_ATTRIBUTES = new Set\(\['data-watchdog-settings'\]\)/);
   assert.match(compat, /class NotifierFilteredMutationObserver/);

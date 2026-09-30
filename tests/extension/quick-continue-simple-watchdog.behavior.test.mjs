@@ -220,3 +220,27 @@ test('Simple mode is mechanically scoped to the exact saved conversation', async
   assert.equal(harness.actionMessages().some((entry) => entry.action === 'stop' || entry.action === 'send-continue'), false);
   assert.equal(harness.reloads.length, 0);
 });
+
+test('Simple starts on an unsaved chat and keeps its click deadline when the chat gains an ID', async () => {
+  const harness = createHarness();
+  harness.tab.url = 'https://chatgpt.com/';
+  const startedAt = Date.now() - 2000;
+  const enabled = await harness.sendRuntimeMessage({ type: SET, enabled: true, conversationId: '', startedAt, settings: config.simpleWatchdog });
+  assert.equal(enabled.enabled, true);
+  assert.equal(enabled.nextAt, startedAt + config.simpleWatchdog.timerMinutes * 60_000);
+  const deadline = enabled.nextAt;
+  harness.tab.url = 'https://chatgpt.com/c/newly-saved-chat';
+  const restored = await harness.sendRuntimeMessage({ type: 'QUICK_CONTINUE_SIMPLE_WATCHDOG_GET', conversationId: 'newly-saved-chat' });
+  assert.equal(restored.enabled, true);
+  assert.equal(restored.nextAt, deadline);
+  assert.equal(harness.state().conversationId, 'newly-saved-chat');
+});
+
+test('Simple switches off without loading settings or receiving a response', async () => {
+  const harness = createHarness();
+  await harness.sendRuntimeMessage({ type: SET, enabled: true, conversationId: 'simple-mode-test', settings: config.simpleWatchdog });
+  const disabled = await harness.sendRuntimeMessage({ type: SET, enabled: false });
+  assert.equal(disabled.enabled, false);
+  assert.equal(harness.state(), null);
+  assert.equal(harness.alarms.has(SIMPLE_ALARM_PREFIX + harness.tab.id), false);
+});

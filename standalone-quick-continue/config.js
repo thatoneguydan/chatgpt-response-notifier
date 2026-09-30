@@ -263,4 +263,5 @@
       listeners.clear();
     }
   });
+  globalThis.__chatgptQuickContinueLifecycle?.register?.(globalThis.ChatGPTQuickContinueConfig);
 })();

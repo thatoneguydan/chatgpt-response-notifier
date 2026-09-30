@@ -1,4 +1,11 @@
-# ChatGPT Response Notifier 0.9.98
+# ChatGPT Response Notifier 0.9.99
+
+- Prevents draft typing from waking the rendered terminal-code observer and watchdog terminal scan. Draft/upload/send controls remain observed by their existing monitor and dispatch owners.
+- Quick Continue 1.2.30 centers Simple between Continue and Project, displays its independent countdown immediately, removes redundant on/off messages, and starts on fresh chats before they receive a conversation ID.
+- Hot updates retire surviving runtime closures through a shared DOM lifecycle signal, guard queued/async work after disposal, and remove stale toolbar copies before mounting the new singleton.
+- Scrolling repositions the toolbar without rereading the draft or rewriting availability. The JSON editor measures visible timer rows so its frame clears them.
+
+## Earlier 0.9.98 changes
 
 - Stops the notifier's own once-per-second countdown/status DOM updates from waking its expensive conversation and terminal-status MutationObservers. On long chats, those self-induced scans could repeatedly traverse and clone the conversation even while ChatGPT itself was idle, causing typing and scrolling lag.
 - Installs one isolated-world MutationObserver filter before live readers. Mutations wholly inside the Quick Continue/notifier toolbar are dropped, while real ChatGPT page mutations and the notifier's `data-watchdog-settings` control signal still pass through.
