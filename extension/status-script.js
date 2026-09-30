@@ -312,6 +312,10 @@
       }) || '';
     } catch { return composerText(node) ? 'composer-not-empty' : ''; }
   }
+  function watchdogUserBlockReason(node) {
+    const reason = activeUserBlockReason(node);
+    return reason === 'active-user-interaction' ? '' : reason;
+  }
 
   function inputEvent(node, text) {
     try { node.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: text ? 'insertText' : 'deleteContentBackward', data: text || null })); }
@@ -466,7 +470,7 @@
 
     const composer = composerElement();
     if (!composer) return { ok: false, clicked: false, reason: 'composer-not-found', documentId };
-    const initialBlock = activeUserBlockReason(composer);
+    const initialBlock = watchdogUserBlockReason(composer);
     if (initialBlock) return { ok: false, clicked: false, reason: initialBlock, documentId };
     const text = timestampedContinueText();
     const previousUserKey = latestUserSnapshot()?.key || '';
@@ -510,7 +514,7 @@
       return { ok: false, clicked: false, reason: 'watchdog-authorization-expired-before-send', documentId };
     }
     if (composerText(composer) !== cleanComposer(text)) return { ok: false, clicked: false, reason: 'composer-changed-before-send', documentId };
-    const beforeSendBlock = activeUserBlockReason(composer);
+    const beforeSendBlock = watchdogUserBlockReason(composer);
     if (beforeSendBlock && beforeSendBlock !== 'composer-not-empty') {
       writeComposer(composer, '');
       return { ok: false, clicked: false, reason: `${beforeSendBlock}-before-send`, documentId };
@@ -648,16 +652,34 @@
       const terminalStatus = String(raw?.statusCode || '');
       const definitiveTerminal = terminalStatus
         && globalThis.ChatGPTNotifierContinuationPolicy?.isAutoContinueStatusCode?.(terminalStatus) !== true;
+      const nextSendEligibleAt = Math.max(0, Number(finalized?.nextSendEligibleAt || 0));
+      const definitivelyNotClicked = raw?.clicked !== true;
       const result = definitiveTerminal
-        ? { ...raw, attemptId, nextSendEligibleAt: Math.max(0, Number(finalized?.nextSendEligibleAt || authorization.nextSendEligibleAt || 0)) }
-        : {
-            ...raw,
-            ok: true,
-            originalOk: raw?.ok === true,
-            attemptId,
-            watchdogAttemptConsumed: true,
-            nextSendEligibleAt: Math.max(0, Number(finalized?.nextSendEligibleAt || authorization.nextSendEligibleAt || 0))
-          };
+        ? {
+            ...raw, attemptId,
+            watchdogAttemptConsumed: finalized?.attemptConsumed === true,
+            watchdogAttemptReleased: finalized?.released === true,
+            nextSendEligibleAt
+          }
+        : definitivelyNotClicked
+          ? {
+              ...raw,
+              ok: false,
+              originalOk: raw?.ok === true,
+              attemptId,
+              watchdogAttemptConsumed: finalized?.attemptConsumed === true,
+              watchdogAttemptReleased: finalized?.released === true,
+              nextSendEligibleAt
+            }
+          : {
+              ...raw,
+              ok: true,
+              originalOk: raw?.ok === true,
+              attemptId,
+              watchdogAttemptConsumed: true,
+              watchdogAttemptReleased: false,
+              nextSendEligibleAt: Math.max(nextSendEligibleAt, Number(authorization.nextSendEligibleAt || 0))
+            };
       watchdogAttemptResults.set(attemptId, result);
       trimWatchdogAttemptCache();
       return result;
