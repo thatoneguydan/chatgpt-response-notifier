@@ -177,8 +177,16 @@
     const legacy = nativeQueryAll(root, LEGACY_TURN_SELECTOR);
     const roles = nativeQueryAll(root, SEMANTIC_ROLE_SELECTOR).filter((node) => semanticRole(node));
     hydrateLegacyTurnRoles(root, legacy);
-    if (legacy.length || roles.length) return semanticTurns(legacy, roles).filter((node) => semanticRole(node));
-    return speakerLabelTurns(root).filter((node) => semanticRole(node));
+    if (!legacy.length && !roles.length) return speakerLabelTurns(root).filter((node) => semanticRole(node));
+
+    // Preserve native semantic role nodes when they still exist inside a legacy
+    // wrapper. Add a synthetic legacy wrapper only when it has no native role
+    // descendant, so boundary accounting cannot double-count the same turn.
+    const syntheticLegacy = legacy.filter((turn) => (
+      semanticRole(turn)
+      && !roles.some((roleNode) => turn === roleNode || turn.contains?.(roleNode))
+    ));
+    return Array.from(new Set([...roles, ...syntheticLegacy])).sort(compareDomOrder);
   }
 
   function visibleEnough(node) {

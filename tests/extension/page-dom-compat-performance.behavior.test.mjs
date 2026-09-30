@@ -24,9 +24,11 @@ test('speaker-label fallback caches scans and never recursively rescans from ide
   assert.doesNotMatch(source, /compatibleTurns\(document\)/);
 });
 
-test('semantic boundary compatibility reuses hydrated legacy turns without broad text scans', () => {
+test('semantic boundary compatibility preserves native roles and adds only non-duplicating synthetic wrappers', () => {
   assert.match(source, /function compatibleRoleNodes\(root\)/);
-  assert.match(source, /return semanticTurns\(legacy, roles\)\.filter\(\(node\) => semanticRole\(node\)\)/);
+  assert.match(source, /const syntheticLegacy = legacy\.filter/);
+  assert.match(source, /!roles\.some\(\(roleNode\) => turn === roleNode \|\| turn\.contains\?\.\(roleNode\)\)/);
+  assert.match(source, /new Set\(\[\.\.\.roles, \.\.\.syntheticLegacy\]\)/);
   assert.match(source, /if \(isSemanticRoleSelector\(value\)\) return compatibleRoleNodes\(this\)/);
   assert.doesNotMatch(source, /document\.body\.innerText|querySelectorAll\(['"]\*['"]\)|TreeWalker/);
 });
