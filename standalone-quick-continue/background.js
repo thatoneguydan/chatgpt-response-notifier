@@ -2,6 +2,12 @@
 
 const UPDATE_ALARM = 'quick-continue-managed-update';
 const UPDATE_URL = 'http://127.0.0.1:38473/quick-continue/update';
+const SIMPLE_STATE_KEY = 'quickContinueSimpleWatchdogStates';
+const SIMPLE_ALARM_PREFIX = 'quick-continue-simple-watchdog:';
+const SIMPLE_SET_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_SET';
+const SIMPLE_GET_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_GET';
+const SIMPLE_ACTION_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_ACTION';
+const SIMPLE_STATE_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATE';
 const CONTENT_FILES = [
   'dom-compat.js',
   'prompt-format.js',
@@ -11,9 +17,12 @@ const CONTENT_FILES = [
   'runtime-reset.js',
   'config-editor-style.js',
   'content-script.js',
+  'simple-watchdog.js',
   'hover-edit-script.js',
   'conversation-state.js'
 ];
+
+let simpleQueue = Promise.resolve();
 
 function parseVersion(value) {
   const parts = String(value || '').split('.');
@@ -84,9 +93,241 @@ function ensureUpdateAlarm() {
   } catch {}
 }
 
+function conversationIdFromUrl(rawUrl) {
+  try {
+    const url = new URL(String(rawUrl || ''));
+    const parts = url.pathname.split('/').filter(Boolean);
+    for (let index = parts.length - 2; index >= 0; index -= 1) {
+      if (parts[index] !== 'c') continue;
+      const id = decodeURIComponent(parts[index + 1] || '').trim();
+      if (id) return id;
+    }
+  } catch {}
+  return '';
+}
+
+function simpleAlarmName(tabId) {
+  return `${SIMPLE_ALARM_PREFIX}${tabId}`;
+}
+
+function stateKey(tabId) {
+  return String(tabId);
+}
+
+function normalizeSimpleSettings(value) {
+  const raw = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const timerMinutes = Number(raw.timerMinutes);
+  const attempts = Number(raw.attempts);
+  const stopToRefreshSeconds = Number(raw.stopToRefreshSeconds);
+  const refreshToContinueSeconds = Number(raw.refreshToContinueSeconds);
+  if (!Number.isFinite(timerMinutes) || timerMinutes < 0.1 || timerMinutes > 1440) return null;
+  if (!Number.isInteger(attempts) || attempts < 0 || attempts > 20) return null;
+  if (!Number.isFinite(stopToRefreshSeconds) || stopToRefreshSeconds < 0 || stopToRefreshSeconds > 3600) return null;
+  if (!Number.isFinite(refreshToContinueSeconds) || refreshToContinueSeconds < 0 || refreshToContinueSeconds > 3600) return null;
+  return {
+    timerMinutes,
+    attempts,
+    stopToRefreshSeconds,
+    refreshToContinueSeconds
+  };
+}
+
+async function readSimpleStates() {
+  try {
+    const stored = (await chrome.storage.local.get(SIMPLE_STATE_KEY))?.[SIMPLE_STATE_KEY];
+    return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+  } catch {
+    return {};
+  }
+}
+
+async function writeSimpleStates(states) {
+  await chrome.storage.local.set({ [SIMPLE_STATE_KEY]: states });
+}
+
+function queueSimpleWork(work) {
+  const run = simpleQueue.then(work, work);
+  simpleQueue = run.catch(() => {});
+  return run;
+}
+
+function publicSimpleState(state, extras = {}) {
+  if (!state) return { enabled: false, ...extras };
+  return {
+    enabled: state.enabled === true,
+    phase: String(state.phase || ''),
+    attemptsUsed: Number(state.attemptsUsed || 0),
+    attemptsRemaining: Math.max(0, Number(state.settings?.attempts || 0) - Number(state.attemptsUsed || 0)),
+    nextAt: Number(state.nextAt || 0),
+    ...extras
+  };
+}
+
+async function notifySimpleState(tabId, state, extras = {}) {
+  try {
+    await chrome.tabs.sendMessage(tabId, {
+      type: SIMPLE_STATE_MESSAGE,
+      state: publicSimpleState(state, extras)
+    });
+  } catch {}
+}
+
+async function clearSimpleState(tabId, extras = {}) {
+  const states = await readSimpleStates();
+  delete states[stateKey(tabId)];
+  await writeSimpleStates(states);
+  try { await chrome.alarms.clear(simpleAlarmName(tabId)); } catch {}
+  await notifySimpleState(tabId, null, extras);
+  return { enabled: false, ...extras };
+}
+
+function scheduleSimpleAlarm(state) {
+  if (!state?.enabled || !Number.isInteger(state.tabId)) return;
+  const when = Math.max(Date.now() + 250, Number(state.nextAt || 0));
+  try { chrome.alarms.create(simpleAlarmName(state.tabId), { when }); } catch {}
+}
+
+async function saveAndScheduleSimpleState(state, states = null) {
+  const nextStates = states || await readSimpleStates();
+  nextStates[stateKey(state.tabId)] = state;
+  await writeSimpleStates(nextStates);
+  scheduleSimpleAlarm(state);
+  await notifySimpleState(state.tabId, state);
+  return publicSimpleState(state);
+}
+
+async function setSimpleWatchdog(sender, message) {
+  const tabId = sender?.tab?.id;
+  if (!Number.isInteger(tabId)) return { enabled: false, reason: 'No ChatGPT tab identity.' };
+
+  if (message?.enabled !== true) return clearSimpleState(tabId);
+
+  const conversationId = String(message?.conversationId || '').trim();
+  if (!conversationId) return { enabled: false, reason: 'Open a saved chat before enabling Simple.' };
+  if (conversationIdFromUrl(sender?.tab?.url) !== conversationId) {
+    return { enabled: false, reason: 'Chat changed before Simple could start.' };
+  }
+
+  const settings = normalizeSimpleSettings(message?.settings);
+  if (!settings) return { enabled: false, reason: 'Simple watchdog JSON is invalid.' };
+  if (settings.attempts === 0) return { enabled: false, reason: 'Simple watchdog attempts are set to 0.' };
+
+  const state = {
+    enabled: true,
+    tabId,
+    conversationId,
+    phase: 'countdown',
+    attemptsUsed: 0,
+    nextAt: Date.now() + (settings.timerMinutes * 60 * 1000),
+    settings
+  };
+  return saveAndScheduleSimpleState(state);
+}
+
+async function getSimpleWatchdog(sender, message) {
+  const tabId = sender?.tab?.id;
+  if (!Number.isInteger(tabId)) return { enabled: false };
+  const states = await readSimpleStates();
+  const state = states[stateKey(tabId)];
+  if (!state?.enabled) return { enabled: false };
+  const conversationId = String(message?.conversationId || '').trim();
+  if (!conversationId || state.conversationId !== conversationId || conversationIdFromUrl(sender?.tab?.url) !== conversationId) {
+    return clearSimpleState(tabId, { reason: 'chat-changed' });
+  }
+  return publicSimpleState(state);
+}
+
+async function tabForSimpleState(state) {
+  let tab = null;
+  try { tab = await chrome.tabs.get(state.tabId); } catch {}
+  if (!tab || conversationIdFromUrl(tab.url) !== state.conversationId) return null;
+  return tab;
+}
+
+async function handleSimpleAlarm(tabId) {
+  const states = await readSimpleStates();
+  const state = states[stateKey(tabId)];
+  if (!state?.enabled) return;
+  if (!await tabForSimpleState(state)) {
+    await clearSimpleState(tabId, { reason: 'chat-unavailable' });
+    return;
+  }
+
+  const now = Date.now();
+  if (Number(state.nextAt || 0) > now + 500) {
+    scheduleSimpleAlarm(state);
+    return;
+  }
+
+  if (state.phase === 'countdown') {
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: SIMPLE_ACTION_MESSAGE, action: 'stop' });
+    } catch {}
+    state.phase = 'stop-wait';
+    state.nextAt = Date.now() + (state.settings.stopToRefreshSeconds * 1000);
+    await saveAndScheduleSimpleState(state, states);
+    return;
+  }
+
+  if (state.phase === 'stop-wait') {
+    try { await chrome.tabs.reload(tabId); } catch {}
+    state.phase = 'refresh-wait';
+    state.nextAt = Date.now() + (state.settings.refreshToContinueSeconds * 1000);
+    await saveAndScheduleSimpleState(state, states);
+    return;
+  }
+
+  if (state.phase === 'refresh-wait') {
+    try {
+      await chrome.tabs.sendMessage(tabId, { type: SIMPLE_ACTION_MESSAGE, action: 'send-continue' });
+    } catch {}
+    state.attemptsUsed = Number(state.attemptsUsed || 0) + 1;
+    if (state.attemptsUsed >= state.settings.attempts) {
+      await clearSimpleState(tabId, { exhausted: true });
+      return;
+    }
+    state.phase = 'countdown';
+    state.nextAt = Date.now() + (state.settings.timerMinutes * 60 * 1000);
+    await saveAndScheduleSimpleState(state, states);
+    return;
+  }
+
+  await clearSimpleState(tabId, { reason: 'invalid-phase' });
+}
+
+async function restoreSimpleAlarms() {
+  const states = await readSimpleStates();
+  for (const state of Object.values(states)) {
+    if (!state?.enabled || !Number.isInteger(state?.tabId)) continue;
+    scheduleSimpleAlarm(state);
+  }
+}
+
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type !== SIMPLE_SET_MESSAGE && message?.type !== SIMPLE_GET_MESSAGE) return false;
+  const work = message.type === SIMPLE_SET_MESSAGE
+    ? () => setSimpleWatchdog(sender, message)
+    : () => getSimpleWatchdog(sender, message);
+  queueSimpleWork(work)
+    .then((result) => sendResponse(result))
+    .catch(() => sendResponse({ enabled: false, reason: 'Simple watchdog background failure.' }));
+  return true;
+});
+
 chrome.alarms.onAlarm.addListener((alarm) => {
-  if (alarm?.name !== UPDATE_ALARM) return;
-  checkManagedUpdate().catch(() => {});
+  if (alarm?.name === UPDATE_ALARM) {
+    checkManagedUpdate().catch(() => {});
+    return;
+  }
+  if (!String(alarm?.name || '').startsWith(SIMPLE_ALARM_PREFIX)) return;
+  const tabId = Number.parseInt(String(alarm.name).slice(SIMPLE_ALARM_PREFIX.length), 10);
+  if (!Number.isInteger(tabId)) return;
+  queueSimpleWork(() => handleSimpleAlarm(tabId)).catch(() => {});
+});
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (!Number.isInteger(tabId)) return;
+  queueSimpleWork(() => clearSimpleState(tabId, { reason: 'tab-closed' })).catch(() => {});
 });
 
 chrome.runtime.onStartup.addListener(() => {
@@ -94,6 +335,7 @@ chrome.runtime.onStartup.addListener(() => {
   // Reinjecting here used to dispose and rebuild the live toolbar during startup.
   ensureUpdateAlarm();
   checkManagedUpdate().catch(() => {});
+  queueSimpleWork(restoreSimpleAlarms).catch(() => {});
 });
 
 chrome.runtime.onInstalled.addListener(() => {
@@ -103,6 +345,7 @@ chrome.runtime.onInstalled.addListener(() => {
   ensureUpdateAlarm();
   injectCurrentRuntimeIntoOpenTabs().catch(() => {});
   checkManagedUpdate().catch(() => {});
+  queueSimpleWork(restoreSimpleAlarms).catch(() => {});
 });
 
 // MV3 service workers are routinely stopped and restarted while Chrome remains
@@ -110,3 +353,4 @@ chrome.runtime.onInstalled.addListener(() => {
 // ownership: alarms/update checks are safe, content-script reinjection is not.
 ensureUpdateAlarm();
 checkManagedUpdate().catch(() => {});
+queueSimpleWork(restoreSimpleAlarms).catch(() => {});
