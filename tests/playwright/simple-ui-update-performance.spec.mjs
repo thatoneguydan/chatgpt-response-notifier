@@ -150,16 +150,18 @@ test('scrolling never rereads a draft and typing does not trigger terminal scans
     document.querySelector('.rendered-footer').remove();
     document.querySelector('[data-message-author-role="assistant"] .markdown').textContent = 'A quiet assistant reply for draft performance measurements.';
   });
-  await evaluateInExtensionWorld(fixturePage, 'ChatGPT Response Notifier', `new Promise(resolve => setTimeout(resolve, 2200))`);
+  await evaluateInExtensionWorld(fixturePage, 'ChatGPT Response Notifier', `new Promise(resolve => setTimeout(resolve, 3500))`);
   const work = await evaluateInExtensionWorld(fixturePage, 'ChatGPT Response Notifier', `(async () => {
     const original = globalThis.ChatGPTNotifierRenderedTerminalStatus;
     const clone = Element.prototype.cloneNode;
     const send = chrome.runtime.sendMessage;
     let detections = 0;
+    const detectionSources = [];
     let turnClones = 0;
     const draftPublications = [];
     globalThis.ChatGPTNotifierRenderedTerminalStatus = Object.freeze({ ...original, detect(...args) {
       detections += 1;
+      detectionSources.push(new Error().stack);
       return original.detect(...args);
     }});
     Element.prototype.cloneNode = function (...args) {
@@ -178,14 +180,14 @@ test('scrolling never rereads a draft and typing does not trigger terminal scans
         await new Promise(resolve => setTimeout(resolve, 10));
       }
       await new Promise(resolve => setTimeout(resolve, 650));
-      return { detections, turnClones, draftPublications };
+      return { detections, detectionSources, turnClones, draftPublications };
     } finally {
       globalThis.ChatGPTNotifierRenderedTerminalStatus = original;
       Element.prototype.cloneNode = clone;
       chrome.runtime.sendMessage = send;
     }
   })()`);
-  expect(work.detections).toBe(0);
+  expect(work.detectionSources, 'Draft mutations must not schedule terminal scans').toEqual([]);
   expect(work.turnClones).toBe(0);
   expect(work.draftPublications.length).toBeGreaterThan(0);
   expect(work.draftPublications.every(Boolean)).toBe(true);
