@@ -56,3 +56,31 @@ test('mutation-driven live readers use quiet debounces with hard ceilings', () =
     assert.match(source, /terminalMaxTimer === null/);
   }
 });
+
+test('extension-owned countdown mutations are filtered before expensive live observers', () => {
+  const filter = readText('extension/owned-dom-mutation-filter.js');
+  const manifest = JSON.parse(readText('extension/manifest.json'));
+  const compatBackground = readText('extension/page-runtime-compat-background.js');
+  const postUpdate = readText('extension/terminal-stop-post-update-recovery-background.js');
+
+  assert.match(filter, /RUNTIME_VERSION = 2/);
+  assert.match(filter, /#chatgpt-quick-continue-toolbar/);
+  assert.match(filter, /class NotifierFilteredMutationObserver/);
+  assert.match(filter, /if \(filtered\.length\) callback\(filtered, facade\)/);
+  assert.match(filter, /PASSTHROUGH_ATTRIBUTES = new Set\(\['data-watchdog-settings'\]\)/);
+  assert.match(filter, /globalThis\.MutationObserver = NotifierFilteredMutationObserver/);
+
+  const documentStartReaders = manifest.content_scripts[0]?.js || [];
+  assert.equal(documentStartReaders[0], 'owned-dom-mutation-filter.js');
+  const watchdogReaders = manifest.content_scripts.find((entry) => entry.js?.includes('watchdog-page-authority-v3.js'))?.js || [];
+  assert.equal(watchdogReaders[0], 'owned-dom-mutation-filter.js');
+
+  assert.match(compatBackground, /OWNED_DOM_FILTER_FILE = 'owned-dom-mutation-filter\.js'/);
+  assert.match(compatBackground, /files: \[\.\.\.prefix, \.\.\.files\]/);
+
+  const rebindIndex = postUpdate.indexOf("'page-runtime-rebind.js'");
+  const filterIndex = postUpdate.indexOf("'owned-dom-mutation-filter.js'");
+  const monitorIndex = postUpdate.indexOf("'monitor-script.js'");
+  assert.ok(rebindIndex >= 0 && filterIndex > rebindIndex && monitorIndex > filterIndex,
+    'hot-tab reinjection must dispose old runtimes, install the mutation filter, then recreate live readers');
+});
