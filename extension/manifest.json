@@ -49,6 +49,8 @@
         "https://chatgpt.com/*"
       ],
       "js": [
+        "page-dom-compat.js",
+        "composer-typing-performance-guard.js",
         "watchdog-page-authority-v3.js"
       ],
       "run_at": "document_start"
