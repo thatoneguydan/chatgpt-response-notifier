@@ -13,7 +13,10 @@
   const PENDING_LEASE_MS = 30_000;
   const TITLE_SETTLE_ATTEMPTS = 5;
   const TITLE_SETTLE_DELAY_MS = 250;
+  const CLAIM_DIAGNOSTIC_COALESCE_MS = 5 * 60 * 1000;
+  const MAX_DIAGNOSTIC_COALESCE_KEYS = 256;
   let databasePromise = null;
+  const recentClaimDiagnostics = new Map();
 
   const originalClaimTurn = coordinator.claimTurn.bind(coordinator);
 
@@ -22,7 +25,41 @@
     return text ? text.slice(-8) : '';
   }
 
+  function diagnosticCoalesceKey(status, snapshot = {}, owner = {}, reason = '') {
+    const normalizedStatus = String(status || '');
+    const normalizedReason = String(reason || '');
+    const noisy = (
+      (normalizedStatus === 'claim-observed' && normalizedReason === 'logical-turn-observed')
+      || (normalizedStatus === 'claim-suppressed' && normalizedReason === 'already-delivered-logical-turn')
+    );
+    if (!noisy) return '';
+    return [
+      normalizedStatus,
+      normalizedReason,
+      String(snapshot?.conversationId || ''),
+      String(snapshot?.requestId || owner?.requestId || ''),
+      String(snapshot?.promptKey || ''),
+      String(snapshot?.assistantKey || ''),
+      String(snapshot?.revision || '')
+    ].join('|');
+  }
+
+  function shouldEmitClaimDiagnostic(status, snapshot = {}, owner = {}, reason = '', now = Date.now()) {
+    const key = diagnosticCoalesceKey(status, snapshot, owner, reason);
+    if (!key) return true;
+    const previous = Number(recentClaimDiagnostics.get(key) || 0);
+    if (previous > 0 && now - previous < CLAIM_DIAGNOSTIC_COALESCE_MS) return false;
+    recentClaimDiagnostics.set(key, now);
+    while (recentClaimDiagnostics.size > MAX_DIAGNOSTIC_COALESCE_KEYS) {
+      const first = recentClaimDiagnostics.keys().next().value;
+      if (first === undefined) break;
+      recentClaimDiagnostics.delete(first);
+    }
+    return true;
+  }
+
   function emitClaimDiagnostic(status, snapshot = {}, owner = {}, reason = '') {
+    if (!shouldEmitClaimDiagnostic(status, snapshot, owner, reason)) return;
     const diagnostic = {
       source: 'delivery-identity',
       status: String(status || '').slice(0, 64),
@@ -47,9 +84,11 @@
   function requestDeliveryKey(snapshot, owner = {}) {
     const conversationId = String(snapshot?.conversationId || '');
     const requestId = String(snapshot?.requestId || owner?.requestId || '');
-    const documentId = String(owner?.documentId || snapshot?.documentId || '');
-    if (!conversationId || !requestId || !documentId) return '';
-    return `request|${conversationId}|${documentId}|${requestId}`;
+    if (!conversationId || !requestId) return '';
+    // Chrome document identity can change across extension/page runtime replacement
+    // while the underlying ChatGPT network request remains the same. Request-level
+    // delivery ownership must therefore survive document remounts.
+    return `request|${conversationId}|${requestId}`;
   }
 
   function legacyTurnDeliveryKey(snapshot) {
@@ -128,24 +167,42 @@
     return existingAt > 0 && now - existingAt <= PENDING_LEASE_MS;
   }
 
+  function matchingRequestRecord(records, snapshot, owner, now) {
+    const conversationId = String(snapshot?.conversationId || '');
+    const requestId = String(snapshot?.requestId || owner?.requestId || '');
+    if (!conversationId || !requestId) return null;
+    return records.find((record) => (
+      String(record?.conversationId || '') === conversationId
+      && String(record?.requestId || '') === requestId
+      && recordStillBlocksDelivery(record, now)
+    )) || null;
+  }
+
   async function reserveDelivery(deliveryKey, snapshot, owner) {
     const database = await openDatabase();
     const now = Date.now();
     return await new Promise((resolve, reject) => {
       const transaction = database.transaction(STORE_NAME, 'readwrite');
       const store = transaction.objectStore(STORE_NAME);
-      const request = store.get(deliveryKey);
+      const request = store.getAll();
       let result = null;
 
       request.onsuccess = () => {
-        const existing = request.result || null;
-        const existingAt = Number(existing?.updatedAt || existing?.createdAt || 0);
-        const pendingIsStale = existing?.state === 'pending' && (existingAt <= 0 || now - existingAt > PENDING_LEASE_MS);
-        if (existing && !pendingIsStale) {
-          result = { reserved: false, reason: existing.state === 'committed' ? 'already-delivered-logical-turn' : 'logical-turn-in-flight', record: existing };
+        const records = Array.isArray(request.result) ? request.result : [];
+        const existing = records.find((record) => String(record?.deliveryKey || '') === deliveryKey) || null;
+        const requestOwned = matchingRequestRecord(records, snapshot, owner, now);
+        const blocker = requestOwned || (recordStillBlocksDelivery(existing, now) ? existing : null);
+        if (blocker) {
+          result = {
+            reserved: false,
+            reason: blocker.state === 'committed' ? 'already-delivered-logical-turn' : 'logical-turn-in-flight',
+            record: blocker
+          };
           return;
         }
 
+        const existingAt = Number(existing?.updatedAt || existing?.createdAt || 0);
+        const pendingIsStale = existing?.state === 'pending' && (existingAt <= 0 || now - existingAt > PENDING_LEASE_MS);
         const record = {
           deliveryKey,
           conversationId: String(snapshot?.conversationId || ''),
@@ -289,7 +346,7 @@
 
     const reservation = await reserveDelivery(deliveryKey, claimSnapshot, settledOwner);
     if (!reservation.reserved) {
-      emitClaimDiagnostic('claim-suppressed', snapshot, settledOwner, reservation.reason);
+      emitClaimDiagnostic('claim-suppressed', claimSnapshot, settledOwner, reservation.reason);
       return { claimed: false, reason: reservation.reason, record: null };
     }
 
@@ -321,7 +378,7 @@
   });
 
   globalThis.__chatgptNotifierDeliveryDedupeHook = Object.freeze({
-    version: 4,
+    version: 5,
     requestDeliveryKey,
     legacyTurnDeliveryKey,
     logicalDeliveryKey,
