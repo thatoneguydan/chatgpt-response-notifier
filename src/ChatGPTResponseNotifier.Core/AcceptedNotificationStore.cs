@@ -23,6 +23,19 @@ public sealed class AcceptedNotificationStore
         }
     }
 
+    public bool ContainsRecent(string notificationId, TimeSpan maxAge)
+    {
+        if (string.IsNullOrWhiteSpace(notificationId)) return false;
+        if (maxAge < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(maxAge));
+        var cutoff = DateTimeOffset.UtcNow - maxAge;
+        lock (_gate)
+        {
+            return LoadUnsafe().Any(item =>
+                string.Equals(item.Id, notificationId, StringComparison.Ordinal)
+                && item.AcceptedAt >= cutoff);
+        }
+    }
+
     public void Remember(string notificationId)
     {
         if (string.IsNullOrWhiteSpace(notificationId)) throw new ArgumentException("Notification ID is required.", nameof(notificationId));
