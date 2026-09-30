@@ -29,8 +29,8 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.permissions].sort(), ['alarms', 'scripting', 'storage', 'tabs'].sort());
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
-  assert.deepEqual(manifest.content_scripts[0].js, ['dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'send-transaction.js', 'runtime-reset.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.27');
+  assert.deepEqual(manifest.content_scripts[0].js, ['dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'send-transaction.js', 'runtime-reset.js', 'config-editor-style.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
+  assert.equal(manifest.version, '1.2.28');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -47,6 +47,7 @@ test('managed updater talks only to loopback, reloads itself only for a newer in
   assert.match(backgroundSource, /chrome\.scripting\.executeScript/);
   assert.match(backgroundSource, /'dom-compat\.js'/);
   assert.match(backgroundSource, /'runtime-reset\.js'/);
+  assert.match(backgroundSource, /'config-editor-style\.js'/);
   assert.match(backgroundSource, /'composer-text\.js'/);
   assert.match(backgroundSource, /'send-transaction\.js'/);
   assert.match(backgroundSource, /'conversation-state\.js'/);
