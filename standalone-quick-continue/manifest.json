@@ -17,9 +17,6 @@
   "background": {
     "service_worker": "background.js"
   },
-  "action": {
-    "default_title": "ChatGPT Quick Continue"
-  },
   "content_scripts": [
     {
       "matches": [
