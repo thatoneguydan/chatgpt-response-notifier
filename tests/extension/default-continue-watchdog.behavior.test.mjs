@@ -75,8 +75,8 @@ function prime(store, record) {
 
 test('work status defaults to continue unless the code is an explicit stop', () => {
   const policy = loadPolicy();
-  assert.equal(policy.runtimeVersion, 11);
-  assert.equal(policy.monitorPolicyVersion, 8);
+  assert.equal(policy.runtimeVersion, 12);
+  assert.equal(policy.monitorPolicyVersion, 9);
 
   for (const code of ['INCOMPLETE_LIMIT', 'INCOMPLETE_TOOL_FAILURE', 'INCOMPLETE_CONTINUE', 'INCOMPLETE_HANDOFF']) {
     assert.equal(policy.isAutoContinueStatusCode(code), true, code);

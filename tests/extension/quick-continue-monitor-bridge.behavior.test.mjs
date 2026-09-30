@@ -15,7 +15,7 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   const pageAuthority = readText('extension/watchdog-page-authority-v3.js');
   const backgroundAuthority = readText('extension/watchdog-authority-v3-background.js');
 
-  assert.equal(manifest.version, '0.9.96');
+  assert.equal(manifest.version, '0.9.97');
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-monitor-bridge.js')));
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-fallback.js')));
   assert.ok(!manifest.content_scripts.some((entry) => entry.js?.includes('quick-continue-status-stabilizer.js')));
@@ -28,8 +28,12 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   assert.match(bootstrap, /importScripts\('watchdog-authority-v3-background\.js'\)/);
   assert.match(background, /BRIDGE_FILE = 'quick-continue-monitor-bridge\.js'/);
   assert.match(background, /STATUS_FILE = 'quick-continue-status-owner-v6\.js'/);
-  assert.match(background, /BRIDGE_RUNTIME_VERSION = 3/);
+  assert.match(background, /BRIDGE_RUNTIME_VERSION = 4/);
   assert.match(background, /STATUS_RUNTIME_VERSION = 8/);
+  const bridgeRuntimeVersion = Number(bridge.match(/const RUNTIME_VERSION = (\d+)/)?.[1] || 0);
+  const requiredBridgeRuntimeVersion = Number(background.match(/const BRIDGE_RUNTIME_VERSION = (\d+)/)?.[1] || 0);
+  assert.ok(bridgeRuntimeVersion > 0);
+  assert.equal(requiredBridgeRuntimeVersion, bridgeRuntimeVersion, 'hot-tab bootstrap must require the exact current Quick Continue bridge generation');
   assert.match(background, /runtimeCurrent\(tabId, 'CHATGPT_NOTIFIER_QUICK_STATUS_PING', STATUS_RUNTIME_VERSION\)/);
   assert.match(background, /files:\s*\[BRIDGE_FILE\]/);
   assert.match(background, /files:\s*\[STATUS_FILE\]/);

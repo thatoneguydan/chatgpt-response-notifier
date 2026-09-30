@@ -3,7 +3,7 @@
 (() => {
   if (globalThis.__chatgptNotifierRecoveryLiveFix) return;
 
-  const RUNTIME_VERSION = 5;
+  const RUNTIME_VERSION = 6;
   const CONTENT_SCRIPT = 'recovery-live-fix-content.js';
   const INITIAL_CODED_NOTIFICATION_REASONS = new Set(['coded-completion', 'coded-completion-status-observer']);
   const previousSendMessage = chrome.tabs.sendMessage.bind(chrome.tabs);

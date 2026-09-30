@@ -283,7 +283,7 @@ function dueCadencePatch() {
 
 const harness = loadHarness();
 await tick(6);
-assert.equal(harness.cadence.version, 4, 'cadence owner v4 must be loaded');
+assert.equal(harness.cadence.version, 5, 'cadence owner v5 must be loaded');
 
 // 1. A stale alarm cannot authorize a click before the persisted deadline.
 now = 10_000_000;
@@ -350,7 +350,6 @@ now = 40_000_000;
     conversationId: 'transport-loss', promptKey: target.promptKey, documentId: 'document-loss'
   }, target.sender);
   assert.equal(first.granted, true, 'first command reserves the interval');
-  // Simulate the page click happening and the reply port disappearing before finalization.
   const clicks = 1;
   const replay = await harness.cadence.authorizePageDispatch({
     conversationId: 'transport-loss', promptKey: target.promptKey, documentId: 'document-loss'

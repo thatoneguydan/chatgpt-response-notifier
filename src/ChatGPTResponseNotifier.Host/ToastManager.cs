@@ -16,6 +16,7 @@ internal sealed class ToastManager
     private const double MarginBottom = 16;
     private const double Gap = 10;
     private const string DeliveryTombstonePrefix = "delivery:";
+    private static readonly TimeSpan SameCompletionDedupeWindow = TimeSpan.FromSeconds(30);
 
     private readonly NotificationStateStore _store;
     private readonly AcceptedNotificationStore _acceptedStore;
@@ -63,7 +64,8 @@ internal sealed class ToastManager
         if (deliveryKey.Length > 0)
         {
             var sameResponse = _windows.FirstOrDefault(window =>
-                string.Equals(window.Record.DeliveryKey.Trim(), deliveryKey, StringComparison.Ordinal));
+                string.Equals(window.Record.DeliveryKey.Trim(), deliveryKey, StringComparison.Ordinal)
+                && SameCompletion(window.Record.CompletedAt, record.CompletedAt));
             if (sameResponse is not null)
             {
                 RememberAcceptance(record);
@@ -71,7 +73,7 @@ internal sealed class ToastManager
             }
 
             var deliveryTombstone = DeliveryTombstone(deliveryKey);
-            if (_acceptedStore.Contains(deliveryTombstone))
+            if (_acceptedStore.ContainsRecent(deliveryTombstone, SameCompletionDedupeWindow))
             {
                 _acceptedStore.Remember(record.Id);
                 return new ToastShowResult(true, false, "response-already-accepted", "not-applicable");
@@ -139,6 +141,11 @@ internal sealed class ToastManager
     {
         var normalized = (deliveryKey ?? string.Empty).Trim();
         return normalized.Length == 0 ? null : DeliveryTombstonePrefix + normalized;
+    }
+
+    private static bool SameCompletion(DateTimeOffset left, DateTimeOffset right)
+    {
+        return (left - right).Duration() <= SameCompletionDedupeWindow;
     }
 
     private void RememberAcceptance(NotificationRecord record)

@@ -8,7 +8,8 @@
   const USER_TURN_WAIT_MS = 8000;
   const ARM_RETRY_DELAY_MS = 200;
   const ARM_RETRY_COUNT = 15;
-  const TERMINAL_DEBOUNCE_MS = 80;
+  const TERMINAL_DEBOUNCE_MS = 250;
+  const TERMINAL_MAX_INTERVAL_MS = 1500;
   const TERMINAL_RETRY_MS = 250;
   const TERMINAL_RETRY_COUNT = 20;
   const DEFINITIVE_STOP_CODES = new Set([
@@ -28,6 +29,7 @@
   const abortController = new AbortController();
   let documentObserver = null;
   let terminalTimer = null;
+  let terminalMaxTimer = null;
   let terminalRetryTimer = null;
   let terminalRetryFingerprint = '';
   let terminalRetryCount = 0;
@@ -349,12 +351,26 @@
     scheduleTrustedSubmissionArm('trusted-form-submit-v3');
   }
 
-  function scheduleTerminalInspection() {
-    if (terminalTimer !== null) return;
-    terminalTimer = setTimeout(() => {
+  function clearTerminalTimers() {
+    if (terminalTimer !== null) {
+      clearTimeout(terminalTimer);
       terminalTimer = null;
-      forceDefinitiveTerminalStop().catch(() => false);
-    }, TERMINAL_DEBOUNCE_MS);
+    }
+    if (terminalMaxTimer !== null) {
+      clearTimeout(terminalMaxTimer);
+      terminalMaxTimer = null;
+    }
+  }
+
+  function runTerminalInspection() {
+    clearTerminalTimers();
+    forceDefinitiveTerminalStop().catch(() => false);
+  }
+
+  function scheduleTerminalInspection() {
+    if (terminalTimer !== null) clearTimeout(terminalTimer);
+    terminalTimer = setTimeout(runTerminalInspection, TERMINAL_DEBOUNCE_MS);
+    if (terminalMaxTimer === null) terminalMaxTimer = setTimeout(runTerminalInspection, TERMINAL_MAX_INTERVAL_MS);
   }
 
   function handleRuntimeMessage(message, _sender, sendResponse) {
@@ -384,7 +400,7 @@
     dispose() {
       try { abortController.abort(); } catch {}
       try { documentObserver?.disconnect(); } catch {}
-      try { if (terminalTimer !== null) clearTimeout(terminalTimer); } catch {}
+      try { clearTerminalTimers(); } catch {}
       clearTerminalRetry();
       try { chrome.runtime.onMessage.removeListener(handleRuntimeMessage); } catch {}
       if (globalThis[RUNTIME_KEY] === runtime) delete globalThis[RUNTIME_KEY];

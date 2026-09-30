@@ -173,12 +173,14 @@ test('build START scope is exact, assistant-only, fresh-request-bound and termin
 });
 
 
-test('monitored chats use a 30-minute local code watchdog with a three-send cap and incomplete-code reset', () => {
+test('monitored chats default to a 30-minute local code watchdog with a three-send cap and support dynamic settings', () => {
   const status = text('extension/status-script.js');
   const monitor = text('extension/monitor-background.js');
   const policy = text('extension/status-policy.js');
-  assert.match(monitor, /CODE_WATCHDOG_DELAY_MS = 30 \* 60_000/);
-  assert.match(monitor, /CODE_WATCHDOG_MAX_SENDS = 3/);
+  assert.match(monitor, /DEFAULT_CODE_WATCHDOG_DELAY_MS = 30 \* 60_000/);
+  assert.match(monitor, /DEFAULT_CODE_WATCHDOG_MAX_SENDS = 3/);
+  assert.match(monitor, /function codeWatchdogDelayMs\(\)/);
+  assert.match(monitor, /function codeWatchdogMaxSends\(\)/);
   assert.match(monitor, /chatgpt-notifier-code-watchdog:/);
   assert.match(monitor, /chrome\.alarms\.create\(codeWatchdogAlarmName/);
   assert.match(monitor, /CHATGPT_WATCHDOG_CONTINUE_COMMAND/);
@@ -226,7 +228,7 @@ test('in-page auto-continue controls reset allowance and explicitly arm user-tri
   assert.match(monitor, /function codeWatchdogBudgetReset/);
   assert.match(monitor, /timerMissing/);
   assert.match(monitor, /sendCount: 0/);
-  assert.match(monitor, /deadlineAt: resetAt \+ CODE_WATCHDOG_DELAY_MS/);
+  assert.match(monitor, /deadlineAt: resetAt \+ codeWatchdogDelayMs\(\)/);
   assert.match(monitor, /RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER/);
   assert.match(monitor, /ARM_CODE_WATCHDOG_FOR_SENDER/);
   assert.match(monitor, /armCodeWatchdogForTarget/);
@@ -634,7 +636,8 @@ test('notifier-owned Quick Continue light mirrors popup automation states withou
   assert.match(attachment, /current\.automationEnabled === true[\s\S]*next\.automationEnabled === true/);
   assert.match(attachment, /function applyAutomationOverview/);
   assert.match(attachment, /return applyAutomationOverview\(overview\)/);
-  assert.match(monitor, /codeWatchdogMaxSends: CODE_WATCHDOG_MAX_SENDS/);
+  assert.match(monitor, /codeWatchdogMaxSends: codeWatchdogMaxSends\(\)/);
+  assert.match(monitor, /codeWatchdogDelayMs: codeWatchdogDelayMs\(\)/);
   assert.match(monitor, /function codeWatchdogOverviewSignature\(record\)/);
   assert.match(monitor, /const codeWatchdogMutationQueues = new Map\(\)/);
   assert.match(monitor, /function queueCodeWatchdogMutation\(conversationIdValue, operation\)/);
@@ -679,7 +682,7 @@ test('canonical project continuation prompts are fresh enrollment evidence witho
   const provisionalMigrationStart = monitorWorker.indexOf('async function migrateProvisionalIfReady');
   const provisionalMigrationEnd = monitorWorker.indexOf('async function handleSnapshot', provisionalMigrationStart);
   const provisionalMigration = monitorWorker.slice(provisionalMigrationStart, provisionalMigrationEnd);
-  assert.match(provisionalMigration, /if \(Number\(provisional\.armedAt \|\| 0\) <= 0\) \{\s*return null;/);
+  assert.match(provisionalMigration, /if \(!provisional \|\| Number\(provisional\.armedAt \|\| 0\) <= 0\) return null;/);
   assert.doesNotMatch(provisionalMigration, /deleteRecord\(PROFILE_STORE, provisionalKey\(tabId\)\)[\s\S]{0,120}return null/);
 });
 

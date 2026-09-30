@@ -1,4 +1,11 @@
-# ChatGPT Response Notifier 0.9.96
+# ChatGPT Response Notifier 0.9.97
+
+- Stops ordinary trusted clicks and keystrokes on ChatGPT from dismissing every native completion notification for the current conversation. Live Glass helper evidence from 0.9.96 showed `toast-dismiss-conversation-applied` firing repeatedly during normal interaction, which could erase a correctly presented toast before it was seen.
+- Removes the rendered-terminal detector's arbitrary four-ancestor limit. A visible final GitHub status can now be found through arbitrarily deep presentation wrappers while still stopping at the first ancestor containing a different user or assistant turn.
+- Adds bounded, content-free live terminal proof diagnostics that record whether a real rendered/stream terminal message reached the worker and whether the persisted watchdog actually became stopped. Prompt text, response text, titles, and conversation URLs are not recorded.
+- Adds deterministic and Chromium regressions for deep same-turn footer nesting and for preventing generic page interaction from dismissing native notifications. Installed normal-profile behavior on Glass remains the acceptance authority for this regression.
+
+## Previous: 0.9.96
 
 - Moves both managed update manifests from the branch-based raw-content CDN to GitHub's repository-contents API using the raw media type, so the long-lived Windows helper reads the canonical current branch state rather than a stale raw edge.
 - Performs each manifest read through a fresh one-request connection with cache-busting, no-cache/no-store, `Connection: close`, and an explicit GitHub API version. A helper process can no longer stay pinned to an old feed view across releases.

@@ -14,6 +14,24 @@
   ]);
   const ALLOWED_TRANSPORTS = new Set(['fetch', 'xhr']);
 
+  function currentTerminalSnapshot() {
+    let raw = null;
+    try { raw = globalThis.__chatgptNotifierMonitorRuntime?.snapshot?.() || null; } catch {}
+    if (!raw) return null;
+    return {
+      conversationId: String(raw.conversationId || ''),
+      documentId: String(raw.documentId || ''),
+      promptKey: String(raw.promptKey || ''),
+      promptRevision: String(raw.promptRevision || ''),
+      assistantKey: String(raw.assistantKey || ''),
+      assistantRevision: String(raw.assistantRevision || ''),
+      requestId: String(raw.requestId || ''),
+      requestPhase: String(raw.requestPhase || ''),
+      requestStartedAt: Math.max(0, Number(raw.requestStartedAt || 0)),
+      monitorRuntimeVersion: Math.max(0, Number(raw.monitorRuntimeVersion || 0))
+    };
+  }
+
   function onMessage(event) {
     if (event?.source !== window || event?.origin !== location.origin) return;
     const data = event?.data;
@@ -26,12 +44,15 @@
     if (kind === 'terminal-status') {
       const statusCode = String(data.statusCode || '');
       if (!globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode)) return;
+      const snapshot = currentTerminalSnapshot();
+      const message = {
+        type: 'CHATGPT_RESPONSE_STREAM_TERMINAL_STATUS',
+        statusCode,
+        transport
+      };
+      if (snapshot) message.snapshot = snapshot;
       try {
-        chrome.runtime.sendMessage({
-          type: 'CHATGPT_RESPONSE_STREAM_TERMINAL_STATUS',
-          statusCode,
-          transport
-        }).catch(() => {});
+        chrome.runtime.sendMessage(message).catch(() => {});
       } catch {}
       return;
     }

@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 4;
   try { globalThis.__chatgptNotifierPageDomCompat?.dispose?.(); } catch {}
 
   if (typeof Document === 'undefined' || typeof Element === 'undefined') return;
@@ -13,6 +13,21 @@
     '[data-turn="user"]',
     '[data-turn="assistant"]'
   ].join(',');
+  const NORMALIZED_SEMANTIC_ROLE_SELECTOR = SEMANTIC_ROLE_SELECTOR.replace(/\s*,\s*/g, ',');
+  const SPEAKER_LABEL_SELECTOR = [
+    'h1.sr-only', 'h2.sr-only', 'h3.sr-only', 'h4.sr-only', 'h5.sr-only', 'h6.sr-only',
+    'h1.visually-hidden', 'h2.visually-hidden', 'h3.visually-hidden', 'h4.visually-hidden', 'h5.visually-hidden', 'h6.visually-hidden',
+    'h1.cdk-visually-hidden', 'h2.cdk-visually-hidden', 'h3.cdk-visually-hidden', 'h4.cdk-visually-hidden', 'h5.cdk-visually-hidden', 'h6.cdk-visually-hidden'
+  ].join(',');
+  const TURN_CONTAINER_SELECTOR = [
+    LEGACY_TURN_SELECTOR,
+    '[data-turn-id]',
+    '[data-message-id]',
+    '[data-turn]',
+    'article',
+    'section'
+  ].join(',');
+  const SPEAKER_CACHE_MS = 500;
   const LEGACY_COMPOSER_SELECTORS = new Set([
     '#prompt-textarea',
     'textarea[data-testid="prompt-textarea"]',
@@ -32,6 +47,10 @@
   const nativeElementQuerySelectorAll = Element.prototype.querySelectorAll;
   const nativeClosest = Element.prototype.closest;
   const nativeGetAttribute = Element.prototype.getAttribute;
+  const speakerRoles = new WeakMap();
+  const speakerTurnCache = new WeakMap();
+  const syntheticTurnIds = new WeakMap();
+  let nextSyntheticTurnId = 1;
 
   function nativeQueryAll(root, selector) {
     try {
@@ -49,7 +68,24 @@
     try { return nativeClosest.call(node, selector); } catch { return null; }
   }
 
+  function normalizedSelector(value) {
+    return String(value || '').replace(/\s*,\s*/g, ',');
+  }
+
+  function isSemanticRoleSelector(value) {
+    return normalizedSelector(value) === NORMALIZED_SEMANTIC_ROLE_SELECTOR;
+  }
+
+  function speakerLabelRole(node) {
+    const text = String(node?.textContent || node?.innerText || '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (text === 'you said:') return 'user';
+    if (text === 'chatgpt said:' || text === 'assistant said:') return 'assistant';
+    return '';
+  }
+
   function semanticRole(node) {
+    const synthetic = speakerRoles.get(node);
+    if (synthetic === 'user' || synthetic === 'assistant') return synthetic;
     const value = String(
       nativeAttribute(node, 'data-message-author-role')
       || nativeAttribute(node, 'data-turn')
@@ -70,11 +106,45 @@
     return 0;
   }
 
-  function compatibleTurns(root) {
-    const legacy = nativeQueryAll(root, LEGACY_TURN_SELECTOR);
-    const roles = nativeQueryAll(root, SEMANTIC_ROLE_SELECTOR).filter((node) => semanticRole(node));
-    if (!roles.length) return legacy;
+  function syntheticTurnId(node, role) {
+    let value = syntheticTurnIds.get(node);
+    if (value) return value;
+    value = `conversation-turn-compat-${role}-${nextSyntheticTurnId}`;
+    nextSyntheticTurnId += 1;
+    syntheticTurnIds.set(node, value);
+    return value;
+  }
 
+  function speakerLabelTurns(root) {
+    const now = Date.now();
+    const cached = speakerTurnCache.get(root);
+    if (
+      cached
+      && now - cached.observedAt < SPEAKER_CACHE_MS
+      && cached.turns.every((turn) => turn?.isConnected !== false)
+    ) {
+      return cached.turns;
+    }
+
+    const turns = [];
+    const seen = new Set();
+    for (const label of nativeQueryAll(root, SPEAKER_LABEL_SELECTOR)) {
+      const role = speakerLabelRole(label);
+      if (!role) continue;
+      let turn = nativeClosestTo(label, TURN_CONTAINER_SELECTOR);
+      if (!turn) turn = label.parentElement || null;
+      if (!turn || seen.has(turn)) continue;
+      speakerRoles.set(turn, role);
+      syntheticTurnId(turn, role);
+      seen.add(turn);
+      turns.push(turn);
+    }
+    const ordered = turns.sort(compareDomOrder);
+    speakerTurnCache.set(root, { observedAt: now, turns: ordered });
+    return ordered;
+  }
+
+  function semanticTurns(legacy, roles) {
     const combined = [...legacy];
     for (const roleNode of roles) {
       if (legacy.some((turn) => turn === roleNode || turn.contains?.(roleNode))) continue;
@@ -85,6 +155,38 @@
       combined.push(roleNode);
     }
     return Array.from(new Set(combined)).sort(compareDomOrder);
+  }
+
+  function hydrateLegacyTurnRoles(root, legacy) {
+    if (!legacy.some((turn) => !semanticRole(turn))) return;
+    // Current ChatGPT still emits stable conversation-turn wrappers in some
+    // layouts while moving speaker identity to an exact screen-reader label.
+    // Recover only those existing wrappers; never infer identity from prose.
+    speakerLabelTurns(root);
+  }
+
+  function compatibleTurns(root) {
+    const legacy = nativeQueryAll(root, LEGACY_TURN_SELECTOR);
+    const roles = nativeQueryAll(root, SEMANTIC_ROLE_SELECTOR).filter((node) => semanticRole(node));
+    hydrateLegacyTurnRoles(root, legacy);
+    if (legacy.length || roles.length) return semanticTurns(legacy, roles);
+    return speakerLabelTurns(root);
+  }
+
+  function compatibleRoleNodes(root) {
+    const legacy = nativeQueryAll(root, LEGACY_TURN_SELECTOR);
+    const roles = nativeQueryAll(root, SEMANTIC_ROLE_SELECTOR).filter((node) => semanticRole(node));
+    hydrateLegacyTurnRoles(root, legacy);
+    if (!legacy.length && !roles.length) return speakerLabelTurns(root).filter((node) => semanticRole(node));
+
+    // Preserve native semantic role nodes when they still exist inside a legacy
+    // wrapper. Add a synthetic legacy wrapper only when it has no native role
+    // descendant, so boundary accounting cannot double-count the same turn.
+    const syntheticLegacy = legacy.filter((turn) => (
+      semanticRole(turn)
+      && !roles.some((roleNode) => turn === roleNode || turn.contains?.(roleNode))
+    ));
+    return Array.from(new Set([...roles, ...syntheticLegacy])).sort(compareDomOrder);
   }
 
   function visibleEnough(node) {
@@ -164,6 +266,7 @@
   function notifierCompatDocumentQuerySelectorAll(selector) {
     const value = String(selector || '');
     if (value === LEGACY_TURN_SELECTOR) return compatibleTurns(this);
+    if (isSemanticRoleSelector(value)) return compatibleRoleNodes(this);
     return nativeDocumentQuerySelectorAll.call(this, selector);
   }
 
@@ -174,6 +277,7 @@
   function notifierCompatElementQuerySelectorAll(selector) {
     const value = String(selector || '');
     if (value === LEGACY_TURN_SELECTOR) return compatibleTurns(this);
+    if (isSemanticRoleSelector(value)) return compatibleRoleNodes(this);
     return nativeElementQuerySelectorAll.call(this, selector);
   }
 
@@ -181,14 +285,24 @@
     const value = String(selector || '');
     const direct = nativeClosest.call(this, selector);
     if (direct || value !== LEGACY_TURN_SELECTOR) return direct;
-    return nativeClosestTo(this, SEMANTIC_ROLE_SELECTOR);
+    const semantic = nativeClosestTo(this, SEMANTIC_ROLE_SELECTOR);
+    if (semantic) return semantic;
+    let candidate = this;
+    while (candidate) {
+      if (speakerRoles.get(candidate)) return candidate;
+      candidate = candidate.parentElement || null;
+    }
+    return null;
   }
 
   function notifierCompatGetAttribute(name) {
     const value = nativeGetAttribute.call(this, name);
-    if (value != null || String(name || '').toLowerCase() !== 'data-testid') return value;
+    if (value != null) return value;
+    const normalizedName = String(name || '').toLowerCase();
+    if (normalizedName !== 'data-turn' && normalizedName !== 'data-message-author-role' && normalizedName !== 'data-testid') return value;
     const role = semanticRole(this);
-    if (!role) return value;
+    if ((normalizedName === 'data-turn' || normalizedName === 'data-message-author-role') && role) return role;
+    if (normalizedName !== 'data-testid' || !role) return value;
 
     const messageId = String(
       nativeAttribute(this, 'data-message-id')
@@ -196,10 +310,7 @@
       || ''
     ).trim();
     if (messageId) return `conversation-turn-${messageId}`;
-
-    const roles = nativeQueryAll(document, SEMANTIC_ROLE_SELECTOR).filter((node) => semanticRole(node));
-    const index = Math.max(0, roles.indexOf(this));
-    return `conversation-turn-compat-${role}-${index}`;
+    return syntheticTurnId(this, role);
   }
 
   Document.prototype.querySelector = notifierCompatDocumentQuerySelector;
@@ -212,6 +323,8 @@
   const runtime = {
     version: RUNTIME_VERSION,
     compatibleTurns,
+    compatibleRoleNodes,
+    speakerLabelTurns,
     fallbackComposer,
     fallbackSend,
     fallbackStop,

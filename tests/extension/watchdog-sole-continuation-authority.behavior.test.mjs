@@ -18,10 +18,13 @@ test('production installs the watchdog-only gate after background construction a
   assert.doesNotThrow(() => new vm.Script(authoritySource));
 });
 
-test('durable cadence owner reserves before dispatch and never authorizes a short retry cadence', () => {
-  assert.match(invariantSource, /const VERSION = 4/);
+test('durable cadence owner reserves before dispatch and uses the configured watchdog cadence', () => {
+  assert.match(invariantSource, /const VERSION = 5/);
   assert.match(invariantSource, /const CADENCE_SCHEMA_VERSION = 1/);
-  assert.match(invariantSource, /const WATCHDOG_DELAY_MS = 30 \* 60_000/);
+  assert.match(invariantSource, /const DEFAULT_WATCHDOG_DELAY_MS = 30 \* 60_000/);
+  assert.match(invariantSource, /const DEFAULT_WATCHDOG_MAX_SENDS = 3/);
+  assert.match(invariantSource, /ChatGPTNotifierContinuationPolicy\?\.watchdogDelayMs\?\.\(\)/);
+  assert.match(invariantSource, /ChatGPTNotifierContinuationPolicy\?\.watchdogMaxSends\?\.\(\)/);
   assert.match(invariantSource, /RETIRED_SHORT_RETRY_REASON = 'incomplete-awaiting-continuation'/);
   assert.match(invariantSource, /function authorizePageDispatch/);
   assert.match(invariantSource, /database\.transaction\(\[PROFILE_STORE, ENROLLMENT_STORE\], 'readwrite'\)/);
@@ -50,7 +53,6 @@ test('legacy immediate continuation primitives are vetoed while definitive compl
     structuredClone,
     indexedDB: {
       open() {
-        // Leave the startup migration pending; no event-loop handle is created.
         return {};
       }
     },
@@ -110,11 +112,12 @@ test('legacy immediate continuation primitives are vetoed while definitive compl
   assert.equal(oldHandleCalls, 1);
 });
 
-test('startup migration retires only the poisoned one-minute continuation retry marker and restores a 30-minute deadline', () => {
+test('startup migration retires only the poisoned one-minute continuation retry marker and restores a full configured watchdog deadline', () => {
   assert.match(authoritySource, /RETIRED_SHORT_RETRY_REASON = 'incomplete-awaiting-continuation'/);
   assert.match(authoritySource, /WATCHDOG_DELAY_MS = 30 \* 60_000/);
   assert.match(authoritySource, /lastAutomaticSentAt \+ WATCHDOG_DELAY_MS/);
   assert.match(authoritySource, /retryAt: 0/);
   assert.match(authoritySource, /retryReason: ''/);
   assert.match(authoritySource, /retireShortCadenceState\(\)\.catch/);
+  assert.match(invariantSource, /lastAutomaticSentAt \+ watchdogDelayMs\(\)/);
 });
