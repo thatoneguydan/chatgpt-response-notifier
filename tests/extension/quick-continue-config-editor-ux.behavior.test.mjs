@@ -5,6 +5,8 @@ import test from 'node:test';
 const readText = (relative) => readFileSync(new URL(`../../${relative}`, import.meta.url), 'utf8');
 const styleSource = readText('standalone-quick-continue/config-editor-style.js');
 const backgroundSource = readText('standalone-quick-continue/background.js');
+const installerSource = readText('standalone-quick-continue/Install.ps1');
+const releaseWorkflow = readText('.github/workflows/quick-continue-release.yml');
 const manifest = JSON.parse(readText('standalone-quick-continue/manifest.json'));
 const config = JSON.parse(readText('standalone-quick-continue/config.json'));
 
@@ -24,6 +26,8 @@ test('Quick Continue 1.2.28 ships the large config editor styling to new and alr
   const declared = manifest.content_scripts.flatMap((entry) => entry.js || []);
   assert.ok(declared.includes('config-editor-style.js'));
   assert.match(backgroundSource, /'config-editor-style\.js'[\s\S]*'content-script\.js'/);
+  assert.match(installerSource, /'config-editor-style\.js'/);
+  assert.match(releaseWorkflow, /'config-editor-style\.js'/);
   assert.match(styleSource, /width:\s*min\(780px, calc\(100vw - 32px\)\)/);
   assert.match(styleSource, /height:\s*min\(560px, calc\(100vh - 180px\)\)/);
 });
