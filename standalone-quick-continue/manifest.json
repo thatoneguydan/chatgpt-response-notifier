@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Quick Continue",
-  "version": "1.2.27",
+  "version": "1.2.28",
   "description": "Adds timestamped one-click Continue, per-chat optional timestamps for manual messages, editable prompt JSON, and automatic managed updates to ChatGPT.",
   "minimum_chrome_version": "116",
   "permissions": [
@@ -29,6 +29,7 @@
         "composer-text.js",
         "send-transaction.js",
         "runtime-reset.js",
+        "config-editor-style.js",
         "content-script.js",
         "hover-edit-script.js",
         "conversation-state.js"
