@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_GENERATION = 3;
+  const RUNTIME_GENERATION = 4;
   let extensionVersion = '';
   try { extensionVersion = String(chrome.runtime.getManifest().version || ''); } catch {}
 
@@ -10,6 +10,7 @@
   if (previousVersion === extensionVersion && extensionVersion && previousGeneration === RUNTIME_GENERATION) return;
 
   const disposableRuntimeKeys = [
+    '__chatgptNotifierTypingPerformanceGuard',
     '__chatgptNotifierAttachmentRuntime',
     '__chatgptNotifierMonitorRuntime',
     '__chatgptNotifierStatusRuntime',
