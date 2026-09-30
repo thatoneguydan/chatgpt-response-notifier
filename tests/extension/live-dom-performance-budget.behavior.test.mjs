@@ -57,7 +57,7 @@ test('mutation-driven live readers use quiet debounces with hard ceilings', () =
   }
 });
 
-test('extension-owned countdown mutations are filtered before expensive live observers', () => {
+test('toolbar countdown and composer text churn are filtered before expensive live observers', () => {
   const compat = readText('extension/page-dom-compat.js');
   const manifest = JSON.parse(readText('extension/manifest.json'));
   const compatBackground = readText('extension/page-runtime-compat-background.js');
@@ -66,6 +66,12 @@ test('extension-owned countdown mutations are filtered before expensive live obs
   assert.match(compat, /RUNTIME_VERSION = 6/);
   assert.match(compat, /OWNED_ROOT_SELECTOR = '#chatgpt-quick-continue-toolbar'/);
   assert.match(compat, /OWNED_MUTATION_PASSTHROUGH_ATTRIBUTES = new Set\(\['data-watchdog-settings'\]\)/);
+  assert.match(compat, /MONITOR_ATTRIBUTE_FILTER = Object\.freeze/);
+  assert.match(compat, /function isComposerTextMutation\(record\)/);
+  assert.match(compat, /function isMonitorObservation\(options\)/);
+  assert.match(compat, /function filterObserverMutations\(records, state\)/);
+  assert.match(compat, /state\?\.monitorObservation !== true \|\| deliveredDraftTransition/);
+  assert.match(compat, /state\.lastDraftPresent === present/);
   assert.match(compat, /class NotifierFilteredMutationObserver/);
   assert.match(compat, /if \(filtered\.length\) callback\(filtered, facade\)/);
   assert.match(compat, /globalThis\.MutationObserver = NotifierFilteredMutationObserver/);

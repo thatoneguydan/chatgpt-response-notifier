@@ -30,6 +30,14 @@
   const SPEAKER_CACHE_MS = 500;
   const OWNED_ROOT_SELECTOR = '#chatgpt-quick-continue-toolbar';
   const OWNED_MUTATION_PASSTHROUGH_ATTRIBUTES = new Set(['data-watchdog-settings']);
+  const MONITOR_ATTRIBUTE_FILTER = Object.freeze([
+    'data-testid',
+    'aria-label',
+    'aria-disabled',
+    'aria-hidden',
+    'hidden',
+    'disabled'
+  ]);
   const LEGACY_COMPOSER_SELECTORS = new Set([
     '#prompt-textarea',
     'textarea[data-testid="prompt-textarea"]',
@@ -127,17 +135,60 @@
     return true;
   }
 
+  function draftPresentForMutation(record) {
+    const element = elementForMutationNode(record?.target);
+    if (!element) return null;
+    const composer = nativeClosestTo(element, '#prompt-textarea, [contenteditable="true"][data-testid="prompt-textarea"], textarea[data-testid="prompt-textarea"]');
+    if (!composer) return null;
+    try {
+      const value = 'value' in composer ? composer.value : composer.textContent;
+      return String(value || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim().length > 0;
+    } catch {
+      return null;
+    }
+  }
+
+  function isMonitorObservation(options) {
+    if (options?.attributes !== true || options?.childList !== true || options?.subtree !== true || options?.characterData !== true) return false;
+    const filter = new Set(Array.isArray(options?.attributeFilter) ? options.attributeFilter.map(String) : []);
+    return MONITOR_ATTRIBUTE_FILTER.every((name) => filter.has(name));
+  }
+
+  function filterObserverMutations(records, state) {
+    const output = [];
+    let deliveredDraftTransition = false;
+    for (const record of filterOwnedMutations(records)) {
+      if (!isComposerTextMutation(record)) {
+        output.push(record);
+        continue;
+      }
+      if (state?.monitorObservation !== true || deliveredDraftTransition) continue;
+      const present = draftPresentForMutation(record);
+      if (present === null || state.lastDraftPresent === present) continue;
+      state.lastDraftPresent = present;
+      deliveredDraftTransition = true;
+      output.push(record);
+    }
+    return output;
+  }
+
   class NotifierFilteredMutationObserver {
     constructor(callback) {
       if (typeof callback !== 'function') throw new TypeError('MutationObserver callback must be a function');
       const facade = this;
+      this.state = {
+        monitorObservation: false,
+        lastDraftPresent: null
+      };
       this.nativeObserver = new nativeMutationObserver((records) => {
-        const filtered = filterOwnedMutations(records);
+        const filtered = filterObserverMutations(records, this.state);
         if (filtered.length) callback(filtered, facade);
       });
     }
 
     observe(target, options) {
+      this.state.monitorObservation = isMonitorObservation(options);
+      this.state.lastDraftPresent = null;
       return this.nativeObserver.observe(target, options);
     }
 
@@ -146,7 +197,7 @@
     }
 
     takeRecords() {
-      return filterOwnedMutations(this.nativeObserver.takeRecords());
+      return filterObserverMutations(this.nativeObserver.takeRecords(), this.state);
     }
   }
 
@@ -402,6 +453,7 @@
     isOwnedMutation,
     filterRecords: filterOwnedMutations,
     isComposerTextMutation,
+    isMonitorObservation,
     mutationObserverFiltered: globalThis.MutationObserver === NotifierFilteredMutationObserver
   });
 

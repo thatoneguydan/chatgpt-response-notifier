@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Response Notifier",
-  "version": "0.9.99",
+  "version": "0.9.100",
   "description": "Reliable upstream ChatGPT completion detection with persistent stacked Windows notifications.",
   "key": "\u004dIIB\u0049jAN\u0042gkq\u0068kiG\u0039w0B\u0041QEF\u0041AOC\u0041Q8A\u004dIIB\u0043gKC\u0041QEA\u0067Kfb\u0034PQf\u006eoU7\u0033bEG\u0033hR+\u0072yqQ\u00738Yy\u0074rhH\u0039OvA\u0054HAH\u0064aCb\u0062OlG\u0042wrb\u00323bB\u004c4lF\u0046SFg\u0079l7a\u00767ra\u0036ajk\u00785JH\u0033zG1\u00316RM\u0041nZ5\u0069O4j\u0067g/e\u004eeoD\u0033p4/\u0066EqE\u004575G\u0071zMk\u006fDB4\u002b/nD\u0066be5\u0037R1D\u002f+OV\u007awBP\u0052PAY\u007aQuk\u004dpWn\u0035CbQ\u00598Hn\u0061wFQ\u00360VD\u006875U\u0047pNY\u0065GBo\u0042lJf\u004fr6J\u0078sSd\u00746FL\u00322n7\u007apoK\u0049c3V\u0037ZvI\u00776CJ\u0052IQ3\u0055if6\u0077IXp\u0046eAm\u0041K3F\u0032TfI\u0032q5b\u0057TTb\u002b3ms\u0057iKH\u005a/ng\u0071jlE\u0050guN\u0065fjS\u0073+z+\u00797St\u0056Am2\u0076U6t\u00679t3\u0048ZQa\u0054zar\u002brVx\u0054Q5f\u0055Y2t\u0059YPP\u0043I16\u0073GMf\u0079dKR\u0052sNh\u0031hJf\u0070wID\u0041QAB",
   "minimum_chrome_version": "116",
