@@ -6,7 +6,7 @@ const root = new URL('../../', import.meta.url);
 const monitorSource = readFileSync(new URL('extension/monitor-script.js', root), 'utf8');
 
 test('a fresh request fails open by rearming a stopped green watchdog before publishing', () => {
-  assert.match(monitorSource, /const RUNTIME_VERSION = 13/);
+  assert.match(monitorSource, /const RUNTIME_VERSION = 14/);
   assert.match(monitorSource, /async function rearmStoppedWatchdogForNewRequest\(\)/);
   assert.match(monitorSource, /GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER/);
   assert.match(monitorSource, /overview\?\.automationEnabled !== true/);
@@ -31,7 +31,7 @@ test('request/DOM ordering cannot attribute the previous terminal footer to the 
   assert.match(monitorSource, /let lastPublishedPromptKey = '';/);
   assert.match(monitorSource, /let requestPriorPromptKey = '';/);
 
-  const snapshotStart = monitorSource.indexOf('function snapshot()');
+  const snapshotStart = monitorSource.indexOf('function snapshot(');
   const snapshotEnd = monitorSource.indexOf('function clearTimer', snapshotStart);
   assert.ok(snapshotStart >= 0 && snapshotEnd > snapshotStart, 'snapshot function must exist');
   const snapshotSource = monitorSource.slice(snapshotStart, snapshotEnd);

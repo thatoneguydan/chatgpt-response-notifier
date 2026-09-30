@@ -324,29 +324,55 @@ export async function extensionWorker(context, name) {
   return null;
 }
 
-async function requireExtensionWorkers(context, testInfo) {
+async function nativeExtensionDiagnostics(context) {
+  const page = await context.newPage();
   try {
+    await page.goto('chrome://extensions/');
+    return await page.evaluate(async () => {
+      const extensions = await chrome.developerPrivate.getExtensionsInfo({ includeDisabled: true, includeTerminated: true });
+      return extensions.map(({ id, name, state, version, manifestErrors, runtimeErrors, views }) => ({ id, name, state, version, manifestErrors, runtimeErrors, views }));
+    });
+  } finally {
+    await page.close();
+  }
+}
+
+async function requireExtensionWorkers(context, testInfo) {
+  const startupEvents = [];
+  const knownNames = ['ChatGPT Quick Continue', 'ChatGPT Response Notifier'];
+  try {
+    if (!(await extensionWorker(context, knownNames[0])) || !(await extensionWorker(context, knownNames[1]))) {
+      const extensions = await nativeExtensionDiagnostics(context);
+      const session = await context.newCDPSession(context.pages()[0]);
+      for (const event of ['workerErrorReported', 'workerRegistrationUpdated', 'workerVersionUpdated']) {
+        session.on(`ServiceWorker.${event}`, (details) => startupEvents.push({ event, details }));
+      }
+      try {
+        await session.send('ServiceWorker.enable');
+        // Give Playwright a fresh native target if it missed registration during
+        // launch. No test script replaces the actual background implementation.
+        await session.send('ServiceWorker.stopAllWorkers');
+        for (const extension of extensions.filter(({ name }) => knownNames.includes(name))) {
+          await session.send('ServiceWorker.startWorker', { scopeURL: `chrome-extension://${extension.id}/` });
+        }
+      } finally {
+        await session.detach().catch(() => {});
+      }
+    }
     await expect.poll(async () => {
-      const workers = await Promise.all(['ChatGPT Quick Continue', 'ChatGPT Response Notifier'].map((name) => extensionWorker(context, name)));
+      const workers = await Promise.all(knownNames.map((name) => extensionWorker(context, name)));
       return workers.every(Boolean);
     }, { timeout: 10_000, message: 'Both native MV3 background workers must start before testing extension behavior.' }).toBe(true);
   } catch (error) {
     // Read only this disposable profile's native extension errors. Content
     // scripts alone do not prove that the background service worker registered.
-    const page = await context.newPage();
     let nativeDiagnostics;
     try {
-      await page.goto('chrome://extensions/');
-      nativeDiagnostics = await page.evaluate(async () => {
-        const extensions = await chrome.developerPrivate.getExtensionsInfo({ includeDisabled: true, includeTerminated: true });
-        return extensions.map(({ id, name, state, version, manifestErrors, runtimeErrors, views }) => ({ id, name, state, version, manifestErrors, runtimeErrors, views }));
-      });
+      nativeDiagnostics = await nativeExtensionDiagnostics(context);
     } catch (diagnosticError) {
       nativeDiagnostics = { error: String(diagnosticError) };
-    } finally {
-      await page.close();
     }
-    const diagnostics = { workers: context.serviceWorkers().map((worker) => worker.url()), nativeDiagnostics };
+    const diagnostics = { workers: context.serviceWorkers().map((worker) => worker.url()), nativeDiagnostics, startupEvents };
     await testInfo.attach('extension-worker-startup.json', { body: JSON.stringify(diagnostics, null, 2), contentType: 'application/json' });
     throw new Error(`${error.message}\nNative extension worker diagnostics: ${JSON.stringify(diagnostics)}`);
   }

@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 13;
+  const RUNTIME_VERSION = 14;
   try { globalThis.__chatgptNotifierMonitorRuntime?.dispose?.(); } catch {}
 
   const abortController = new AbortController();
@@ -38,6 +38,9 @@
   let stickyTerminalStatusCode = '';
   let lastPublishedPromptKey = '';
   let requestPriorPromptKey = '';
+  let cachedTurnState = null;
+  let cachedTurnHref = '';
+  let publishComposerOnly = false;
   let cachedPreviousPromptOwnerKey = '';
   let cachedPreviousPromptTerminal = { promptKey: '', statusCode: '' };
 
@@ -414,8 +417,15 @@
     return result;
   }
 
-  function snapshot() {
-    const turnState = latestTurnState();
+  function snapshot(reuseConversation = false) {
+    // Draft-only publications still read draft, upload and request controls, but
+    // cannot change submitted turns. Explicit queries always scan fresh turns.
+    const pending = reuseConversation ? observer?.takeRecords?.() || [] : [];
+    const safeToReuse = reuseConversation && cachedTurnState && cachedTurnHref === location.href
+      && Array.from(pending).every((record) => globalThis.ChatGPTNotifierOwnedDomMutationFilter?.isComposerTextMutation?.(record) === true);
+    const turnState = safeToReuse ? cachedTurnState : latestTurnState();
+    cachedTurnState = turnState;
+    cachedTurnHref = location.href;
     const inheritedPriorPrompt = Boolean(
       requestPriorPromptKey
       && turnState.promptKey
@@ -547,13 +557,18 @@
   function publishNow() {
     if (disposed) return;
     clearPublishTimers();
-    const current = snapshot();
+    const current = snapshot(publishComposerOnly);
+    publishComposerOnly = false;
     scheduleStabilityChecks(current);
     try { chrome.runtime.sendMessage({ type: 'CHATGPT_MONITOR_STATE', snapshot: current }).catch(() => {}); } catch {}
   }
 
-  function schedulePublish() {
+  function schedulePublish(records) {
     if (disposed) return;
+    const composerOnly = Array.isArray(records) && records.length > 0
+      && records.every((record) => globalThis.ChatGPTNotifierOwnedDomMutationFilter?.isComposerTextMutation?.(record) === true);
+    publishComposerOnly = publishTimer === null && publishMaxTimer === null
+      ? composerOnly : publishComposerOnly && composerOnly;
     if (publishTimer !== null) clearTimeout(publishTimer);
     publishTimer = setTimeout(() => {
       publishTimer = null;

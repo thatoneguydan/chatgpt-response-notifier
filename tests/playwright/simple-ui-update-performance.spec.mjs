@@ -117,23 +117,46 @@ test('scrolling never rereads a draft and typing does not trigger terminal scans
     return globalThis.__performanceReads;
   })()`);
   expect(scrollReads).toBe(0);
+  // Put the composer under the same main root as the real ChatGPT page so its
+  // draft mutations exercise the monitor's observer as well as terminal readers.
+  await fixturePage.evaluate(() => document.querySelector('main').append(document.querySelector('form[data-type="unified-composer"]')));
   await evaluateInExtensionWorld(fixturePage, 'ChatGPT Response Notifier', `new Promise(resolve => setTimeout(resolve, 2200))`);
-  const scans = await evaluateInExtensionWorld(fixturePage, 'ChatGPT Response Notifier', `(async () => {
+  const work = await evaluateInExtensionWorld(fixturePage, 'ChatGPT Response Notifier', `(async () => {
     const original = globalThis.ChatGPTNotifierRenderedTerminalStatus;
+    const clone = Element.prototype.cloneNode;
+    const send = chrome.runtime.sendMessage;
     let detections = 0;
+    let turnClones = 0;
+    const draftPublications = [];
     globalThis.ChatGPTNotifierRenderedTerminalStatus = Object.freeze({ ...original, detect(...args) {
       detections += 1;
       return original.detect(...args);
     }});
-    const paragraph = document.querySelector('#prompt-textarea p');
-    for (let index = 0; index < 40; index += 1) {
-      paragraph.textContent = 'Typing draft ' + index;
-      paragraph.dispatchEvent(new InputEvent('input', { bubbles: true }));
-      await new Promise(resolve => setTimeout(resolve, 10));
+    Element.prototype.cloneNode = function (...args) {
+      if (this.closest('[data-testid^="conversation-turn-"]')) turnClones += 1;
+      return clone.apply(this, args);
+    };
+    chrome.runtime.sendMessage = function (...args) {
+      if (args[0]?.type === 'CHATGPT_MONITOR_STATE') draftPublications.push(args[0].snapshot.hasDraft);
+      return send.apply(this, args);
+    };
+    try {
+      const composer = document.getElementById('prompt-textarea');
+      for (let index = 0; index < 40; index += 1) {
+        composer.textContent = 'Typing draft ' + index;
+        composer.dispatchEvent(new InputEvent('input', { bubbles: true }));
+        await new Promise(resolve => setTimeout(resolve, 10));
+      }
+      await new Promise(resolve => setTimeout(resolve, 650));
+      return { detections, turnClones, draftPublications };
+    } finally {
+      globalThis.ChatGPTNotifierRenderedTerminalStatus = original;
+      Element.prototype.cloneNode = clone;
+      chrome.runtime.sendMessage = send;
     }
-    await new Promise(resolve => setTimeout(resolve, 400));
-    globalThis.ChatGPTNotifierRenderedTerminalStatus = original;
-    return detections;
   })()`);
-  expect(scans).toBe(0);
+  expect(work.detections).toBe(0);
+  expect(work.turnClones).toBe(0);
+  expect(work.draftPublications.length).toBeGreaterThan(0);
+  expect(work.draftPublications.every(Boolean)).toBe(true);
 });

@@ -211,7 +211,7 @@ test('watchdog no-code deadline remains authoritative even while generation is a
 
 test('status runtime generation advances for the semantic-turn page behavior', () => {
   assert.match(statusSource, /const RUNTIME_VERSION = 17/);
-  assert.match(monitorPageSource, /const RUNTIME_VERSION = 13/);
+  assert.match(monitorPageSource, /const RUNTIME_VERSION = 14/);
 });
 
 test('rendered status fallback accepts duplicate copies of one terminal footer but rejects conflicts', () => {
