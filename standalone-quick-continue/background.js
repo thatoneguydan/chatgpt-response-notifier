@@ -17,7 +17,6 @@ const CONTENT_FILES = [
   'runtime-reset.js',
   'config-editor-style.js',
   'content-script.js',
-  'simple-watchdog.js',
   'hover-edit-script.js',
   'conversation-state.js'
 ];
