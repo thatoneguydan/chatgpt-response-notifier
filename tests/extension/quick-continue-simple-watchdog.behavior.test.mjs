@@ -117,7 +117,11 @@ function createHarness() {
     return storage[SIMPLE_STATE_KEY]?.[String(tab.id)] || null;
   }
 
-  return { storage, alarms, sentMessages, reloads, tab, sendRuntimeMessage, fireSimpleAlarm, state };
+  function actionMessages() {
+    return sentMessages.filter((entry) => entry?.type === ACTION);
+  }
+
+  return { storage, alarms, sentMessages, reloads, tab, sendRuntimeMessage, fireSimpleAlarm, state, actionMessages };
 }
 
 test('Simple mode executes the fixed Stop, reload, Continue sequence and repeats from its configured timer', async () => {
@@ -143,7 +147,7 @@ test('Simple mode executes the fixed Stop, reload, Continue sequence and repeats
   harness.state().nextAt = 0;
   await harness.fireSimpleAlarm();
   await settle(() => harness.state()?.phase === 'stop-wait', 'stop-wait phase');
-  assert.deepEqual(harness.sentMessages.at(-1), { type: ACTION, action: 'stop' });
+  assert.deepEqual(harness.actionMessages().at(-1), { type: ACTION, action: 'stop' });
   assert.equal(harness.state().attemptsUsed, 0);
 
   harness.state().nextAt = 0;
@@ -155,7 +159,7 @@ test('Simple mode executes the fixed Stop, reload, Continue sequence and repeats
   harness.state().nextAt = 0;
   await harness.fireSimpleAlarm();
   await settle(() => harness.state()?.phase === 'countdown', 'second countdown');
-  assert.deepEqual(harness.sentMessages.at(-1), { type: ACTION, action: 'send-continue' });
+  assert.deepEqual(harness.actionMessages().at(-1), { type: ACTION, action: 'send-continue' });
   assert.equal(harness.state().attemptsUsed, 1);
   assert.equal(harness.state().settings.timerMinutes, 7);
 
@@ -166,7 +170,7 @@ test('Simple mode executes the fixed Stop, reload, Continue sequence and repeats
   harness.state().nextAt = 0;
   await harness.fireSimpleAlarm();
   await settle(() => harness.state() === null, 'attempt exhaustion');
-  assert.equal(harness.sentMessages.filter((entry) => entry.action === 'send-continue').length, 2);
+  assert.equal(harness.actionMessages().filter((entry) => entry.action === 'send-continue').length, 2);
   assert.deepEqual(harness.reloads, [41, 41]);
 });
 
@@ -213,6 +217,6 @@ test('Simple mode is mechanically scoped to the exact saved conversation', async
   harness.state().nextAt = 0;
   await harness.fireSimpleAlarm();
   await settle(() => harness.state() === null, 'wrong-chat shutdown');
-  assert.equal(harness.sentMessages.some((entry) => entry.action === 'stop' || entry.action === 'send-continue'), false);
+  assert.equal(harness.actionMessages().some((entry) => entry.action === 'stop' || entry.action === 'send-continue'), false);
   assert.equal(harness.reloads.length, 0);
 });
