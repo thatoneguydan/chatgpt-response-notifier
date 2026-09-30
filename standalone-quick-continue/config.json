@@ -16,6 +16,12 @@
       "INCOMPLETE_HANDOFF": false
     }
   },
+  "simpleWatchdog": {
+    "timerMinutes": 30,
+    "attempts": 3,
+    "stopToRefreshSeconds": 30,
+    "refreshToContinueSeconds": 30
+  },
   "projects": [
     "campaign desk",
     "notifier extension",

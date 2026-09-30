@@ -30,7 +30,7 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'send-transaction.js', 'runtime-reset.js', 'config-editor-style.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.28');
+  assert.equal(manifest.version, '1.2.29');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -86,10 +86,16 @@ test('runtime reset disposes stale page runtimes before current scripts rebind t
   assert.equal('__chatgptQuickContinueConversationStateRuntime' in context, false);
 });
 
-test('bundled JSON contains editable prompt templates and saved projects', () => {
+test('bundled JSON contains editable prompt templates, saved projects, and Simple fallback timing', () => {
   assert.equal(bundledConfig.continueText, '[{time}] Continue until you finish or need something from me.');
   assert.equal(bundledConfig.projectText, '[{time}] Continue {project} from canonical GitHub state until you finish or need me.');
   assert.equal(bundledConfig.manualTimestampText, '[{time}] {message}');
+  assert.deepEqual(bundledConfig.simpleWatchdog, {
+    timerMinutes: 30,
+    attempts: 3,
+    stopToRefreshSeconds: 30,
+    refreshToContinueSeconds: 30
+  });
   assert.ok(Array.isArray(bundledConfig.projects));
   assert.ok(bundledConfig.projects.includes('campaign desk'));
   assert.ok(bundledConfig.projects.includes('notifier extension'));
@@ -342,7 +348,7 @@ test('manual timestamp preference is isolated by ChatGPT conversation and follow
 test('prompt and config APIs are versioned so reinjection cannot retain stale globals indefinitely', () => {
   assert.match(promptSource, /const RUNTIME_VERSION = 5/);
   assert.match(promptSource, /runtimeVersion: RUNTIME_VERSION/);
-  assert.match(configSource, /const RUNTIME_VERSION = 7/);
+  assert.match(configSource, /const RUNTIME_VERSION = 8/);
   assert.match(configSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
@@ -351,7 +357,7 @@ test('prompt and config APIs are versioned so reinjection cannot retain stale gl
   assert.match(hoverEditSource, /const RUNTIME_VERSION = 9/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
-  assert.match(conversationStateSource, /const RUNTIME_VERSION = 3/);
+  assert.match(conversationStateSource, /const RUNTIME_VERSION = 4/);
   assert.match(conversationStateSource, /__chatgptQuickContinueConversationStateRuntime/);
 });
 
@@ -428,6 +434,7 @@ test('config controller loads bundled JSON only from the extension, preserves mu
   const initial = await api.load();
   assert.equal(initial.continueText, bundledConfig.continueText);
   assert.equal(initial.manualTimestampText, '[{time}] {message}');
+  assert.equal(JSON.stringify(initial.simpleWatchdog), JSON.stringify(bundledConfig.simpleWatchdog));
   assert.equal(fetchCalls.length, 1);
   assert.equal(fetchCalls[0].url, 'chrome-extension://quick-continue/config.json');
 
@@ -442,6 +449,7 @@ test('config controller loads bundled JSON only from the extension, preserves mu
   assert.equal(saved.continueText, '[{time}] Continue this work.');
   assert.equal(saved.projectText, '[{time}] Continue {project} now.');
   assert.equal(saved.manualTimestampText, '[{time}] {message}');
+  assert.equal(JSON.stringify(saved.simpleWatchdog), JSON.stringify(bundledConfig.simpleWatchdog));
   assert.deepEqual([...saved.projects], ['Campaign Desk', 'Time Tracker']);
   assert.equal(observed.continueText, '[{time}] Continue this work.');
   assert.equal(observed.manualTimestampText, '[{time}] {message}');
@@ -468,6 +476,7 @@ test('config controller loads bundled JSON only from the extension, preserves mu
   assert.equal(storage.quickContinueConfig.continueText, multiline.continueText);
   assert.equal(JSON.parse(api.serialize(multiline)).continueText, multiline.continueText);
   assert.equal(JSON.parse(api.serialize(multiline)).manualTimestampText, multiline.manualTimestampText);
+  assert.equal(JSON.stringify(JSON.parse(api.serialize(multiline)).simpleWatchdog), JSON.stringify(bundledConfig.simpleWatchdog));
   assert.match(api.serialize(multiline), /Continue until you finish\.\\nUse GitHub status codes policy\./);
   assert.match(api.serialize(multiline), /\[\{time\}\]\\n\{message\}/);
 
