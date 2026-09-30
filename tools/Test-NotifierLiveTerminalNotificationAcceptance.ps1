@@ -7,7 +7,8 @@ param(
     [string]$ExpectedSourceCommit,
     [int]$MinimumLiveDefinitiveProofs = 1,
     [int]$MaxStopLagSeconds = 8,
-    [int]$MaxDeliveryLagSeconds = 180
+    [int]$MaxDeliveryLagSeconds = 180,
+    [int]$MaxDedupCarryForwardSeconds = 3600
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,6 +65,14 @@ function Test-SameRequiredIdentity {
     return [string]::Equals($leftValue, $rightValue, [StringComparison]::Ordinal)
 }
 
+function Test-SameLogicalTurnIdentity {
+    param([object]$Left, [object]$Right)
+    foreach ($name in @('conversationSuffix', 'promptSuffix', 'assistantSuffix', 'revisionSuffix')) {
+        if (-not (Test-SameRequiredIdentity -Left $Left -Right $Right -Name $name)) { return $false }
+    }
+    return $true
+}
+
 function Test-WithinWindow {
     param(
         [object]$Candidate,
@@ -77,6 +86,9 @@ function Test-WithinWindow {
 
 if ($MinimumLiveDefinitiveProofs -lt 1 -or $MinimumLiveDefinitiveProofs -gt $DefinitiveStatusCodes.Count) {
     throw "MinimumLiveDefinitiveProofs must be between 1 and $($DefinitiveStatusCodes.Count)."
+}
+if ($MaxDedupCarryForwardSeconds -lt 1 -or $MaxDedupCarryForwardSeconds -gt 86400) {
+    throw 'MaxDedupCarryForwardSeconds must be between 1 and 86400.'
 }
 if (-not (Test-Path -LiteralPath $EvidencePath -PathType Leaf)) {
     throw "Live acceptance evidence file does not exist: $EvidencePath"
@@ -205,6 +217,7 @@ foreach ($statusCode in $DefinitiveStatusCodes) {
                 conversationSuffix = [string](Get-PropertyValue -InputObject $terminal -Name 'conversationSuffix')
                 assistantSuffix = [string](Get-PropertyValue -InputObject $terminal -Name 'assistantSuffix')
                 notificationSuffix = $notificationSuffix
+                deliveryProofMode = 'direct-window'
                 terminalObservedAt = [string](Get-PropertyValue -InputObject $terminal -Name 'observedAt')
                 watchdogStoppedAt = [string](Get-PropertyValue -InputObject $stop -Name 'observedAt')
                 toastPresentedAt = [string](Get-PropertyValue -InputObject $hostRecord -Name 'observedAt')
@@ -212,6 +225,112 @@ foreach ($statusCode in $DefinitiveStatusCodes) {
                 presentationState = [string](Get-PropertyValue -InputObject $helper -Name 'presentationState')
             }
             break
+        }
+
+        if ($null -eq $acceptedForCode) {
+            $suppression = @(
+                $allRecords |
+                    Where-Object {
+                        ([string](Get-PropertyValue -InputObject $_ -Name 'source') -ceq 'delivery-identity') -and
+                        ([string](Get-PropertyValue -InputObject $_ -Name 'status') -ceq 'claim-suppressed') -and
+                        ([string](Get-PropertyValue -InputObject $_ -Name 'reason') -ceq 'already-delivered-logical-turn') -and
+                        ([string](Get-PropertyValue -InputObject $_ -Name 'extensionVersion') -ceq $ExpectedVersion) -and
+                        (Test-SameLogicalTurnIdentity -Left $_ -Right $terminal) -and
+                        (Test-SameRequiredIdentity -Left $_ -Right $terminal -Name 'tabId') -and
+                        (Test-WithinWindow -Candidate $_ -Start $terminalAt -End $deliveryEnd)
+                    } |
+                    Sort-Object { Convert-ToDateTimeOffset (Get-PropertyValue -InputObject $_ -Name 'observedAt') } |
+                    Select-Object -First 1
+            ) | Select-Object -First 1
+
+            if ($null -ne $suppression) {
+                $carryStart = $terminalAt.AddSeconds(-[Math]::Max(1, $MaxDedupCarryForwardSeconds))
+                $priorClaims = @(
+                    $allRecords |
+                        Where-Object {
+                            ([string](Get-PropertyValue -InputObject $_ -Name 'source') -ceq 'delivery-identity') -and
+                            ([string](Get-PropertyValue -InputObject $_ -Name 'status') -ceq 'claim-accepted') -and
+                            ([string](Get-PropertyValue -InputObject $_ -Name 'extensionVersion') -ceq $ExpectedVersion) -and
+                            (Test-SameLogicalTurnIdentity -Left $_ -Right $terminal) -and
+                            (Test-SameRequiredIdentity -Left $_ -Right $terminal -Name 'tabId') -and
+                            (-not [string]::IsNullOrWhiteSpace([string](Get-PropertyValue -InputObject $_ -Name 'notificationSuffix'))) -and
+                            (Test-WithinWindow -Candidate $_ -Start $carryStart -End $terminalAt)
+                        } |
+                        Sort-Object { Convert-ToDateTimeOffset (Get-PropertyValue -InputObject $_ -Name 'observedAt') } -Descending
+                )
+
+                foreach ($claim in $priorClaims) {
+                    $notificationSuffix = [string](Get-PropertyValue -InputObject $claim -Name 'notificationSuffix')
+                    if ($usedNotificationSuffixes.Contains($notificationSuffix)) { continue }
+                    $claimAt = Convert-ToDateTimeOffset (Get-PropertyValue -InputObject $claim -Name 'observedAt')
+                    if ($null -eq $claimAt) { continue }
+
+                    $queueRecord = @(
+                        $allRecords |
+                            Where-Object {
+                                ([string](Get-PropertyValue -InputObject $_ -Name 'source') -ceq 'delivery-pipeline') -and
+                                ([string](Get-PropertyValue -InputObject $_ -Name 'status') -ceq 'rendered-terminal-notification-queued') -and
+                                ([string](Get-PropertyValue -InputObject $_ -Name 'extensionVersion') -ceq $ExpectedVersion) -and
+                                ([string](Get-PropertyValue -InputObject $_ -Name 'reason') -ceq 'rendered-terminal-authority') -and
+                                ([string](Get-PropertyValue -InputObject $_ -Name 'notificationSuffix') -ceq $notificationSuffix) -and
+                                (Test-SameRequiredIdentity -Left $_ -Right $terminal -Name 'conversationSuffix') -and
+                                (Test-WithinWindow -Candidate $_ -Start $claimAt.AddSeconds(-2) -End $terminalAt)
+                            } |
+                            Sort-Object { Convert-ToDateTimeOffset (Get-PropertyValue -InputObject $_ -Name 'observedAt') } |
+                            Select-Object -First 1
+                    ) | Select-Object -First 1
+                    if ($null -eq $queueRecord) { continue }
+
+                    $helper = @(
+                        $allRecords |
+                            Where-Object {
+                                ([string](Get-PropertyValue -InputObject $_ -Name 'source') -ceq 'delivery-pipeline') -and
+                                ([string](Get-PropertyValue -InputObject $_ -Name 'status') -ceq 'helper-durable-accepted') -and
+                                ([string](Get-PropertyValue -InputObject $_ -Name 'extensionVersion') -ceq $ExpectedVersion) -and
+                                ((Get-PropertyValue -InputObject $_ -Name 'presented') -eq $true) -and
+                                ([string](Get-PropertyValue -InputObject $_ -Name 'notificationSuffix') -ceq $notificationSuffix) -and
+                                (Test-SameRequiredIdentity -Left $_ -Right $terminal -Name 'conversationSuffix') -and
+                                (Test-WithinWindow -Candidate $_ -Start $claimAt -End $terminalAt)
+                            } |
+                            Sort-Object { Convert-ToDateTimeOffset (Get-PropertyValue -InputObject $_ -Name 'observedAt') } -Descending |
+                            Select-Object -First 1
+                    ) | Select-Object -First 1
+                    if ($null -eq $helper) { continue }
+
+                    $helperAt = Convert-ToDateTimeOffset (Get-PropertyValue -InputObject $helper -Name 'observedAt')
+                    if ($null -eq $helperAt) { continue }
+                    $hostRecord = @(
+                        $allRecords |
+                            Where-Object {
+                                ([string](Get-PropertyValue -InputObject $_ -Name 'source') -ceq 'host') -and
+                                ([string](Get-PropertyValue -InputObject $_ -Name 'status') -ceq 'toast-presented') -and
+                                ((Get-PropertyValue -InputObject $_ -Name 'presented') -eq $true) -and
+                                ([string](Get-PropertyValue -InputObject $_ -Name 'notificationSuffix') -ceq $notificationSuffix) -and
+                                (Test-SameRequiredIdentity -Left $_ -Right $terminal -Name 'conversationSuffix') -and
+                                (Test-WithinWindow -Candidate $_ -Start $helperAt.AddSeconds(-10) -End $helperAt.AddSeconds(2))
+                            } |
+                            Sort-Object { Convert-ToDateTimeOffset (Get-PropertyValue -InputObject $_ -Name 'observedAt') } -Descending |
+                            Select-Object -First 1
+                    ) | Select-Object -First 1
+                    if ($null -eq $hostRecord) { continue }
+
+                    [void]$usedNotificationSuffixes.Add($notificationSuffix)
+                    $acceptedForCode = [pscustomobject][ordered]@{
+                        statusCode = $statusCode
+                        conversationSuffix = [string](Get-PropertyValue -InputObject $terminal -Name 'conversationSuffix')
+                        assistantSuffix = [string](Get-PropertyValue -InputObject $terminal -Name 'assistantSuffix')
+                        notificationSuffix = $notificationSuffix
+                        deliveryProofMode = 'prior-presented-dedup'
+                        terminalObservedAt = [string](Get-PropertyValue -InputObject $terminal -Name 'observedAt')
+                        watchdogStoppedAt = [string](Get-PropertyValue -InputObject $stop -Name 'observedAt')
+                        dedupSuppressedAt = [string](Get-PropertyValue -InputObject $suppression -Name 'observedAt')
+                        toastPresentedAt = [string](Get-PropertyValue -InputObject $hostRecord -Name 'observedAt')
+                        helperAcceptedAt = [string](Get-PropertyValue -InputObject $helper -Name 'observedAt')
+                        presentationState = [string](Get-PropertyValue -InputObject $helper -Name 'presentationState')
+                    }
+                    break
+                }
+            }
         }
 
         if ($null -ne $acceptedForCode) { break }
