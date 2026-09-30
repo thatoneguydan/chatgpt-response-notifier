@@ -1,9 +1,9 @@
 # ChatGPT Response Notifier 0.9.100
 
-- Stops ordinary composer text mutations before they reach the notifier's downstream MutationObservers, eliminating per-keystroke callback churn in the monitor, terminal-status reader, watchdog authority and Quick Continue bridge.
-- Preserves draft safety with one lightweight signal only when the composer crosses empty/non-empty state, rather than republishing monitor state for every character typed.
-- Hot updates and programmatic reinjections now preserve the strict `page-dom-compat → composer typing guard → live readers` order, including already-open ChatGPT tabs.
-- Adds a Chromium regression that types forty successive composer values with no additional downstream observer callbacks after the initial draft transition, then proves draft-empty and real assistant mutations are still observed.
+- Extends the existing document-start DOM compatibility MutationObserver owner to suppress ordinary composer text records before terminal-status, watchdog and Quick Continue bridge callbacks can run, eliminating their per-keystroke assistant/status scans.
+- Preserves draft safety by allowing only the monitor-shaped observer to see empty/non-empty draft transitions; additional characters in an already-nonempty draft stay invisible to downstream observers.
+- Keeps the existing manifest, hot-update and programmatic-injection architecture intact: `page-dom-compat.js` remains the single observer wrapper and is rebound before live readers in already-open ChatGPT tabs.
+- Strengthens deterministic performance contracts while retaining the Chromium regression that requires ordinary typing to produce zero terminal scans and real assistant mutations to remain observable.
 
 ## Previous: 0.9.99
 
