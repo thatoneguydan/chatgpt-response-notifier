@@ -29,8 +29,8 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.permissions].sort(), ['alarms', 'scripting', 'storage', 'tabs'].sort());
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
-  assert.deepEqual(manifest.content_scripts[0].js, ['dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'send-transaction.js', 'runtime-reset.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.27');
+  assert.deepEqual(manifest.content_scripts[0].js, ['dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'send-transaction.js', 'runtime-reset.js', 'config-editor-style.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
+  assert.equal(manifest.version, '1.2.28');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -47,6 +47,7 @@ test('managed updater talks only to loopback, reloads itself only for a newer in
   assert.match(backgroundSource, /chrome\.scripting\.executeScript/);
   assert.match(backgroundSource, /'dom-compat\.js'/);
   assert.match(backgroundSource, /'runtime-reset\.js'/);
+  assert.match(backgroundSource, /'config-editor-style\.js'/);
   assert.match(backgroundSource, /'composer-text\.js'/);
   assert.match(backgroundSource, /'send-transaction\.js'/);
   assert.match(backgroundSource, /'conversation-state\.js'/);
@@ -341,12 +342,12 @@ test('manual timestamp preference is isolated by ChatGPT conversation and follow
 test('prompt and config APIs are versioned so reinjection cannot retain stale globals indefinitely', () => {
   assert.match(promptSource, /const RUNTIME_VERSION = 5/);
   assert.match(promptSource, /runtimeVersion: RUNTIME_VERSION/);
-  assert.match(configSource, /const RUNTIME_VERSION = 6/);
+  assert.match(configSource, /const RUNTIME_VERSION = 7/);
   assert.match(configSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
   assert.match(configSource, /chrome\.storage\.onChanged\.removeListener\(handleStorageChanged\)/);
-  assert.match(contentSource, /const RUNTIME_VERSION = 8/);
+  assert.match(contentSource, /const RUNTIME_VERSION = 9/);
   assert.match(hoverEditSource, /const RUNTIME_VERSION = 9/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
@@ -526,10 +527,10 @@ test('Project menu stays available for config editing when send controls are una
 });
 
 test('toolbar sync does not continuously retrigger itself through unchanged clock text', () => {
-  assert.match(contentSource, /const clockText = formatClock\(now\)/);
+  assert.match(contentSource, /const clockText = formatClock\(new Date\(\)\)/);
   assert.match(contentSource, /clock && clock\.textContent !== clockText/);
   assert.match(contentSource, /clock\.textContent = clockText/);
-  assert.doesNotMatch(contentSource, /if \(clock\) clock\.textContent = formatClock\(now\)/);
+  assert.doesNotMatch(contentSource, /if \(clock\) clock\.textContent = formatClock\(new Date\(\)\)/);
 });
 
 test('toolbar self-heals missing core controls and recovers from transient composer rerenders', () => {
@@ -545,7 +546,7 @@ test('toolbar self-heals missing core controls and recovers from transient compo
 });
 
 test('standalone runtime hot-replaces stale generations, restores a detached toolbar, and ignores notifier-only churn', () => {
-  assert.match(contentSource, /const RUNTIME_VERSION = 8/);
+  assert.match(contentSource, /const RUNTIME_VERSION = 9/);
   assert.match(contentSource, /const previousRuntime = globalThis\.__chatgptQuickContinueRuntime/);
   assert.match(contentSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.doesNotMatch(contentSource, /__chatgptQuickContinueInstalled/);

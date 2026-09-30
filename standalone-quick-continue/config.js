@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 6;
+  const RUNTIME_VERSION = 7;
   const previousRuntime = globalThis.ChatGPTQuickContinueConfig;
   if (Number(previousRuntime?.runtimeVersion || 0) === RUNTIME_VERSION) return;
   try { previousRuntime?.dispose?.(); } catch {}
@@ -9,6 +9,31 @@
   const STORAGE_KEY = 'quickContinueConfig';
   const DEFAULT_MANUAL_TIMESTAMP_TEXT = '[{time}] {message}';
   const MAX_PROJECTS = 40;
+  const STATUS_CODES = Object.freeze([
+    'PLANNING_ACTIVE',
+    'COMPLETE_APPLIED',
+    'COMPLETE_NO_CHANGES',
+    'BLOCKED_HUMAN',
+    'INCOMPLETE_LIMIT',
+    'INCOMPLETE_TOOL_FAILURE',
+    'INCOMPLETE_CONTINUE',
+    'INCOMPLETE_HANDOFF'
+  ]);
+  const DEFAULT_STOP_ON_STATUS = Object.freeze({
+    PLANNING_ACTIVE: true,
+    COMPLETE_APPLIED: true,
+    COMPLETE_NO_CHANGES: true,
+    BLOCKED_HUMAN: true,
+    INCOMPLETE_LIMIT: false,
+    INCOMPLETE_TOOL_FAILURE: false,
+    INCOMPLETE_CONTINUE: false,
+    INCOMPLETE_HANDOFF: false
+  });
+  const DEFAULT_WATCHDOG = Object.freeze({
+    timerMinutes: 30,
+    attempts: 3,
+    stopOnStatus: DEFAULT_STOP_ON_STATUS
+  });
   const listeners = new Set();
   let current = null;
   let loadPromise = null;
@@ -31,7 +56,6 @@
     if (!Array.isArray(value)) throw new Error('"projects" must be an array.');
     const seen = new Set();
     const projects = [];
-
     for (const entry of value) {
       if (typeof entry !== 'string') throw new Error('Every project title must be a string.');
       const title = normalizeInline(entry);
@@ -42,36 +66,57 @@
       projects.push(title);
       if (projects.length >= MAX_PROJECTS) break;
     }
-
     return projects;
   }
 
-  function normalizeConfig(value) {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) {
-      throw new Error('Config must be a JSON object.');
+  function normalizeWatchdog(value) {
+    const raw = value == null ? {} : value;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('"watchdog" must be an object.');
+    const timerMinutes = raw.timerMinutes == null ? DEFAULT_WATCHDOG.timerMinutes : Number(raw.timerMinutes);
+    if (!Number.isFinite(timerMinutes) || timerMinutes < 0.1 || timerMinutes > 1440) {
+      throw new Error('"watchdog.timerMinutes" must be between 0.1 and 1440.');
     }
+    const attemptsRaw = raw.attempts == null ? DEFAULT_WATCHDOG.attempts : Number(raw.attempts);
+    if (!Number.isInteger(attemptsRaw) || attemptsRaw < 0 || attemptsRaw > 20) {
+      throw new Error('"watchdog.attempts" must be an integer between 0 and 20.');
+    }
+    const stopRaw = raw.stopOnStatus == null ? {} : raw.stopOnStatus;
+    if (!stopRaw || typeof stopRaw !== 'object' || Array.isArray(stopRaw)) {
+      throw new Error('"watchdog.stopOnStatus" must be an object.');
+    }
+    for (const key of Object.keys(stopRaw)) {
+      if (!STATUS_CODES.includes(key)) throw new Error(`Unknown GitHub status code in watchdog.stopOnStatus: ${key}`);
+      if (typeof stopRaw[key] !== 'boolean') throw new Error(`watchdog.stopOnStatus.${key} must be true or false.`);
+    }
+    const stopOnStatus = {};
+    for (const code of STATUS_CODES) {
+      stopOnStatus[code] = Object.prototype.hasOwnProperty.call(stopRaw, code)
+        ? stopRaw[code]
+        : DEFAULT_STOP_ON_STATUS[code];
+    }
+    return Object.freeze({
+      timerMinutes: Math.round(timerMinutes * 1000) / 1000,
+      attempts: attemptsRaw,
+      stopOnStatus: Object.freeze(stopOnStatus)
+    });
+  }
 
+  function normalizeConfig(value) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Config must be a JSON object.');
     const continueText = ensureTimePlaceholder(value.continueText);
     const projectText = ensureTimePlaceholder(value.projectText);
     const manualTimestampText = ensureManualMessageTemplate(value.manualTimestampText);
-
     if (!continueText) throw new Error('"continueText" must not be blank.');
     if (!projectText) throw new Error('"projectText" must not be blank.');
     if (!manualTimestampText) throw new Error('"manualTimestampText" must not be blank.');
-    if (!projectText.includes('{project}')) {
-      throw new Error('"projectText" must include {project}.');
-    }
-    if (!manualTimestampText.includes('{time}')) {
-      throw new Error('"manualTimestampText" must include {time}.');
-    }
-    if (!manualTimestampText.includes('{message}')) {
-      throw new Error('"manualTimestampText" must include {message}.');
-    }
-
+    if (!projectText.includes('{project}')) throw new Error('"projectText" must include {project}.');
+    if (!manualTimestampText.includes('{time}')) throw new Error('"manualTimestampText" must include {time}.');
+    if (!manualTimestampText.includes('{message}')) throw new Error('"manualTimestampText" must include {message}.');
     return Object.freeze({
       continueText,
       projectText,
       manualTimestampText,
+      watchdog: normalizeWatchdog(value.watchdog),
       projects: Object.freeze(normalizeProjectList(value.projects))
     });
   }
@@ -81,6 +126,11 @@
       continueText: value.continueText,
       projectText: value.projectText,
       manualTimestampText: value.manualTimestampText,
+      watchdog: {
+        timerMinutes: value.watchdog.timerMinutes,
+        attempts: value.watchdog.attempts,
+        stopOnStatus: { ...value.watchdog.stopOnStatus }
+      },
       projects: [...value.projects]
     };
   }
@@ -88,9 +138,7 @@
   function notify() {
     if (!current) return;
     const snapshot = cloneConfig(current);
-    for (const listener of listeners) {
-      try { listener(snapshot); } catch {}
-    }
+    for (const listener of listeners) { try { listener(snapshot); } catch {} }
   }
 
   async function bundledConfig() {
@@ -102,28 +150,16 @@
   async function load() {
     if (current) return cloneConfig(current);
     if (loadPromise) return loadPromise;
-
     loadPromise = (async () => {
       const defaults = await bundledConfig();
       let stored = null;
-      try {
-        stored = (await chrome.storage.local.get(STORAGE_KEY))?.[STORAGE_KEY] ?? null;
-      } catch {}
-
+      try { stored = (await chrome.storage.local.get(STORAGE_KEY))?.[STORAGE_KEY] ?? null; } catch {}
       if (stored !== null) {
-        try { current = normalizeConfig(stored); }
-        catch { current = defaults; }
-      } else {
-        current = defaults;
-      }
-
+        try { current = normalizeConfig(stored); } catch { current = defaults; }
+      } else current = defaults;
       loadPromise = null;
       return cloneConfig(current);
-    })().catch((error) => {
-      loadPromise = null;
-      throw error;
-    });
-
+    })().catch((error) => { loadPromise = null; throw error; });
     return loadPromise;
   }
 
@@ -151,9 +187,7 @@
   function subscribe(listener) {
     if (typeof listener !== 'function') return () => {};
     listeners.add(listener);
-    if (current) {
-      try { listener(cloneConfig(current)); } catch {}
-    }
+    if (current) { try { listener(cloneConfig(current)); } catch {} }
     return () => listeners.delete(listener);
   }
 
@@ -161,19 +195,10 @@
     if (areaName !== 'local' || !Object.prototype.hasOwnProperty.call(changes, STORAGE_KEY)) return;
     const next = changes[STORAGE_KEY]?.newValue;
     if (next === undefined) {
-      bundledConfig()
-        .then((value) => {
-          current = value;
-          notify();
-        })
-        .catch(() => {});
+      bundledConfig().then((value) => { current = value; notify(); }).catch(() => {});
       return;
     }
-
-    try {
-      current = normalizeConfig(next);
-      notify();
-    } catch {}
+    try { current = normalizeConfig(next); notify(); } catch {}
   }
 
   chrome.storage.onChanged.addListener(handleStorageChanged);
@@ -186,6 +211,8 @@
     serialize,
     subscribe,
     normalizeConfig,
+    normalizeWatchdog,
+    statusCodes: STATUS_CODES,
     dispose() {
       try { chrome.storage.onChanged.removeListener(handleStorageChanged); } catch {}
       listeners.clear();

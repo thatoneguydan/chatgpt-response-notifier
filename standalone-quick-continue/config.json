@@ -2,6 +2,20 @@
   "continueText": "[{time}] Continue until you finish or need something from me.",
   "projectText": "[{time}] Continue {project} from canonical GitHub state until you finish or need me.",
   "manualTimestampText": "[{time}] {message}",
+  "watchdog": {
+    "timerMinutes": 30,
+    "attempts": 3,
+    "stopOnStatus": {
+      "PLANNING_ACTIVE": true,
+      "COMPLETE_APPLIED": true,
+      "COMPLETE_NO_CHANGES": true,
+      "BLOCKED_HUMAN": true,
+      "INCOMPLETE_LIMIT": false,
+      "INCOMPLETE_TOOL_FAILURE": false,
+      "INCOMPLETE_CONTINUE": false,
+      "INCOMPLETE_HANDOFF": false
+    }
+  },
   "projects": [
     "campaign desk",
     "notifier extension",
