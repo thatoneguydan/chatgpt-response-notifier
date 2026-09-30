@@ -18,10 +18,9 @@ test('recovery observation is demand-driven instead of a high-frequency full-pag
   assert.match(recovery, /CHATGPT_RECOVERY_LIVE_INSPECT/);
   assert.match(recovery, /CHATGPT_RECOVERY_LIVE_REPUBLISH/);
 
-  assert.match(rebind, /const RUNTIME_GENERATION = 4/);
+  assert.match(rebind, /const RUNTIME_GENERATION = 3/);
   assert.match(rebind, /__chatgptNotifierPageRuntimeRebindGeneration/);
   assert.match(rebind, /previousGeneration === RUNTIME_GENERATION/);
-  assert.match(rebind, /__chatgptNotifierTypingPerformanceGuard/);
 
   const getAttributeStart = compat.indexOf('function notifierCompatGetAttribute');
   const getAttributeBody = compat.slice(getAttributeStart);
@@ -58,9 +57,8 @@ test('mutation-driven live readers use quiet debounces with hard ceilings', () =
   }
 });
 
-test('extension-owned countdown and ordinary composer mutations are filtered before expensive live observers', () => {
+test('toolbar countdown and composer text churn are filtered before expensive live observers', () => {
   const compat = readText('extension/page-dom-compat.js');
-  const typingGuard = readText('extension/composer-typing-performance-guard.js');
   const manifest = JSON.parse(readText('extension/manifest.json'));
   const compatBackground = readText('extension/page-runtime-compat-background.js');
   const postUpdate = readText('extension/terminal-stop-post-update-recovery-background.js');
@@ -68,38 +66,29 @@ test('extension-owned countdown and ordinary composer mutations are filtered bef
   assert.match(compat, /RUNTIME_VERSION = 6/);
   assert.match(compat, /OWNED_ROOT_SELECTOR = '#chatgpt-quick-continue-toolbar'/);
   assert.match(compat, /OWNED_MUTATION_PASSTHROUGH_ATTRIBUTES = new Set\(\['data-watchdog-settings'\]\)/);
+  assert.match(compat, /MONITOR_ATTRIBUTE_FILTER = Object\.freeze/);
+  assert.match(compat, /function isComposerTextMutation\(record\)/);
+  assert.match(compat, /function isMonitorObservation\(options\)/);
+  assert.match(compat, /function filterObserverMutations\(records, state\)/);
+  assert.match(compat, /state\?\.monitorObservation !== true \|\| deliveredDraftTransition/);
+  assert.match(compat, /state\.lastDraftPresent === present/);
   assert.match(compat, /class NotifierFilteredMutationObserver/);
   assert.match(compat, /if \(filtered\.length\) callback\(filtered, facade\)/);
   assert.match(compat, /globalThis\.MutationObserver = NotifierFilteredMutationObserver/);
   assert.match(compat, /globalThis\.ChatGPTNotifierOwnedDomMutationFilter = mutationFilter/);
   assert.match(compat, /globalThis\.MutationObserver === NotifierFilteredMutationObserver/);
 
-  assert.match(typingGuard, /RUNTIME_VERSION = 2/);
-  assert.match(typingGuard, /class ComposerQuietMutationObserver/);
-  assert.match(typingGuard, /function isMonitorObservation\(options\)/);
-  assert.match(typingGuard, /state\?\.monitorObservation !== true \|\| deliveredDraftTransition/);
-  assert.match(typingGuard, /if \(state\.lastDraftPresent === present\) continue/);
-  assert.doesNotMatch(typingGuard, /createElement|dispatchEvent|document\.addEventListener\('input'/);
-
   const documentStartReaders = manifest.content_scripts[0]?.js || [];
   assert.equal(documentStartReaders[0], 'page-dom-compat.js');
-  assert.equal(documentStartReaders[1], 'composer-typing-performance-guard.js');
-  assert.ok(documentStartReaders.indexOf('composer-typing-performance-guard.js') < documentStartReaders.indexOf('monitor-script.js'));
-  assert.ok(documentStartReaders.indexOf('composer-typing-performance-guard.js') < documentStartReaders.indexOf('terminal-status-live-observer.js'));
-  assert.ok(documentStartReaders.indexOf('composer-typing-performance-guard.js') < documentStartReaders.indexOf('watchdog-page-authority-v3.js'));
-  const allStartupScripts = manifest.content_scripts.flatMap((entry) => entry.js || []);
-  assert.equal(allStartupScripts.filter((file) => file === 'composer-typing-performance-guard.js').length, 1);
-  assert.equal(allStartupScripts.filter((file) => file === 'page-dom-compat.js').length, 1);
+  assert.ok(documentStartReaders.indexOf('page-dom-compat.js') < documentStartReaders.indexOf('monitor-script.js'));
+  assert.ok(documentStartReaders.indexOf('page-dom-compat.js') < documentStartReaders.indexOf('terminal-status-live-observer.js'));
 
-  assert.match(compatBackground, /PAGE_COMPAT_FILES = Object\.freeze/);
-  assert.match(compatBackground, /'page-dom-compat\.js'/);
-  assert.match(compatBackground, /'composer-typing-performance-guard\.js'/);
-  assert.match(compatBackground, /files: orderedFiles/);
+  assert.match(compatBackground, /PAGE_COMPAT_FILE = 'page-dom-compat\.js'/);
+  assert.match(compatBackground, /files: \[PAGE_COMPAT_FILE, \.\.\.files\]/);
 
   const rebindIndex = postUpdate.indexOf("'page-runtime-rebind.js'");
   const compatIndex = postUpdate.indexOf("'page-dom-compat.js'");
-  const typingIndex = postUpdate.indexOf("'composer-typing-performance-guard.js'");
   const monitorIndex = postUpdate.indexOf("'monitor-script.js'");
-  assert.ok(rebindIndex >= 0 && compatIndex > rebindIndex && typingIndex > compatIndex && monitorIndex > typingIndex,
-    'hot-tab reinjection must dispose old runtimes, patch page compatibility, suppress composer churn, then recreate live readers');
+  assert.ok(rebindIndex >= 0 && compatIndex > rebindIndex && monitorIndex > compatIndex,
+    'hot-tab reinjection must dispose old runtimes, patch MutationObserver through page compatibility, then recreate live readers');
 });
