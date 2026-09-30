@@ -101,9 +101,16 @@ test('a native extension reload replaces controls on the open page without refre
   const worker = await extensionWorker(extensionContext, 'ChatGPT Quick Continue');
   const token = `native-reload-${Date.now()}`;
   await fixturePage.locator(toolbar).evaluate((root, value) => { root.dataset.nativeReloadMarker = value; }, token);
-  await worker.evaluate((value) => { globalThis.__nativeReloadProbe = value; chrome.runtime.reload(); }, token).catch((error) => {
-    if (!/closed|destroyed|restarted/i.test(error.message)) throw error;
-  });
+  await worker.evaluate((value) => { globalThis.__nativeReloadProbe = value; }, token);
+  const extensionId = new URL(worker.url()).hostname;
+  const settings = await extensionContext.newPage();
+  try {
+    await settings.goto('chrome://extensions/');
+    const loadError = await settings.evaluate((id) => chrome.developerPrivate.reload(id, { failQuietly: true, populateErrorForUnpacked: true }), extensionId);
+    expect(loadError, 'Chrome must complete the native unpacked-extension reload').toBeFalsy();
+  } finally {
+    await settings.close();
+  }
   await expect.poll(async () => {
     const current = await extensionWorker(extensionContext, 'ChatGPT Quick Continue');
     // Chrome/Playwright may reuse the Worker handle across a native reload.
