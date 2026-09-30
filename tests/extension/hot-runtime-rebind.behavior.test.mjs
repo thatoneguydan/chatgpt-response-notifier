@@ -10,10 +10,11 @@ test('post-update rebind replaces all critical isolated-world runtimes without r
   const recovery = read('extension/terminal-stop-post-update-recovery-background.js');
   const rebind = read('extension/page-runtime-rebind.js');
 
-  assert.match(recovery, /const RUNTIME_VERSION = 3/);
+  assert.match(recovery, /const RUNTIME_VERSION = 4/);
   const requiredFiles = [
     'page-runtime-rebind.js',
     'page-dom-compat.js',
+    'composer-typing-performance-guard.js',
     'attachment-script.js',
     'content-script.js',
     'persistence-script.js',
@@ -31,7 +32,8 @@ test('post-update rebind replaces all critical isolated-world runtimes without r
   ];
   for (const file of requiredFiles) assert.ok(recovery.includes(`'${file}'`), file);
   assert.ok(recovery.indexOf("'page-runtime-rebind.js'") < recovery.indexOf("'page-dom-compat.js'"));
-  assert.ok(recovery.indexOf("'page-dom-compat.js'") < recovery.indexOf("'monitor-script.js'"));
+  assert.ok(recovery.indexOf("'page-dom-compat.js'") < recovery.indexOf("'composer-typing-performance-guard.js'"));
+  assert.ok(recovery.indexOf("'composer-typing-performance-guard.js'") < recovery.indexOf("'monitor-script.js'"));
   assert.ok(recovery.indexOf("'attachment-script.js'") < recovery.indexOf("'content-script.js'"));
   assert.ok(recovery.indexOf("'rendered-terminal-status.js'") < recovery.indexOf("'terminal-status-live-observer.js'"));
   assert.doesNotMatch(recovery, /chrome\.tabs\.reload/);
@@ -40,6 +42,7 @@ test('post-update rebind replaces all critical isolated-world runtimes without r
   assert.match(rebind, /chrome\.runtime\.getManifest\(\)\.version/);
   assert.match(rebind, /__chatgptNotifierPageRuntimeRebindVersion/);
   assert.match(rebind, /previousVersion === extensionVersion/);
+  assert.match(rebind, /__chatgptNotifierTypingPerformanceGuard/);
   assert.match(rebind, /__chatgptNotifierAttachmentRuntime/);
   assert.match(rebind, /__chatgptNotifierMonitorRuntime/);
   assert.match(rebind, /__chatgptNotifierStatusRuntime/);
@@ -57,10 +60,12 @@ test('post-update rebind replaces all critical isolated-world runtimes without r
   assert.doesNotThrow(() => new vm.Script(recovery));
 });
 
-test('all programmatic turn readers receive the semantic DOM adapter', () => {
+test('all programmatic turn readers receive the semantic DOM adapter and typing guard', () => {
   const compat = read('extension/page-runtime-compat-background.js');
   assert.match(compat, /quick-continue-monitor-bridge\.js/);
   assert.match(compat, /watchdog-page-authority-v3\.js/);
   assert.match(compat, /terminal-status-live-observer\.js/);
-  assert.match(compat, /PAGE_COMPAT_FILE = 'page-dom-compat\.js'/);
+  assert.match(compat, /PAGE_COMPAT_FILES = Object\.freeze/);
+  assert.match(compat, /'page-dom-compat\.js'/);
+  assert.match(compat, /'composer-typing-performance-guard\.js'/);
 });
