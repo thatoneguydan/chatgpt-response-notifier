@@ -29,7 +29,6 @@
       ],
       "js": [
         "page-dom-compat.js",
-        "composer-typing-performance-guard.js",
         "attachment-script.js",
         "content-script.js",
         "persistence-script.js",
@@ -40,7 +39,15 @@
         "bounded-recovery-script.js",
         "status-script.js",
         "terminal-status-live-observer.js",
-        "recovery-script.js",
+        "recovery-script.js"
+      ],
+      "run_at": "document_start"
+    },
+    {
+      "matches": [
+        "https://chatgpt.com/*"
+      ],
+      "js": [
         "watchdog-page-authority-v3.js"
       ],
       "run_at": "document_start"
