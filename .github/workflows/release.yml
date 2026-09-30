@@ -5,7 +5,13 @@ on:
     branches: [main]
     paths-ignore:
       - update/manifest.json
-      - standalone-quick-continue/update/manifest.json
+      - standalone-quick-continue/**
+      - tests/standalone-quick-continue*
+      - tests/extension/quick-continue-*
+      - tests/playwright/quick-continue-*
+      - tools/quick-continue-*
+      - .github/workflows/quick-continue-*.yml
+      - .github/workflows/release.yml
   workflow_dispatch:
 
 permissions:

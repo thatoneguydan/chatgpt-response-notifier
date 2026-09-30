@@ -13,7 +13,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: chatgpt-extension-release-publish
+  group: quick-continue-release-publish
   cancel-in-progress: false
 
 jobs:
