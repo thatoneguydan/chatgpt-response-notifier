@@ -14,7 +14,10 @@
     'quick-continue-monitor-bridge.js',
     'watchdog-page-authority-v3.js'
   ]);
-  const PAGE_COMPAT_FILE = 'page-dom-compat.js';
+  const PAGE_COMPAT_FILES = Object.freeze([
+    'page-dom-compat.js',
+    'composer-typing-performance-guard.js'
+  ]);
 
   const originalExecuteScript = chrome.scripting?.executeScript?.bind(chrome.scripting);
   const originalReload = chrome.tabs?.reload?.bind(chrome.tabs);
@@ -24,8 +27,9 @@
       let next = injection;
       try {
         const files = Array.isArray(injection?.files) ? injection.files.map(String) : null;
-        if (files && files.some((file) => NEEDS_PAGE_COMPAT.has(file)) && !files.includes(PAGE_COMPAT_FILE)) {
-          next = { ...injection, files: [PAGE_COMPAT_FILE, ...files] };
+        if (files && files.some((file) => NEEDS_PAGE_COMPAT.has(file))) {
+          const missingCompat = PAGE_COMPAT_FILES.filter((file) => !files.includes(file));
+          if (missingCompat.length) next = { ...injection, files: [...missingCompat, ...files] };
         }
       } catch {}
       return callback === undefined
@@ -50,8 +54,8 @@
   }
 
   globalThis.__chatgptNotifierPageRuntimeCompatBackground = Object.freeze({
-    version: 2,
-    pageCompatFile: PAGE_COMPAT_FILE,
+    version: 3,
+    pageCompatFiles: PAGE_COMPAT_FILES,
     hardReloads: true
   });
 })();
