@@ -217,7 +217,7 @@ test('config controller validates and normalizes simple watchdog settings', asyn
   vm.runInNewContext(configSource, context);
   const api = context.ChatGPTQuickContinueConfig;
   const initial = await api.load();
-  assert.deepEqual(initial.simpleWatchdog, bundledConfig.simpleWatchdog);
+  assert.equal(JSON.stringify(initial.simpleWatchdog), JSON.stringify(bundledConfig.simpleWatchdog));
 
   const saved = await api.save({
     continueText: 'Continue this work.',
@@ -232,12 +232,12 @@ test('config controller validates and normalizes simple watchdog settings', asyn
     },
     projects: ['Campaign Desk']
   });
-  assert.deepEqual(saved.simpleWatchdog, {
+  assert.equal(JSON.stringify(saved.simpleWatchdog), JSON.stringify({
     timerMinutes: 12.5,
     attempts: 5,
     stopToRefreshSeconds: 18,
     refreshToContinueSeconds: 27
-  });
+  }));
   await assert.rejects(() => api.save({
     continueText: 'Continue.', projectText: 'Continue {project}.', manualTimestampText: '[{time}] {message}',
     watchdog: bundledConfig.watchdog,
