@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { test, expect, repoRoot, evaluateInExtensionWorld } from './extension-fixture.mjs';
+import { test, expect, repoRoot, evaluateInExtensionWorld, extensionWorker } from './extension-fixture.mjs';
 
 const toolbar = '#chatgpt-quick-continue-toolbar';
 const simple = '#chatgpt-quick-continue-simple-watchdog';
@@ -9,7 +9,7 @@ const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, 'standalone-quic
 const runtimeFiles = manifest.content_scripts[0].js;
 
 async function hotReplace(context) {
-  const worker = context.serviceWorkers().find((worker) => worker.url().endsWith('/background.js'));
+  const worker = await extensionWorker(context, 'ChatGPT Quick Continue');
   expect(worker, 'Quick Continue MV3 worker must be loaded').toBeTruthy();
   await worker.evaluate(async (files) => {
     const tabs = await chrome.tabs.query({ url: ['https://chatgpt.com/*'] });

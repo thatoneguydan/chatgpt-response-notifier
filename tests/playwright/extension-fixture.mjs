@@ -315,6 +315,43 @@ export async function extensionWorldDiagnostics(page) {
   }
 }
 
+export async function extensionWorker(context, name) {
+  for (const worker of context.serviceWorkers()) {
+    if (!worker.url().startsWith('chrome-extension://')) continue;
+    const workerName = await worker.evaluate(() => chrome.runtime.getManifest().name).catch(() => '');
+    if (workerName === name) return worker;
+  }
+  return null;
+}
+
+async function requireExtensionWorkers(context, testInfo) {
+  try {
+    await expect.poll(async () => {
+      const workers = await Promise.all(['ChatGPT Quick Continue', 'ChatGPT Response Notifier'].map((name) => extensionWorker(context, name)));
+      return workers.every(Boolean);
+    }, { timeout: 10_000, message: 'Both native MV3 background workers must start before testing extension behavior.' }).toBe(true);
+  } catch (error) {
+    // Read only this disposable profile's native extension errors. Content
+    // scripts alone do not prove that the background service worker registered.
+    const page = await context.newPage();
+    let nativeDiagnostics;
+    try {
+      await page.goto('chrome://extensions/');
+      nativeDiagnostics = await page.evaluate(async () => {
+        const extensions = await chrome.developerPrivate.getExtensionsInfo({ includeDisabled: true, includeTerminated: true });
+        return extensions.map(({ id, name, state, version, manifestErrors, runtimeErrors, views }) => ({ id, name, state, version, manifestErrors, runtimeErrors, views }));
+      });
+    } catch (diagnosticError) {
+      nativeDiagnostics = { error: String(diagnosticError) };
+    } finally {
+      await page.close();
+    }
+    const diagnostics = { workers: context.serviceWorkers().map((worker) => worker.url()), nativeDiagnostics };
+    await testInfo.attach('extension-worker-startup.json', { body: JSON.stringify(diagnostics, null, 2), contentType: 'application/json' });
+    throw new Error(`${error.message}\nNative extension worker diagnostics: ${JSON.stringify(diagnostics)}`);
+  }
+}
+
 export const test = base.extend({
   extensionContext: async ({}, use, testInfo) => {
     const profile = testInfo.outputPath('chromium-profile');
@@ -340,6 +377,7 @@ export const test = base.extend({
       // prevents the machine's live managed updater from replacing exact-head
       // extension bytes while the isolated browser regression is running.
       await new Promise((resolve) => setTimeout(resolve, 1500));
+      await requireExtensionWorkers(context, testInfo);
       await use(context);
     } finally {
       await context.close();
