@@ -21,7 +21,7 @@ test('rendered terminal observer reports bounded identity-missing diagnostics in
 });
 
 test('rendered terminal observer coalesces mutation storms instead of rescanning every 40ms', () => {
-  assert.match(source, /const RUNTIME_VERSION = 4;/);
+  assert.match(source, /const RUNTIME_VERSION = 5;/);
   assert.match(source, /const SCAN_DEBOUNCE_MS = 250;/);
   assert.match(source, /const MAX_SCAN_INTERVAL_MS = 1500;/);
   assert.match(source, /let maxScanTimer = null;/);
