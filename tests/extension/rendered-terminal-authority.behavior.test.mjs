@@ -212,13 +212,14 @@ test('live terminal parser rejects quoted/code examples and non-terminal standal
 
 test('rendered terminal authority is hot-bound and feeds both watchdog parking and durable notification delivery', () => {
   const manifest = JSON.parse(read('extension/manifest.json'));
+  const version = read('VERSION.txt').trim();
   const observer = read('extension/terminal-status-live-observer.js');
   const authority = read('extension/terminal-watchdog-authority-background.js');
   const hotRecovery = read('extension/terminal-stop-post-update-recovery-background.js');
   const rebind = read('extension/page-runtime-rebind.js');
   const streamBridge = read('extension/response-stream-status-bridge.js');
 
-  assert.equal(manifest.version, '0.9.100');
+  assert.equal(manifest.version, version);
   assert.ok(manifest.content_scripts[0].js.includes('rendered-terminal-status.js'));
   assert.ok(manifest.content_scripts[0].js.includes('terminal-status-live-observer.js'));
   assert.ok(manifest.content_scripts[0].js.indexOf('rendered-terminal-status.js') < manifest.content_scripts[0].js.indexOf('terminal-status-live-observer.js'));
