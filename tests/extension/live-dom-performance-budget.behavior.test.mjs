@@ -63,7 +63,7 @@ test('toolbar countdown and composer text churn are filtered before expensive li
   const compatBackground = readText('extension/page-runtime-compat-background.js');
   const postUpdate = readText('extension/terminal-stop-post-update-recovery-background.js');
 
-  assert.match(compat, /RUNTIME_VERSION = 6/);
+  assert.match(compat, /RUNTIME_VERSION = 7/);
   assert.match(compat, /OWNED_ROOT_SELECTOR = '#chatgpt-quick-continue-toolbar'/);
   assert.match(compat, /OWNED_MUTATION_PASSTHROUGH_ATTRIBUTES = new Set\(\['data-watchdog-settings'\]\)/);
   assert.match(compat, /MONITOR_ATTRIBUTE_FILTER = Object\.freeze/);
