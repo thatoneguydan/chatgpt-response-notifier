@@ -128,7 +128,10 @@
     const element = elementForMutationNode(record.target);
     if (!element) return null;
     const cached = composerMutationRoots.get(element);
-    if (cached?.isConnected !== false) return cached || null;
+    if (cached) {
+      if (cached.isConnected !== false) return cached;
+      composerMutationRoots.delete(element);
+    }
 
     const composer = nativeClosestTo(element, '#prompt-textarea, [contenteditable="true"], textarea');
     if (!composer) return null;
@@ -309,8 +312,7 @@
   }
 
   function compatibleRoleNodes(root) {
-    const legacy = nativeQueryAll(root, LEGACY_TURN_SELECTOR);
-    const roles = nativeQueryAll(root, SEMANTIC_ROLE_SELECTOR).filter((node) => semanticRole(node));
+    const legacy = nativeQueryAll(root, LEGANTIC_ROLE_SELECTOR).filter((node) => semanticRole(node));
     hydrateLegacyTurnRoles(root, legacy);
     if (!legacy.length && !roles.length) return speakerLabelTurns(root).filter((node) => semanticRole(node));
 
