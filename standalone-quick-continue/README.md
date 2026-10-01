@@ -4,7 +4,7 @@ A small, separately installable Chrome extension for timestamped continuation pr
 
 Quick Continue remains separate from ChatGPT Response Notifier for its send controls, editable config, per-chat timestamp state, and the Simple fallback watchdog. When the notifier helper is installed, Quick Continue also uses that already-running local helper as a narrowly scoped managed-update transport. If the helper is unavailable, the installed Quick Continue runtime keeps working normally; only managed updates pause.
 
-When ChatGPT Response Notifier is enabled, it can add its own smart monitoring-state indicator and countdown around the Quick Continue controls. Quick Continue's **Simple** watchdog is deliberately independent of that smart monitor.
+When ChatGPT Response Notifier is enabled, it can add its own smart monitoring-state indicator and countdown around the Quick Continue controls. Quick Continue's **Simple** watchdog remains independently enabled, timed, and attempt-bounded.
 
 ## Controls
 
@@ -19,9 +19,16 @@ Manual timestamp mode is remembered independently for each ChatGPT conversation.
 
 ## Simple fallback watchdog
 
-Simple mode is intentionally dumb. It does **not** inspect GitHub status codes, assistant completion state, notifier monitoring state, smart watchdog eligibility, or whether a response appears finished. Its purpose is to remain useful when the smarter notifier/watchdog path is broken.
+Simple remains the deterministic fallback path. Its timer does not depend on assistant completion state, notifier monitoring state, smart-watchdog eligibility, or any ChatGPT API. If no respected terminal GitHub status appears, the fixed timer sequence proceeds exactly as configured.
 
-Turning **Simple** on starts a fresh timer and resets its attempt count. Every attempt follows the same fixed sequence:
+Simple can optionally react to an exact terminal `[GITHUB_STATUS: ...]` footer from the current assistant turn. `watchdog.stopOnStatus` remains the shared table that classifies each status as a **stop class** (`true`) or **continue class** (`false`). The two Simple settings decide whether each class is respected:
+
+- `simpleWatchdog.respectStopStatusCodes: true` — a stop-class footer turns Simple off immediately. `false` ignores that class and leaves the Simple timer running.
+- `simpleWatchdog.respectContinueStatusCodes: true` — a continue-class footer sends one immediate Continue through the Simple send path, consumes one Simple attempt, and starts the next Simple countdown. `false` ignores that class and leaves the timer running.
+
+Ignoring a class never converts it into the opposite action. A status-triggered Continue is deduplicated by the exact conversation/assistant-turn/status footer and shares the same finite attempt cap as timer-triggered sends. If that send consumes the final attempt, Simple remains green/on in `Auto-continues exhausted` state until explicitly turned off.
+
+Turning **Simple** on starts a fresh timer and resets its attempt count. Every timer-driven attempt follows the same fixed sequence:
 
 1. Wait `simpleWatchdog.timerMinutes`.
 2. Click ChatGPT's native **Stop** button if one is present. A missing Stop button does not cancel the sequence.
@@ -31,11 +38,11 @@ Turning **Simple** on starts a fresh timer and resets its attempt count. Every a
 6. Replace the composer contents with the configured `continueText` and submit it through Quick Continue's normal send transaction.
 7. Count one attempt. If attempts remain, start a new `timerMinutes` countdown and repeat.
 
-The phase, deadline, attempt count, conversation identity, and settings snapshot are persisted in Chrome local extension storage. Chrome's extension alarm system owns the phase deadlines, so a page refresh or ordinary MV3 service-worker sleep does not erase the loop.
+The phase, deadline, attempt count, conversation identity, settings snapshot, status classification, and last handled status fingerprint are persisted in Chrome local extension storage. Chrome's extension alarm system owns the phase deadlines, so a page refresh or ordinary MV3 service-worker sleep does not erase the loop. A footer already present when Simple is enabled is baselined rather than treated as a new status event.
 
 At the send phase Simple can replace an existing composer draft under its "send when due" contract. It remains scoped to the same tab and, once created, the same conversation.
 
-If smart monitoring is also enabled, both systems remain independent and can act on their own schedules. Use Simple by itself when you want the deterministic fallback behavior and do not want the smart watchdog competing with it.
+If smart monitoring is also enabled, both systems remain separately timed. The normal watchdog always follows its `stopOnStatus` classification; the two `respect*StatusCodes` switches now belong only to Simple.
 
 ## Editable JSON
 
@@ -64,7 +71,9 @@ The bundled `config.json` is the readable default. **Project > Edit** edits the 
     "timerMinutes": 30,
     "attempts": 3,
     "stopToRefreshSeconds": 30,
-    "refreshToContinueSeconds": 30
+    "refreshToContinueSeconds": 30,
+    "respectStopStatusCodes": true,
+    "respectContinueStatusCodes": true
   },
   "projects": [
     "campaign desk",
@@ -73,7 +82,7 @@ The bundled `config.json` is the readable default. **Project > Edit** edits the 
 }
 ```
 
-`watchdog` belongs to the smart notifier integration. `simpleWatchdog` belongs only to the independent Simple fallback.
+`watchdog` owns the smart-watchdog timing/attempt settings and the shared status classification table. `simpleWatchdog` owns the independent Simple fallback timing plus whether Simple respects either status class.
 
 Simple fields:
 
@@ -81,8 +90,10 @@ Simple fields:
 - `attempts` — maximum number of Continue sends for one Simple run. Valid range: 0–20; `0` prevents Simple from starting.
 - `stopToRefreshSeconds` — delay after the Stop click before reloading. Valid range: 0–3600 seconds.
 - `refreshToContinueSeconds` — delay after reload before sending Continue. Valid range: 0–3600 seconds.
+- `respectStopStatusCodes` — whether Simple acts on statuses classified `true` in `watchdog.stopOnStatus`.
+- `respectContinueStatusCodes` — whether Simple acts on statuses classified `false` in `watchdog.stopOnStatus`.
 
-The current values are snapshotted when **Simple** is enabled. To restart the timer/attempt count with newly edited values, toggle Simple off and back on.
+Existing saved configurations from 1.2.33/1.2.34 that still contain the two `respect*StatusCodes` values under `watchdog` are migrated automatically: their values are carried into `simpleWatchdog`, and the normalized saved/serialized form removes them from `watchdog`.
 
 Template placeholders:
 
@@ -90,7 +101,7 @@ Template placeholders:
 - `{project}` — selected or typed project name; required in `projectText`.
 - `{message}` — manually typed message; required in `manualTimestampText`.
 
-If a Continue or Project template omits `{time}`, config normalization inserts `[{time}] ` at the front. Existing saved configurations that predate newer fields receive their defaults during normalization, so adding Simple does not require manually rebuilding an older saved config.
+If a Continue or Project template omits `{time}`, config normalization inserts `[{time}] ` at the front. Existing saved configurations that predate newer fields receive their defaults during normalization.
 
 To put the timestamp and manual message on separate lines:
 
@@ -111,7 +122,7 @@ The installed default file is `%LOCALAPPDATA%\ChatGPTQuickContinue\Extension\con
 
 Normal **Continue** and **Project** actions do not overwrite an existing draft. Manual timestamping only runs on trusted user Send/Enter actions, ignores Shift+Enter and IME composition, and does not stamp an already timestamped message again. Quick Continue's own programmatic sends are excluded from the manual timestamp hook.
 
-Simple mode is the explicit exception to the normal draft-preservation rule at its scheduled send phase, as described above. This exception is limited to Simple's own enabled run.
+Simple mode is the explicit exception to the normal draft-preservation rule at its scheduled or status-triggered send phase. This exception is limited to Simple's own enabled run.
 
 Config and per-chat state stay in Chrome local extension storage. Quick Continue does not poll ChatGPT APIs or send ChatGPT network requests outside the same page submission/reload actions a user requested.
 

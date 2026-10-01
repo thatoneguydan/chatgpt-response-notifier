@@ -12,6 +12,7 @@ const SIMPLE_STATE_KEY = 'quickContinueSimpleWatchdogStates';
 const SIMPLE_ALARM_PREFIX = 'quick-continue-simple-watchdog:';
 const SET = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_SET';
 const GET = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_GET';
+const STATUS = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATUS';
 const ACTION = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_ACTION';
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -43,7 +44,7 @@ function createHarness() {
 
   const chrome = {
     runtime: {
-      getManifest: () => ({ version: '1.2.34' }),
+      getManifest: () => ({ version: '1.2.35' }),
       reload() {},
       onMessage: { addListener: (listener) => messageListeners.push(listener) },
       onStartup: { addListener: (listener) => startupListeners.push(listener) },
@@ -131,14 +132,17 @@ test('Simple mode executes the fixed sequence and stays enabled after attempts e
     timerMinutes: 7,
     attempts: 2,
     stopToRefreshSeconds: 11,
-    refreshToContinueSeconds: 13
+    refreshToContinueSeconds: 13,
+    respectStopStatusCodes: true,
+    respectContinueStatusCodes: true
   };
 
   const enabled = await harness.sendRuntimeMessage({
     type: SET,
     enabled: true,
     conversationId: 'simple-mode-test',
-    settings
+    settings,
+    stopOnStatus: config.watchdog.stopOnStatus
   });
   assert.equal(enabled.enabled, true);
   assert.equal(enabled.phase, 'countdown');
@@ -188,36 +192,171 @@ test('Simple mode executes the fixed sequence and stays enabled after attempts e
   assert.equal(harness.state(), null);
 });
 
-test('Simple mode progresses when Stop is absent and does not consult GitHub status policy', async () => {
+test('Simple owns both status-class gates while watchdog.stopOnStatus remains the shared classification table', () => {
   assert.deepEqual(config.simpleWatchdog, {
     timerMinutes: 30,
     attempts: 3,
     stopToRefreshSeconds: 30,
-    refreshToContinueSeconds: 30
+    refreshToContinueSeconds: 30,
+    respectStopStatusCodes: true,
+    respectContinueStatusCodes: true
   });
+  assert.equal(config.watchdog.respectStopStatusCodes, undefined);
+  assert.equal(config.watchdog.respectContinueStatusCodes, undefined);
+  assert.match(backgroundSource, /SIMPLE_STATUS_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATUS'/);
+  assert.match(backgroundSource, /const stopClass = state\.stopOnStatus\[statusCode\] === true/);
+  assert.match(backgroundSource, /respectStopStatusCodes !== false/);
+  assert.match(backgroundSource, /respectContinueStatusCodes !== false/);
+  assert.match(conversationStateSource, /latestSimpleTerminal/);
+  assert.match(conversationStateSource, /candidate\.closest\?\.\('pre, code, blockquote'\)/);
+});
 
-  for (const code of [
-    'PLANNING_ACTIVE',
-    'COMPLETE_APPLIED',
-    'COMPLETE_NO_CHANGES',
-    'BLOCKED_HUMAN',
-    'INCOMPLETE_LIMIT',
-    'INCOMPLETE_TOOL_FAILURE',
-    'INCOMPLETE_CONTINUE',
-    'INCOMPLETE_HANDOFF'
-  ]) {
-    assert.equal(backgroundSource.includes(code), false, `background Simple authority must ignore ${code}`);
-    assert.equal(conversationStateSource.includes(code), false, `page Simple authority must ignore ${code}`);
-  }
+test('respected stop-class status disables Simple; ignored stop-class status leaves its timer intact', async () => {
+  const stopping = createHarness();
+  await stopping.sendRuntimeMessage({
+    type: SET,
+    enabled: true,
+    conversationId: 'simple-mode-test',
+    settings: config.simpleWatchdog,
+    stopOnStatus: config.watchdog.stopOnStatus
+  });
+  const stopped = await stopping.sendRuntimeMessage({
+    type: STATUS,
+    conversationId: 'simple-mode-test',
+    statusCode: 'COMPLETE_APPLIED',
+    fingerprint: 'simple-mode-test|assistant-1|COMPLETE_APPLIED',
+    settings: config.simpleWatchdog,
+    stopOnStatus: config.watchdog.stopOnStatus
+  });
+  assert.equal(stopped.enabled, false);
+  assert.equal(stopped.statusAction, 'stop');
+  assert.equal(stopping.state(), null);
+  assert.equal(stopping.actionMessages().filter((entry) => entry.action === 'send-continue').length, 0);
 
-  assert.match(backgroundSource, /await chrome\.tabs\.sendMessage\(tabId, \{ type: SIMPLE_ACTION_MESSAGE, action: 'stop' \}\);[\s\S]*state\.phase = 'stop-wait'/);
-  assert.match(backgroundSource, /try \{ await chrome\.tabs\.reload\(tabId\); \} catch \{\}[\s\S]*state\.phase = 'refresh-wait'/);
-  assert.match(backgroundSource, /action: 'send-continue'[\s\S]*state\.attemptsUsed = Number/);
-  assert.match(backgroundSource, /state\.phase = 'exhausted'[\s\S]*state\.exhausted = true[\s\S]*saveAndScheduleSimpleState/);
-  assert.match(conversationStateSource, /active && exhausted \? 'Auto-continues exhausted'/);
-  assert.match(conversationStateSource, /background: simpleEnabled \? '#16a34a'/);
-  assert.match(conversationStateSource, /button\[data-testid="stop-button"\]/);
-  assert.match(conversationStateSource, /sendApi\.submit\(composer, text, \{ replace: true, timeoutMs: 5000 \}\)/);
+  const ignoring = createHarness();
+  const ignoredSettings = { ...config.simpleWatchdog, respectStopStatusCodes: false };
+  await ignoring.sendRuntimeMessage({
+    type: SET,
+    enabled: true,
+    conversationId: 'simple-mode-test',
+    settings: ignoredSettings,
+    stopOnStatus: config.watchdog.stopOnStatus
+  });
+  const originalNextAt = ignoring.state().nextAt;
+  const ignored = await ignoring.sendRuntimeMessage({
+    type: STATUS,
+    conversationId: 'simple-mode-test',
+    statusCode: 'COMPLETE_APPLIED',
+    fingerprint: 'simple-mode-test|assistant-1|COMPLETE_APPLIED',
+    settings: ignoredSettings,
+    stopOnStatus: config.watchdog.stopOnStatus
+  });
+  assert.equal(ignored.enabled, true);
+  assert.equal(ignored.statusAction, 'ignored');
+  assert.equal(ignoring.state().phase, 'countdown');
+  assert.equal(ignoring.state().nextAt, originalNextAt);
+  assert.equal(ignoring.actionMessages().filter((entry) => entry.action === 'send-continue').length, 0);
+});
+
+test('respected continue-class status sends once, consumes one Simple attempt, resets cadence, and dedupes the same footer', async () => {
+  const harness = createHarness();
+  await harness.sendRuntimeMessage({
+    type: SET,
+    enabled: true,
+    conversationId: 'simple-mode-test',
+    settings: config.simpleWatchdog,
+    stopOnStatus: config.watchdog.stopOnStatus
+  });
+  const fingerprint = 'simple-mode-test|assistant-2|INCOMPLETE_CONTINUE';
+  const continued = await harness.sendRuntimeMessage({
+    type: STATUS,
+    conversationId: 'simple-mode-test',
+    statusCode: 'INCOMPLETE_CONTINUE',
+    fingerprint,
+    settings: config.simpleWatchdog,
+    stopOnStatus: config.watchdog.stopOnStatus
+  });
+  assert.equal(continued.enabled, true);
+  assert.equal(continued.statusAction, 'continue');
+  assert.equal(continued.sent, true);
+  assert.equal(harness.state().attemptsUsed, 1);
+  assert.equal(harness.state().phase, 'countdown');
+  assert.equal(harness.actionMessages().filter((entry) => entry.action === 'send-continue').length, 1);
+
+  const duplicate = await harness.sendRuntimeMessage({
+    type: STATUS,
+    conversationId: 'simple-mode-test',
+    statusCode: 'INCOMPLETE_CONTINUE',
+    fingerprint,
+    settings: config.simpleWatchdog,
+    stopOnStatus: config.watchdog.stopOnStatus
+  });
+  assert.equal(duplicate.statusAction, 'duplicate');
+  assert.equal(harness.state().attemptsUsed, 1);
+  assert.equal(harness.actionMessages().filter((entry) => entry.action === 'send-continue').length, 1);
+});
+
+test('ignored continue-class status does not send, while a respected final allowed attempt leaves Simple enabled and exhausted', async () => {
+  const ignoredHarness = createHarness();
+  const ignoredSettings = { ...config.simpleWatchdog, respectContinueStatusCodes: false };
+  await ignoredHarness.sendRuntimeMessage({
+    type: SET,
+    enabled: true,
+    conversationId: 'simple-mode-test',
+    settings: ignoredSettings,
+    stopOnStatus: config.watchdog.stopOnStatus
+  });
+  const ignored = await ignoredHarness.sendRuntimeMessage({
+    type: STATUS,
+    conversationId: 'simple-mode-test',
+    statusCode: 'INCOMPLETE_LIMIT',
+    fingerprint: 'simple-mode-test|assistant-3|INCOMPLETE_LIMIT',
+    settings: ignoredSettings,
+    stopOnStatus: config.watchdog.stopOnStatus
+  });
+  assert.equal(ignored.statusAction, 'ignored');
+  assert.equal(ignoredHarness.state().attemptsUsed, 0);
+  assert.equal(ignoredHarness.actionMessages().filter((entry) => entry.action === 'send-continue').length, 0);
+
+  const exhaustedHarness = createHarness();
+  const oneAttempt = { ...config.simpleWatchdog, attempts: 1 };
+  await exhaustedHarness.sendRuntimeMessage({
+    type: SET,
+    enabled: true,
+    conversationId: 'simple-mode-test',
+    settings: oneAttempt,
+    stopOnStatus: config.watchdog.stopOnStatus
+  });
+  const exhausted = await exhaustedHarness.sendRuntimeMessage({
+    type: STATUS,
+    conversationId: 'simple-mode-test',
+    statusCode: 'INCOMPLETE_LIMIT',
+    fingerprint: 'simple-mode-test|assistant-4|INCOMPLETE_LIMIT',
+    settings: oneAttempt,
+    stopOnStatus: config.watchdog.stopOnStatus
+  });
+  assert.equal(exhausted.statusAction, 'continue');
+  assert.equal(exhausted.enabled, true);
+  assert.equal(exhausted.exhausted, true);
+  assert.equal(exhaustedHarness.state().phase, 'exhausted');
+  assert.equal(exhaustedHarness.state().attemptsUsed, 1);
+  assert.equal(exhaustedHarness.alarms.has(SIMPLE_ALARM_PREFIX + exhaustedHarness.tab.id), false);
+});
+
+test('Simple persists an enable-time terminal baseline so a pre-existing footer cannot fire after runtime replacement', async () => {
+  const harness = createHarness();
+  const baselineStatusFingerprint = 'simple-mode-test|assistant-old|COMPLETE_APPLIED';
+  const enabled = await harness.sendRuntimeMessage({
+    type: SET,
+    enabled: true,
+    conversationId: 'simple-mode-test',
+    settings: config.simpleWatchdog,
+    stopOnStatus: config.watchdog.stopOnStatus,
+    baselineStatusFingerprint
+  });
+  assert.equal(enabled.enabled, true);
+  assert.equal(harness.state().lastStatusFingerprint, baselineStatusFingerprint);
+  assert.equal(enabled.lastStatusFingerprint, baselineStatusFingerprint);
 });
 
 test('Simple mode is mechanically scoped to the exact saved conversation', async () => {
@@ -226,7 +365,8 @@ test('Simple mode is mechanically scoped to the exact saved conversation', async
     type: SET,
     enabled: true,
     conversationId: 'simple-mode-test',
-    settings: config.simpleWatchdog
+    settings: config.simpleWatchdog,
+    stopOnStatus: config.watchdog.stopOnStatus
   });
   assert.equal(enabled.enabled, true);
 
@@ -242,7 +382,7 @@ test('Simple starts on an unsaved chat and keeps its click deadline when the cha
   const harness = createHarness();
   harness.tab.url = 'https://chatgpt.com/';
   const startedAt = Date.now() - 2000;
-  const enabled = await harness.sendRuntimeMessage({ type: SET, enabled: true, conversationId: '', startedAt, settings: config.simpleWatchdog });
+  const enabled = await harness.sendRuntimeMessage({ type: SET, enabled: true, conversationId: '', startedAt, settings: config.simpleWatchdog, stopOnStatus: config.watchdog.stopOnStatus });
   assert.equal(enabled.enabled, true);
   assert.equal(enabled.nextAt, startedAt + config.simpleWatchdog.timerMinutes * 60_000);
   const deadline = enabled.nextAt;
@@ -255,7 +395,7 @@ test('Simple starts on an unsaved chat and keeps its click deadline when the cha
 
 test('Simple switches off without loading settings or receiving a response', async () => {
   const harness = createHarness();
-  await harness.sendRuntimeMessage({ type: SET, enabled: true, conversationId: 'simple-mode-test', settings: config.simpleWatchdog });
+  await harness.sendRuntimeMessage({ type: SET, enabled: true, conversationId: 'simple-mode-test', settings: config.simpleWatchdog, stopOnStatus: config.watchdog.stopOnStatus });
   const disabled = await harness.sendRuntimeMessage({ type: SET, enabled: false });
   assert.equal(disabled.enabled, false);
   assert.equal(harness.state(), null);

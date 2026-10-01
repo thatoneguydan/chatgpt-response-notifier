@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 9;
+  const RUNTIME_VERSION = 10;
   const previousRuntime = globalThis.ChatGPTQuickContinueConfig;
   if (Number(previousRuntime?.runtimeVersion || 0) === RUNTIME_VERSION) return;
   try { previousRuntime?.dispose?.(); } catch {}
@@ -32,15 +32,15 @@
   const DEFAULT_WATCHDOG = Object.freeze({
     timerMinutes: 30,
     attempts: 3,
-    respectStopStatusCodes: true,
-    respectContinueStatusCodes: true,
     stopOnStatus: DEFAULT_STOP_ON_STATUS
   });
   const DEFAULT_SIMPLE_WATCHDOG = Object.freeze({
     timerMinutes: 30,
     attempts: 3,
     stopToRefreshSeconds: 30,
-    refreshToContinueSeconds: 30
+    refreshToContinueSeconds: 30,
+    respectStopStatusCodes: true,
+    respectContinueStatusCodes: true
   });
   const listeners = new Set();
   let current = null;
@@ -88,18 +88,6 @@
     if (!Number.isInteger(attemptsRaw) || attemptsRaw < 0 || attemptsRaw > 20) {
       throw new Error('"watchdog.attempts" must be an integer between 0 and 20.');
     }
-    const respectStopStatusCodes = raw.respectStopStatusCodes == null
-      ? DEFAULT_WATCHDOG.respectStopStatusCodes
-      : raw.respectStopStatusCodes;
-    if (typeof respectStopStatusCodes !== 'boolean') {
-      throw new Error('"watchdog.respectStopStatusCodes" must be true or false.');
-    }
-    const respectContinueStatusCodes = raw.respectContinueStatusCodes == null
-      ? DEFAULT_WATCHDOG.respectContinueStatusCodes
-      : raw.respectContinueStatusCodes;
-    if (typeof respectContinueStatusCodes !== 'boolean') {
-      throw new Error('"watchdog.respectContinueStatusCodes" must be true or false.');
-    }
     const stopRaw = raw.stopOnStatus == null ? {} : raw.stopOnStatus;
     if (!stopRaw || typeof stopRaw !== 'object' || Array.isArray(stopRaw)) {
       throw new Error('"watchdog.stopOnStatus" must be an object.');
@@ -117,15 +105,14 @@
     return Object.freeze({
       timerMinutes: Math.round(timerMinutes * 1000) / 1000,
       attempts: attemptsRaw,
-      respectStopStatusCodes,
-      respectContinueStatusCodes,
       stopOnStatus: Object.freeze(stopOnStatus)
     });
   }
 
-  function normalizeSimpleWatchdog(value) {
+  function normalizeSimpleWatchdog(value, legacyWatchdog = null) {
     const raw = value == null ? {} : value;
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('"simpleWatchdog" must be an object.');
+    const legacy = legacyWatchdog && typeof legacyWatchdog === 'object' && !Array.isArray(legacyWatchdog) ? legacyWatchdog : {};
     const timerMinutes = raw.timerMinutes == null ? DEFAULT_SIMPLE_WATCHDOG.timerMinutes : Number(raw.timerMinutes);
     if (!Number.isFinite(timerMinutes) || timerMinutes < 0.1 || timerMinutes > 1440) {
       throw new Error('"simpleWatchdog.timerMinutes" must be between 0.1 and 1440.');
@@ -146,11 +133,25 @@
     if (!Number.isFinite(refreshToContinueSeconds) || refreshToContinueSeconds < 0 || refreshToContinueSeconds > 3600) {
       throw new Error('"simpleWatchdog.refreshToContinueSeconds" must be between 0 and 3600.');
     }
+    const respectStopStatusCodes = raw.respectStopStatusCodes == null
+      ? (typeof legacy.respectStopStatusCodes === 'boolean' ? legacy.respectStopStatusCodes : DEFAULT_SIMPLE_WATCHDOG.respectStopStatusCodes)
+      : raw.respectStopStatusCodes;
+    if (typeof respectStopStatusCodes !== 'boolean') {
+      throw new Error('"simpleWatchdog.respectStopStatusCodes" must be true or false.');
+    }
+    const respectContinueStatusCodes = raw.respectContinueStatusCodes == null
+      ? (typeof legacy.respectContinueStatusCodes === 'boolean' ? legacy.respectContinueStatusCodes : DEFAULT_SIMPLE_WATCHDOG.respectContinueStatusCodes)
+      : raw.respectContinueStatusCodes;
+    if (typeof respectContinueStatusCodes !== 'boolean') {
+      throw new Error('"simpleWatchdog.respectContinueStatusCodes" must be true or false.');
+    }
     return Object.freeze({
       timerMinutes: Math.round(timerMinutes * 1000) / 1000,
       attempts,
       stopToRefreshSeconds: Math.round(stopToRefreshSeconds * 1000) / 1000,
-      refreshToContinueSeconds: Math.round(refreshToContinueSeconds * 1000) / 1000
+      refreshToContinueSeconds: Math.round(refreshToContinueSeconds * 1000) / 1000,
+      respectStopStatusCodes,
+      respectContinueStatusCodes
     });
   }
 
@@ -165,12 +166,14 @@
     if (!projectText.includes('{project}')) throw new Error('"projectText" must include {project}.');
     if (!manualTimestampText.includes('{time}')) throw new Error('"manualTimestampText" must include {time}.');
     if (!manualTimestampText.includes('{message}')) throw new Error('"manualTimestampText" must include {message}.');
+    const watchdog = normalizeWatchdog(value.watchdog);
+    const simpleWatchdog = normalizeSimpleWatchdog(value.simpleWatchdog, value.watchdog);
     return Object.freeze({
       continueText,
       projectText,
       manualTimestampText,
-      watchdog: normalizeWatchdog(value.watchdog),
-      simpleWatchdog: normalizeSimpleWatchdog(value.simpleWatchdog),
+      watchdog,
+      simpleWatchdog,
       projects: Object.freeze(normalizeProjectList(value.projects))
     });
   }
@@ -183,15 +186,15 @@
       watchdog: {
         timerMinutes: value.watchdog.timerMinutes,
         attempts: value.watchdog.attempts,
-        respectStopStatusCodes: value.watchdog.respectStopStatusCodes,
-        respectContinueStatusCodes: value.watchdog.respectContinueStatusCodes,
         stopOnStatus: { ...value.watchdog.stopOnStatus }
       },
       simpleWatchdog: {
         timerMinutes: value.simpleWatchdog.timerMinutes,
         attempts: value.simpleWatchdog.attempts,
         stopToRefreshSeconds: value.simpleWatchdog.stopToRefreshSeconds,
-        refreshToContinueSeconds: value.simpleWatchdog.refreshToContinueSeconds
+        refreshToContinueSeconds: value.simpleWatchdog.refreshToContinueSeconds,
+        respectStopStatusCodes: value.simpleWatchdog.respectStopStatusCodes,
+        respectContinueStatusCodes: value.simpleWatchdog.respectContinueStatusCodes
       },
       projects: [...value.projects]
     };
