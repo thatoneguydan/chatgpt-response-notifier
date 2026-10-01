@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 6;
+  const RUNTIME_VERSION = 7;
   try { globalThis.__chatgptNotifierPageDomCompat?.dispose?.(); } catch {}
 
   if (typeof Document === 'undefined' || typeof Element === 'undefined') return;
@@ -61,6 +61,7 @@
   const speakerRoles = new WeakMap();
   const speakerTurnCache = new WeakMap();
   const syntheticTurnIds = new WeakMap();
+  const composerMutationRoots = new WeakMap();
   let nextSyntheticTurnId = 1;
 
   function nativeQueryAll(root, selector) {
@@ -117,28 +118,37 @@
     return Array.from(records || []).filter((record) => !isOwnedMutation(record));
   }
 
-  function isComposerTextMutation(record) {
-    // Terminal-code readers never need draft text. Preserve structural composer
-    // replacement, attributes and send/Stop controls for their real owners.
-    if (!['childList', 'characterData'].includes(record?.type)) return false;
+  function stableComposerIdentity(composer) {
+    return nativeAttribute(composer, 'id') === 'prompt-textarea'
+      || nativeAttribute(composer, 'data-testid') === 'prompt-textarea';
+  }
+
+  function composerForTextMutation(record) {
+    if (!['childList', 'characterData'].includes(record?.type)) return null;
     const element = elementForMutationNode(record.target);
-    if (!element) return false;
+    if (!element) return null;
+    const cached = composerMutationRoots.get(element);
+    if (cached?.isConnected !== false) return cached || null;
+
     const composer = nativeClosestTo(element, '#prompt-textarea, [contenteditable="true"], textarea');
-    if (!composer) return false;
-    if (nativeClosestTo(composer, SEMANTIC_ROLE_SELECTOR) || nativeClosestTo(composer, LEGACY_TURN_SELECTOR)) return false;
-    // Speaker-label-only turns have synthetic roles rather than native role
-    // attributes. Keep their inline editors visible without rescanning labels
-    // on every keystroke in the actual composer.
+    if (!composer) return null;
+    if (nativeClosestTo(composer, SEMANTIC_ROLE_SELECTOR) || nativeClosestTo(composer, LEGACY_TURN_SELECTOR)) return null;
     for (let ancestor = composer; ancestor; ancestor = ancestor.parentElement) {
-      if (speakerRoles.has(ancestor)) return false;
+      if (speakerRoles.has(ancestor)) return null;
     }
-    return true;
+    // The normal ChatGPT composer has a stable id/testid. Cache only that
+    // positive case, so inline editors inside assistant/user turns are always
+    // revalidated instead of inheriting a stale classification.
+    if (stableComposerIdentity(composer)) composerMutationRoots.set(element, composer);
+    return composer;
+  }
+
+  function isComposerTextMutation(record) {
+    return Boolean(composerForTextMutation(record));
   }
 
   function draftPresentForMutation(record) {
-    const element = elementForMutationNode(record?.target);
-    if (!element) return null;
-    const composer = nativeClosestTo(element, '#prompt-textarea, [contenteditable="true"][data-testid="prompt-textarea"], textarea[data-testid="prompt-textarea"]');
+    const composer = composerForTextMutation(record);
     if (!composer) return null;
     try {
       const value = 'value' in composer ? composer.value : composer.textContent;
@@ -157,16 +167,19 @@
   function filterObserverMutations(records, state) {
     const output = [];
     let deliveredDraftTransition = false;
-    for (const record of filterOwnedMutations(records)) {
-      if (!isComposerTextMutation(record)) {
+    for (const record of Array.from(records || [])) {
+      // Composer typing is the hot path. Classify it first so a keystroke never
+      // pays the unrelated toolbar-owned closest()/matches() checks.
+      if (isComposerTextMutation(record)) {
+        if (state?.monitorObservation !== true || deliveredDraftTransition) continue;
+        const present = draftPresentForMutation(record);
+        if (present === null || state.lastDraftPresent === present) continue;
+        state.lastDraftPresent = present;
+        deliveredDraftTransition = true;
         output.push(record);
         continue;
       }
-      if (state?.monitorObservation !== true || deliveredDraftTransition) continue;
-      const present = draftPresentForMutation(record);
-      if (present === null || state.lastDraftPresent === present) continue;
-      state.lastDraftPresent = present;
-      deliveredDraftTransition = true;
+      if (isOwnedMutation(record)) continue;
       output.push(record);
     }
     return output;
@@ -284,9 +297,6 @@
 
   function hydrateLegacyTurnRoles(root, legacy) {
     if (!legacy.some((turn) => !semanticRole(turn))) return;
-    // Current ChatGPT still emits stable conversation-turn wrappers in some
-    // layouts while moving speaker identity to an exact screen-reader label.
-    // Recover only those existing wrappers; never infer identity from prose.
     speakerLabelTurns(root);
   }
 
@@ -304,9 +314,6 @@
     hydrateLegacyTurnRoles(root, legacy);
     if (!legacy.length && !roles.length) return speakerLabelTurns(root).filter((node) => semanticRole(node));
 
-    // Preserve native semantic role nodes when they still exist inside a legacy
-    // wrapper. Add a synthetic legacy wrapper only when it has no native role
-    // descendant, so boundary accounting cannot double-count the same turn.
     const syntheticLegacy = legacy.filter((turn) => (
       semanticRole(turn)
       && !roles.some((roleNode) => turn === roleNode || turn.contains?.(roleNode))
