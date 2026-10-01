@@ -1,4 +1,11 @@
-# ChatGPT Response Notifier 0.9.101
+# ChatGPT Response Notifier 0.9.102
+
+- Exposes the notifier's existing rendered-terminal authority as a sanitized in-page status bridge so Quick Continue Simple can consume the exact same proven terminal detector and stop/continue classification instead of maintaining a second DOM parser.
+- Reuses the rendered-terminal detector's current-turn boundary handling, including sibling `COMPLETE_APPLIED` footer support, quoted/code/list exclusions, conflict rejection, and stable prompt/assistant identity.
+- Adds a read-only current-terminal query for Simple enable/restore baselining, preventing a footer that was already visible before Simple was enabled from firing as a new status.
+- Pairs with Quick Continue 1.2.36, where respected stop-class statuses can still disable Simple after its automatic attempts are exhausted and continue-class statuses remain bounded by the same finite Simple attempt budget.
+
+## Previous: 0.9.101
 
 - Preserves Monitor, manual timestamp, and Simple toggle state while a newly created ChatGPT chat transitions from the unsaved route to its assigned conversation ID, instead of repainting the controls off during route ownership transfer.
 - Adds `watchdog.respectStopStatusCodes` and `watchdog.respectContinueStatusCodes` to Quick Continue JSON. The existing `stopOnStatus` table still defines the stop/continue classes, while either class can now be independently ignored without being reinterpreted as the opposite action.
