@@ -6,8 +6,29 @@ const SIMPLE_STATE_KEY = 'quickContinueSimpleWatchdogStates';
 const SIMPLE_ALARM_PREFIX = 'quick-continue-simple-watchdog:';
 const SIMPLE_SET_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_SET';
 const SIMPLE_GET_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_GET';
+const SIMPLE_STATUS_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATUS';
 const SIMPLE_ACTION_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_ACTION';
 const SIMPLE_STATE_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATE';
+const STATUS_CODES = Object.freeze([
+  'PLANNING_ACTIVE',
+  'COMPLETE_APPLIED',
+  'COMPLETE_NO_CHANGES',
+  'BLOCKED_HUMAN',
+  'INCOMPLETE_LIMIT',
+  'INCOMPLETE_TOOL_FAILURE',
+  'INCOMPLETE_CONTINUE',
+  'INCOMPLETE_HANDOFF'
+]);
+const DEFAULT_STOP_ON_STATUS = Object.freeze({
+  PLANNING_ACTIVE: true,
+  COMPLETE_APPLIED: true,
+  COMPLETE_NO_CHANGES: true,
+  BLOCKED_HUMAN: true,
+  INCOMPLETE_LIMIT: false,
+  INCOMPLETE_TOOL_FAILURE: false,
+  INCOMPLETE_CONTINUE: false,
+  INCOMPLETE_HANDOFF: false
+});
 const CONTENT_FILES = [
   'runtime-reset.js',
   'dom-compat.js',
@@ -119,16 +140,30 @@ function normalizeSimpleSettings(value) {
   const attempts = Number(raw.attempts);
   const stopToRefreshSeconds = Number(raw.stopToRefreshSeconds);
   const refreshToContinueSeconds = Number(raw.refreshToContinueSeconds);
+  const respectStopStatusCodes = raw.respectStopStatusCodes == null ? true : raw.respectStopStatusCodes;
+  const respectContinueStatusCodes = raw.respectContinueStatusCodes == null ? true : raw.respectContinueStatusCodes;
   if (!Number.isFinite(timerMinutes) || timerMinutes < 0.1 || timerMinutes > 1440) return null;
   if (!Number.isInteger(attempts) || attempts < 0 || attempts > 20) return null;
   if (!Number.isFinite(stopToRefreshSeconds) || stopToRefreshSeconds < 0 || stopToRefreshSeconds > 3600) return null;
   if (!Number.isFinite(refreshToContinueSeconds) || refreshToContinueSeconds < 0 || refreshToContinueSeconds > 3600) return null;
+  if (typeof respectStopStatusCodes !== 'boolean' || typeof respectContinueStatusCodes !== 'boolean') return null;
   return {
     timerMinutes,
     attempts,
     stopToRefreshSeconds,
-    refreshToContinueSeconds
+    refreshToContinueSeconds,
+    respectStopStatusCodes,
+    respectContinueStatusCodes
   };
+}
+
+function normalizeStopOnStatus(value) {
+  const raw = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const normalized = {};
+  for (const code of STATUS_CODES) {
+    normalized[code] = typeof raw[code] === 'boolean' ? raw[code] : DEFAULT_STOP_ON_STATUS[code];
+  }
+  return normalized;
 }
 
 async function readSimpleStates() {
@@ -160,6 +195,7 @@ function publicSimpleState(state, extras = {}) {
     attemptsRemaining: Math.max(0, Number(state.settings?.attempts || 0) - Number(state.attemptsUsed || 0)),
     nextAt: Number(state.nextAt || 0),
     exhausted: state.exhausted === true || state.phase === 'exhausted',
+    lastStatusCode: String(state.lastStatusCode || ''),
     ...extras
   };
 }
@@ -225,7 +261,10 @@ async function setSimpleWatchdog(sender, message) {
     attemptsUsed: 0,
     nextAt: Math.min(Date.now(), Math.max(Date.now() - 10_000, Number(message.startedAt) || Date.now())) + (settings.timerMinutes * 60 * 1000),
     exhausted: false,
-    settings
+    settings,
+    stopOnStatus: normalizeStopOnStatus(message?.stopOnStatus),
+    lastStatusFingerprint: '',
+    lastStatusCode: ''
   };
   return saveAndScheduleSimpleState(state);
 }
@@ -256,6 +295,75 @@ async function tabForSimpleState(state) {
   if (currentId !== state.conversationId) return null;
   if (!currentId && String(tab.url || '').split('#')[0] !== state.initialUrl) return null;
   return tab;
+}
+
+async function applySimpleStatus(sender, message) {
+  const tabId = sender?.tab?.id;
+  if (!Number.isInteger(tabId)) return { enabled: false, reason: 'No ChatGPT tab identity.' };
+  const states = await readSimpleStates();
+  const state = states[stateKey(tabId)];
+  if (!state?.enabled || state.exhausted === true || state.phase === 'exhausted') return publicSimpleState(state);
+
+  const conversationId = String(message?.conversationId || '').trim();
+  if (!conversationId || state.conversationId !== conversationId || conversationIdFromUrl(sender?.tab?.url) !== conversationId) {
+    return publicSimpleState(state, { statusAction: 'ignored-chat' });
+  }
+
+  const statusCode = String(message?.statusCode || '').trim();
+  if (!STATUS_CODES.includes(statusCode)) return publicSimpleState(state, { statusAction: 'ignored-status' });
+  const fingerprint = String(message?.fingerprint || `${conversationId}|${statusCode}`).trim();
+  if (!fingerprint || fingerprint === state.lastStatusFingerprint) return publicSimpleState(state, { statusAction: 'duplicate' });
+
+  const refreshedSettings = normalizeSimpleSettings(message?.settings);
+  if (refreshedSettings) state.settings = refreshedSettings;
+  if (message?.stopOnStatus && typeof message.stopOnStatus === 'object' && !Array.isArray(message.stopOnStatus)) {
+    state.stopOnStatus = normalizeStopOnStatus(message.stopOnStatus);
+  } else if (!state.stopOnStatus) {
+    state.stopOnStatus = normalizeStopOnStatus(null);
+  }
+
+  const stopClass = state.stopOnStatus[statusCode] === true;
+  const respected = stopClass
+    ? state.settings?.respectStopStatusCodes !== false
+    : state.settings?.respectContinueStatusCodes !== false;
+  state.lastStatusFingerprint = fingerprint;
+  state.lastStatusCode = statusCode;
+
+  if (!respected) {
+    states[stateKey(tabId)] = state;
+    await writeSimpleStates(states);
+    return publicSimpleState(state, { statusAction: 'ignored' });
+  }
+
+  if (stopClass) {
+    return clearSimpleState(tabId, { reason: 'status-stop', statusCode, statusAction: 'stop' });
+  }
+
+  state.attemptsUsed = Number(state.attemptsUsed || 0) + 1;
+  if (state.attemptsUsed >= Number(state.settings?.attempts || 0)) {
+    state.phase = 'exhausted';
+    state.nextAt = 0;
+    state.exhausted = true;
+  } else {
+    state.phase = 'countdown';
+    state.nextAt = Date.now() + (Number(state.settings?.timerMinutes || 30) * 60 * 1000);
+    state.exhausted = false;
+  }
+  states[stateKey(tabId)] = state;
+  await writeSimpleStates(states);
+  try { await chrome.alarms.clear(simpleAlarmName(tabId)); } catch {}
+
+  let sendResult = null;
+  try {
+    sendResult = await chrome.tabs.sendMessage(tabId, { type: SIMPLE_ACTION_MESSAGE, action: 'send-continue' });
+  } catch {}
+
+  await saveAndScheduleSimpleState(state, states);
+  return publicSimpleState(state, {
+    statusAction: 'continue',
+    statusCode,
+    sent: sendResult?.ok === true
+  });
 }
 
 async function handleSimpleAlarm(tabId) {
@@ -321,10 +429,12 @@ async function restoreSimpleAlarms() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (message?.type !== SIMPLE_SET_MESSAGE && message?.type !== SIMPLE_GET_MESSAGE) return false;
+  if (![SIMPLE_SET_MESSAGE, SIMPLE_GET_MESSAGE, SIMPLE_STATUS_MESSAGE].includes(message?.type)) return false;
   const work = message.type === SIMPLE_SET_MESSAGE
     ? () => setSimpleWatchdog(sender, message)
-    : () => getSimpleWatchdog(sender, message);
+    : message.type === SIMPLE_GET_MESSAGE
+      ? () => getSimpleWatchdog(sender, message)
+      : () => applySimpleStatus(sender, message);
   queueSimpleWork(work)
     .then((result) => sendResponse(result))
     .catch(() => sendResponse({ enabled: false, reason: 'Simple watchdog background failure.' }));
