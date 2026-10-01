@@ -22,8 +22,8 @@ const definitiveCodes = [
   'INCOMPLETE_CONTINUE'
 ];
 
-test('Quick Continue 1.2.29 ships the large config editor styling to new and already-open tabs', () => {
-  assert.equal(manifest.version, '1.2.30');
+test('Quick Continue 1.2.31 ships the large config editor styling to new and already-open tabs', () => {
+  assert.equal(manifest.version, '1.2.31');
   const declared = manifest.content_scripts.flatMap((entry) => entry.js || []);
   assert.ok(declared.includes('config-editor-style.js'));
   assert.ok(declared.includes('conversation-state.js'));
