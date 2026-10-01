@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 6;
+  const RUNTIME_VERSION = 7;
   const STORAGE_PREFIX = 'quick-continue:manual-timestamp:';
   const CLOCK_SELECTOR = '[aria-label="Current local time"]';
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
@@ -54,19 +54,21 @@
   function currentEnabled() {
     try {
       const runtime = globalThis.__chatgptQuickContinueHoverEditRuntime;
-      if (runtime && typeof runtime.manualTimestampEnabled === 'boolean') {
-        return runtime.manualTimestampEnabled;
-      }
+      if (runtime && typeof runtime.manualTimestampEnabled === 'boolean') return runtime.manualTimestampEnabled;
     } catch {}
-    try {
-      return document.querySelector(CLOCK_SELECTOR)?.getAttribute('aria-pressed') === 'true';
-    } catch {
-      return false;
-    }
+    try { return document.querySelector(CLOCK_SELECTOR)?.getAttribute('aria-pressed') === 'true'; }
+    catch { return false; }
   }
 
   function applyDesiredState() {
     if (disposed) return false;
+    const runtime = globalThis.__chatgptQuickContinueHoverEditRuntime;
+    if (typeof runtime?.setManualTimestampEnabled === 'function') {
+      try {
+        runtime.setManualTimestampEnabled(desiredEnabled);
+        return runtime.manualTimestampEnabled === desiredEnabled;
+      } catch {}
+    }
     const clock = document.querySelector(CLOCK_SELECTOR);
     if (!clock) return false;
     if (currentEnabled() === desiredEnabled) return true;
@@ -361,11 +363,12 @@
     const nextConversationId = conversationIdFromUrl();
     if (nextConversationId !== activeConversationId) {
       const previousConversationId = activeConversationId || '';
-      const carrySimpleFromUnsavedChat = !previousConversationId && Boolean(nextConversationId) && simpleEnabled;
       activeConversationId = nextConversationId;
       restoreForConversation(nextConversationId, previousConversationId).catch(() => {});
-      if (!carrySimpleFromUnsavedChat) restoreSimpleForConversation(nextConversationId).catch(() => {});
-      else renderSimpleState(simpleState);
+      // Always query the background on route assignment. Its GET path owns the
+      // provisional -> real-conversation migration, while the current UI state
+      // remains painted until that authoritative state returns.
+      restoreSimpleForConversation(nextConversationId).catch(() => {});
     } else {
       applyDesiredState();
     }
@@ -386,11 +389,6 @@
   function persistUserChoiceSoon(event) {
     if (event?.isTrusted !== true || !clockFromEvent(event)) return;
 
-    // hover-edit-script is loaded before this runtime and owns the clock toggle.
-    // Its document-capture listener has already committed the new in-memory
-    // state by the time this listener runs. Invalidate any asynchronous restore
-    // that started before this trusted choice so a late storage read cannot
-    // overwrite the user's newer state.
     restoreGeneration += 1;
     const enabled = currentEnabled();
     desiredEnabled = enabled;
@@ -423,10 +421,10 @@
 
   function handleDocumentMutations() {
     if (disposed) return;
-    // Typing, streamed answer text and timer ticks cannot change toolbar/route
-    // ownership. Only remounts or actual navigation need a toggle sync.
-    if (conversationIdFromUrl() !== activeConversationId || !simpleButton?.isConnected
-      || document.getElementById(TOOLBAR_ID) !== simpleButton?.parentElement) scheduleSync();
+    // Route changes are also covered by Navigation/popstate; this observer only
+    // needs to repair a detached/remounted toolbar. Avoid URL parsing and other
+    // work for every editor keystroke while the toolbar is healthy.
+    if (!simpleButton?.isConnected || document.getElementById(TOOLBAR_ID) !== simpleButton?.parentElement) scheduleSync();
   }
 
   try {
