@@ -5,8 +5,8 @@ Canonical source: **thatoneguydan/chatgpt-response-notifier**.
 Current shipped/runtime line at this checkpoint:
 
 - **ChatGPT Response Notifier 0.9.101**
-- **ChatGPT Quick Continue 1.2.34**
-- Canonical `main` after Quick Continue feed publication: `494253b6605078014184aedabce0e90a3d5f20c6`
+- **ChatGPT Quick Continue 1.2.35**
+- Canonical `main` after Quick Continue 1.2.35 feed publication: `0af6b476ca2409cda6cc415267bf6df32674a8e4`
 
 Always reconcile current GitHub `main`, releases, and installed Glass evidence before making a newer status claim.
 
@@ -19,35 +19,67 @@ Always reconcile current GitHub `main`, releases, and installed Glass evidence b
 
 ## Current checkpoint — 2026-10-01
 
-The active extension repair line requested through September 30 is complete in canonical source and deployed on Glass.
+The active extension repair line requested through October 1 is complete in canonical source and deployed on Glass.
 
-Notifier **0.9.101** preserves Monitor, manual timestamp, and Simple state while a fresh unsaved ChatGPT route becomes an assigned conversation, adds independently configurable stop-class and continue-class status-code respect gates, and suppresses ordinary composer typing before unrelated document-wide terminal/status observers wake. Release validation and Glass installation verification completed successfully.
+Notifier **0.9.101** preserves Monitor, manual timestamp, and Simple state while a fresh unsaved ChatGPT route becomes an assigned conversation and suppresses ordinary composer typing before unrelated document-wide terminal/status observers wake. The normal/smart watchdog continues to honor the shared `watchdog.stopOnStatus` classification table; Quick Continue no longer exposes user-configurable respect gates for that normal watchdog. Release validation and Glass installation verification for 0.9.101 remain accepted.
 
-Quick Continue **1.2.34** carries the same new-chat state-transfer and typing-performance work and completes the literal Simple-toggle requirement: after its configured automatic attempts are exhausted, Simple remains enabled/green, displays `Auto-continues exhausted`, schedules no further Simple alarms, and clears only when the operator explicitly turns Simple off. Release `quick-continue-v1.2.34` was built from source `fb352bd631d8f9277414e24af6a93c0055a58571`, published, and installed/verified on Glass.
+Quick Continue **1.2.35** preserves the 1.2.34 new-chat state-transfer, typing-performance, and exhausted-Simple behavior, and moves the two status-class respect controls to the place they actually belong: `simpleWatchdog`.
 
-The status-policy JSON now exposes:
+Current JSON ownership is:
 
 ```json
-"respectStopStatusCodes": true,
-"respectContinueStatusCodes": true
+"watchdog": {
+  "timerMinutes": 30,
+  "attempts": 3,
+  "stopOnStatus": {
+    "PLANNING_ACTIVE": true,
+    "COMPLETE_APPLIED": true,
+    "COMPLETE_NO_CHANGES": true,
+    "BLOCKED_HUMAN": true,
+    "INCOMPLETE_LIMIT": false,
+    "INCOMPLETE_TOOL_FAILURE": false,
+    "INCOMPLETE_CONTINUE": false,
+    "INCOMPLETE_HANDOFF": false
+  }
+},
+"simpleWatchdog": {
+  "timerMinutes": 30,
+  "attempts": 3,
+  "stopToRefreshSeconds": 30,
+  "refreshToContinueSeconds": 30,
+  "respectStopStatusCodes": true,
+  "respectContinueStatusCodes": true
+}
 ```
 
-`stopOnStatus` still assigns each definitive GitHub status to the stop or continue class. Disabling either respect flag means **ignore that class**; it does not invert the class into the opposite action.
+`watchdog.stopOnStatus` remains the shared classification table: `true` means stop class and `false` means continue class. The two `simpleWatchdog.respect*StatusCodes` switches control whether Simple acts on each class. Setting either switch to `false` means **ignore that class**; it never inverts the class into the opposite action.
+
+For Simple:
+
+- a respected stop-class terminal footer turns Simple off;
+- an ignored stop-class footer leaves the Simple timer unchanged;
+- a respected continue-class footer sends one immediate Continue, consumes the same finite Simple attempt budget, deduplicates that exact conversation/assistant-turn/status footer, and starts the next Simple countdown;
+- an ignored continue-class footer leaves the Simple timer unchanged;
+- if a respected continue-class footer consumes the final allowed attempt, Simple remains enabled/green in `Auto-continues exhausted` state until explicitly turned off;
+- a terminal footer already visible when Simple is enabled is baselined and cannot fire merely because the runtime is enabled or hot-replaced.
+
+Existing saved 1.2.33/1.2.34 configurations that still have the two respect flags under `watchdog` migrate automatically: their values are carried into `simpleWatchdog`, and the normalized saved/serialized config removes those keys from `watchdog`.
 
 Recent canonical integration sequence:
 
-- PR #267 — new-chat toggle persistence, status-code gates, and remaining typing-lag observer work.
+- PR #267 — new-chat toggle persistence, original status-code gates, and remaining typing-lag observer work.
 - PR #268 — 0.9.101 release-note/version fixture repair.
 - PR #269 — browser runtime fixture alignment and release-inert test-only merges.
 - PR #270 — Simple remains enabled after attempt exhaustion; Quick Continue 1.2.34.
+- PR #274 — move status-class respect gates into Simple, add exact terminal-footer handling/migration, and release Quick Continue 1.2.35.
 
-Exact-head validation for the 1.2.34 integration passed the notifier/source architecture checks, Quick Continue live-controls probe, Chrome Web Store package validation, and a rerun of the Playwright extension suite at **22/22**. The independent Quick Continue release workflow then built, published, installed, and verified 1.2.34 on Glass.
+Exact-head validation for PR #274 passed the notifier/source validator, Quick Continue live-controls probe, Chrome Web Store package validation, and Playwright extension regressions. Release `quick-continue-v1.2.35` targets source `3d5a541c624e77ff2728060128ae2996088ba10d`; its managed ZIP SHA-256 is `8499b82698f2f59070fb571155d80bff7c0785e740fca9d2072ed350259fc1cc`. The independent release workflow built/published the release and installed/verified Quick Continue 1.2.35 on Glass successfully.
 
-At this checkpoint there are **no open pull requests or open issues in this repository**. Do not resurrect older draft/acceptance work merely because a historical roadmap section names it as “current.” Start future extension work only from fresh canonical state plus a new user request or newly observed regression.
+At this checkpoint there are no intended open implementation PRs for this work. Do not resurrect older draft/acceptance work merely because a historical roadmap section names it as “current.” Start future extension work only from fresh canonical state plus a new user request or newly observed regression.
 
 ### Planned but not active
 
-ROADMAP Workstream 6/6 — Firefox Android handoff / browser-independent reception — remains a planned future feature. It is not implemented by this checkpoint and is not part of the completed September 30 reliability repair unless the operator explicitly resumes it.
+ROADMAP Workstream 6/6 — Firefox Android handoff / browser-independent reception — remains a planned future feature. It is not implemented by this checkpoint and is not part of the completed reliability repair unless the operator explicitly resumes it.
 
 Chrome Web Store migration remains contingency rather than the active distribution path.
 
