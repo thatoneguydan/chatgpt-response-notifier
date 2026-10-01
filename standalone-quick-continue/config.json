@@ -5,6 +5,8 @@
   "watchdog": {
     "timerMinutes": 30,
     "attempts": 3,
+    "respectStopStatusCodes": true,
+    "respectContinueStatusCodes": true,
     "stopOnStatus": {
       "PLANNING_ACTIVE": true,
       "COMPLETE_APPLIED": true,
