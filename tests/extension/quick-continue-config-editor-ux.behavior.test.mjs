@@ -6,6 +6,7 @@ const readText = (relative) => readFileSync(new URL(`../../${relative}`, import.
 const styleSource = readText('standalone-quick-continue/config-editor-style.js');
 const backgroundSource = readText('standalone-quick-continue/background.js');
 const conversationStateSource = readText('standalone-quick-continue/conversation-state.js');
+const notifierObserverSource = readText('extension/terminal-status-live-observer.js');
 const installerSource = readText('standalone-quick-continue/Install.ps1');
 const releaseWorkflow = readText('.github/workflows/quick-continue-release.yml');
 const manifest = JSON.parse(readText('standalone-quick-continue/manifest.json'));
@@ -22,8 +23,8 @@ const definitiveCodes = [
   'INCOMPLETE_CONTINUE'
 ];
 
-test('Quick Continue 1.2.35 ships the large config editor styling to new and already-open tabs', () => {
-  assert.equal(manifest.version, '1.2.35');
+test('Quick Continue 1.2.36 ships the large config editor styling to new and already-open tabs', () => {
+  assert.equal(manifest.version, '1.2.36');
   const declared = manifest.content_scripts.flatMap((entry) => entry.js || []);
   assert.ok(declared.includes('config-editor-style.js'));
   assert.ok(declared.includes('conversation-state.js'));
@@ -56,7 +57,7 @@ test('smart watchdog JSON keeps timing, attempt cap, and the GitHub status class
   }
 });
 
-test('Simple watchdog JSON owns both status-class respect gates and observes exact status footers', () => {
+test('Simple watchdog JSON owns only the two respect gates and consumes notifier-classified terminal outcomes', () => {
   assert.deepEqual(config.simpleWatchdog, {
     timerMinutes: 30,
     attempts: 3,
@@ -67,15 +68,19 @@ test('Simple watchdog JSON owns both status-class respect gates and observes exa
   });
   assert.match(conversationStateSource, /Toggle simple fallback watchdog/);
   assert.match(conversationStateSource, /SIMPLE_STATUS_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATUS'/);
-  assert.match(conversationStateSource, /\^\\\[GITHUB_STATUS: \(\[A-Z\]\[A-Z0-9_\]\*\)\\\]\$/);
-  assert.match(conversationStateSource, /candidate\.closest\?\.\('pre, code, blockquote'\)/);
+  assert.match(conversationStateSource, /TERMINAL_BRIDGE_MARKER = 'chatgpt-notifier-terminal-status-v1'/);
+  assert.match(conversationStateSource, /queryNotifierTerminalSignal/);
+  assert.doesNotMatch(conversationStateSource, /latestSimpleTerminal|terminalCodeFromElement|conversationTurns/);
+  assert.match(notifierObserverSource, /terminalStatusClass/);
+  assert.match(notifierObserverSource, /getWatchdogSettings/);
   assert.match(backgroundSource, /SIMPLE_STATUS_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATUS'/);
-  assert.match(backgroundSource, /const stopClass = state\.stopOnStatus\[statusCode\] === true/);
+  assert.match(backgroundSource, /statusClass === 'stop'/);
   assert.match(backgroundSource, /state\.settings\?\.respectStopStatusCodes !== false/);
   assert.match(backgroundSource, /state\.settings\?\.respectContinueStatusCodes !== false/);
   assert.match(backgroundSource, /reason: 'status-stop'/);
   assert.match(backgroundSource, /statusAction: 'continue'/);
-  assert.match(backgroundSource, /phase: 'countdown'/);
+  assert.match(backgroundSource, /statusAction: 'exhausted'/);
+  assert.doesNotMatch(backgroundSource, /normalizeStopOnStatus|DEFAULT_STOP_ON_STATUS/);
   assert.match(backgroundSource, /state\.phase = 'stop-wait'/);
   assert.match(backgroundSource, /chrome\.tabs\.reload\(tabId\)/);
   assert.match(backgroundSource, /state\.phase = 'refresh-wait'/);
