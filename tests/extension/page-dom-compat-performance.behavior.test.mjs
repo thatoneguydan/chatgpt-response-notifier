@@ -26,6 +26,7 @@ test('speaker-label fallback caches scans and never recursively rescans from ide
 
 test('semantic boundary compatibility preserves native roles and adds only non-duplicating synthetic wrappers', () => {
   assert.match(source, /function compatibleRoleNodes\(root\)/);
+  assert.match(source, /const legacy = nativeQueryAll\(root, LEGACY_TURN_SELECTOR\);\s+const roles = nativeQueryAll\(root, SEMANTIC_ROLE_SELECTOR\)/);
   assert.match(source, /const syntheticLegacy = legacy\.filter/);
   assert.match(source, /!roles\.some\(\(roleNode\) => turn === roleNode \|\| turn\.contains\?\.\(roleNode\)\)/);
   assert.match(source, /new Set\(\[\.\.\.roles, \.\.\.syntheticLegacy\]\)/);
@@ -36,6 +37,9 @@ test('semantic boundary compatibility preserves native roles and adds only non-d
 test('ordinary composer typing uses a cached composer-first observer fast path', () => {
   assert.match(source, /const composerMutationRoots = new WeakMap\(\);/);
   assert.match(source, /function composerForTextMutation\(record\)/);
+  assert.match(source, /const cached = composerMutationRoots\.get\(element\);\s+if \(cached\) \{/);
+  assert.match(source, /if \(cached\.isConnected !== false\) return cached;/);
+  assert.doesNotMatch(source, /cached\?\.isConnected !== false/);
   assert.match(source, /if \(stableComposerIdentity\(composer\)\) composerMutationRoots\.set\(element, composer\);/);
   const composerCheck = source.indexOf('if (isComposerTextMutation(record))');
   const ownedCheck = source.indexOf('if (isOwnedMutation(record)) continue;', composerCheck);
