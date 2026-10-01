@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 10;
+  const RUNTIME_VERSION = 11;
   const previousRuntime = globalThis.__chatgptQuickContinueHoverEditRuntime;
   if (Number(previousRuntime?.version || 0) === RUNTIME_VERSION) return;
   const restoredTimestampState = Boolean(previousRuntime?.manualTimestampEnabled);
@@ -123,9 +123,6 @@
   }
 
   function handleManualSendClick(event) {
-    // Own the clock at document scope rather than binding behavior to one span.
-    // The toolbar is intentionally replaceable, so a remounted clock must become
-    // interactive immediately without waiting for an element-specific listener.
     if (clockFromEvent(event)) {
       event.preventDefault();
       event.stopPropagation();
@@ -140,9 +137,6 @@
     const composer = composerElement();
     if (!composer || !rawComposerText(composer).trim()) return;
 
-    // Never let ChatGPT consume the trusted click that existed before the
-    // timestamp edit. Commit the final text first, then the shared transaction
-    // issues exactly one fresh send against that committed editor state.
     event.preventDefault();
     event.stopImmediatePropagation();
     if (!manualSendInFlight) void submitManualMessage();
@@ -165,9 +159,6 @@
     const target = event.target;
     if (target !== composer && !(target instanceof Node && composer.contains(target))) return;
 
-    // The original keydown is deliberately consumed. Allowing it to continue
-    // after replacing Lexical's contents is what made the first Enter only add
-    // the timestamp and the second Enter actually submit.
     event.preventDefault();
     event.stopImmediatePropagation();
     if (!manualSendInFlight) void submitManualMessage();
@@ -194,6 +185,7 @@
   function setManualTimestampEnabled(enabled) {
     manualTimestampEnabled = Boolean(enabled);
     updateClockToggleStyle();
+    return manualTimestampEnabled;
   }
 
   function detachClockToggle() {
@@ -286,6 +278,7 @@
     get manualTimestampEnabled() {
       return manualTimestampEnabled;
     },
+    setManualTimestampEnabled,
     dispose() {
       if (disposed) return;
       disposed = true;
