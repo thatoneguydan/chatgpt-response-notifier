@@ -43,7 +43,7 @@ function createHarness() {
 
   const chrome = {
     runtime: {
-      getManifest: () => ({ version: '1.2.33' }),
+      getManifest: () => ({ version: '1.2.34' }),
       reload() {},
       onMessage: { addListener: (listener) => messageListeners.push(listener) },
       onStartup: { addListener: (listener) => startupListeners.push(listener) },
