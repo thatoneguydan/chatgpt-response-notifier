@@ -1,42 +1,69 @@
 # ChatGPT Response Notifier
 
-Canonical source: **thatoneguydan/chatgpt-response-notifier**. Current runtime source: **v0.9.29**. Reconcile current GitHub heads and active-work claims before implementation.
+Canonical source: **thatoneguydan/chatgpt-response-notifier**.
+
+Current shipped/runtime line at this checkpoint:
+
+- **ChatGPT Response Notifier 0.9.101**
+- **ChatGPT Quick Continue 1.2.34**
+- Canonical `main` after Quick Continue feed publication: `494253b6605078014184aedabce0e90a3d5f20c6`
+
+Always reconcile current GitHub `main`, releases, and installed Glass evidence before making a newer status claim.
 
 ## Read next
 
-- [ROADMAP.md](ROADMAP.md) — immediate reliability priorities within the existing five workstreams.
-- [Independent failure review](docs/INDEPENDENT-FAILURE-REVIEW-2026-09-16.md) — evidence, limitations, exact next repairs and acceptance matrix.
-- [DevelopmentInfrastructure #443](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/443) — owns registration diagnosis, implementation, release and Glass deployment.
-- [DevelopmentInfrastructure #442](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/442) — owns cross-desktop click repair/acceptance, blocked by a loaded runtime.
-- [DevelopmentInfrastructure #453](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/453) — independent documentation review; does not replace either runtime owner.
+- [RELEASE_NOTES.md](RELEASE_NOTES.md) — current notifier behavior and recent release history.
+- [ROADMAP.md](ROADMAP.md) — long-form workstream history plus explicitly planned future work. Its older dated “current priorities” sections are historical checkpoints, not authority over a newer `PROJECT.md`/release state.
+- [Independent failure review](docs/INDEPENDENT-FAILURE-REVIEW-2026-09-16.md) — historical investigation and acceptance matrix that drove the reliability work.
+- DevelopmentInfrastructure [#443](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/443), [#442](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/442), and [#453](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/453) are **completed historical owners**, not active blockers.
 
-## Current checkpoint — 2026-09-16
+## Current checkpoint — 2026-10-01
 
-One real coded notification was accepted while Chrome stayed hidden/unfocused on v0.9.27. This proves that observed completion-delivery path; it does not establish universal hidden-tab recovery or click reliability. v0.9.28 added the browser-only cross-desktop fallback, whose physical acceptance remains open.
+The active extension repair line requested through September 30 is complete in canonical source and deployed on Glass.
 
-The reboot disappearance now has an evidenced Chrome registration cause. PR #70 found the intended fork `lciedmoiiapbgemklkpoadimhffaaaah` and a stale legacy fork `pbbmmjcakamllfpcglbhcpmbpegapgih` both pointing at the same stable extension root; the legacy record no longer matches the current manifest-derived ID and carries disable reason 4 (`DISABLE_RELOAD`). PR #73 reproduced that exact same-root stale-ID shape on Glass's installed Chrome 153.0.8010.48 only when unpacked extension identity changed during a live `chrome.runtime.reload()`. Chromium's unpacked startup loader re-reads manifests from disk and rejects a path when a persisted registration's ID does not match the manifest-derived ID, so the stale record can make Chrome skip the valid intended registration at the shared path during startup.
+Notifier **0.9.101** preserves Monitor, manual timestamp, and Simple state while a fresh unsaved ChatGPT route becomes an assigned conversation, adds independently configurable stop-class and continue-class status-code respect gates, and suppresses ordinary composer typing before unrelated document-wide terminal/status observers wake. Release validation and Glass installation verification completed successfully.
 
-PR #74 separately proved the smallest cleanup in a disposable profile on the same Chrome build: Chrome-native uninstall of only the stale ID removes that registration while preserving the intended fixed-ID registration, its same root and its live runtime. This avoids direct writes to Chrome Preferences/Secure Preferences and leaves the original control untouched. The exact historical event that first produced the legacy ID is not recoverable from committed Git history; do not invent a more specific key/no-key migration story than the evidence supports.
+Quick Continue **1.2.34** carries the same new-chat state-transfer and typing-performance work and completes the literal Simple-toggle requirement: after its configured automatic attempts are exhausted, Simple remains enabled/green, displays `Auto-continues exhausted`, schedules no further Simple alarms, and clears only when the operator explicitly turns Simple off. Release `quick-continue-v1.2.34` was built from source `fb352bd631d8f9277414e24af6a93c0055a58571`, published, and installed/verified on Glass.
 
-PR #72 repaired the validation blind spot: normal validation/release now use one deterministic complete test runner. Exact-head runs discover all 19 extension test files and pass 256/256 tests, so the previous 11-file CI omission is closed.
+The status-policy JSON now exposes:
 
-**Immediate next boundary:** one bounded cleanup of only legacy fork ID `pbbmmjcakamllfpcglbhcpmbpegapgih` in the real Default profile through the narrowest Chrome-supported path. DevelopmentInfrastructure policy now explicitly treats GitHub live-state/installation records as descriptive evidence rather than a separate approval gate for already-requested routine work. Preserve original control `omnikbipejdflnfjkppfdkkdhglepbam`, intended fork `lciedmoiiapbgemklkpoadimhffaaaah`, the stable root/key, helper transport and rollback. If Chrome exposes no safe noninteractive project-owned path, stop only at the actual unavoidable interactive Chrome boundary. After cleanup, prove a clean Chrome exit/reopen and then Windows reboot/login without re-registration. Chrome Web Store migration remains contingency rather than the active repair.
+```json
+"respectStopStatusCodes": true,
+"respectContinueStatusCodes": true
+```
 
-The independent review also reproduced phrase/location detection gaps, passive handling of progress-then-silence, and incomplete click verification. Those remain subsequent reliability work once #443 restores and proves a durable loaded runtime.
+`stopOnStatus` still assigns each definitive GitHub status to the stop or continue class. Disabling either respect flag means **ignore that class**; it does not invert the class into the opposite action.
+
+Recent canonical integration sequence:
+
+- PR #267 — new-chat toggle persistence, status-code gates, and remaining typing-lag observer work.
+- PR #268 — 0.9.101 release-note/version fixture repair.
+- PR #269 — browser runtime fixture alignment and release-inert test-only merges.
+- PR #270 — Simple remains enabled after attempt exhaustion; Quick Continue 1.2.34.
+
+Exact-head validation for the 1.2.34 integration passed the notifier/source architecture checks, Quick Continue live-controls probe, Chrome Web Store package validation, and a rerun of the Playwright extension suite at **22/22**. The independent Quick Continue release workflow then built, published, installed, and verified 1.2.34 on Glass.
+
+At this checkpoint there are **no open pull requests or open issues in this repository**. Do not resurrect older draft/acceptance work merely because a historical roadmap section names it as “current.” Start future extension work only from fresh canonical state plus a new user request or newly observed regression.
+
+### Planned but not active
+
+ROADMAP Workstream 6/6 — Firefox Android handoff / browser-independent reception — remains a planned future feature. It is not implemented by this checkpoint and is not part of the completed September 30 reliability repair unless the operator explicitly resumes it.
+
+Chrome Web Store migration remains contingency rather than the active distribution path.
 
 ## Boundaries
 
 - **Permanent install-independence policy:** ChatGPT Response Notifier and ChatGPT Quick Continue are deployed independently. Never hold either extension's requested install or update for human/user testing, live proof, acceptance evidence, or unresolved acceptance work for either extension. Human testing may inform follow-up debugging after installation, but it is not an installation prerequisite unless the operator explicitly requests that gate for that specific deployment.
-- Do not write Chrome Preferences, Secure Preferences or external integrity state to repair registration.
-- Do not use recurring/production CDP `loadUnpacked`, native Win32 foreground routing or Chrome process/window enumeration as a repair.
-- Preserve the stable install root/key, exact extension-origin validation, loopback-only helper, rollback and protected deployment gates.
-- Remove no Chrome extension registration except the exact stale legacy fork selected by #443's evidence. Registration in GitHub is a live-state record, not a permission gate; use the narrowest supported project-owned cleanup path and stop only for a genuine operator-only Chrome boundary.
-- Observe existing ChatGPT requests only: no ChatGPT API/session polling, duplicate backend requests or broad background scraping.
-- Preserve Pause/manual Stop, drafts/uploads, authentication/approval/rate-limit vetoes, request identity, durable budgets and uncertainty stops.
-- Stream-derived completion evidence remains notification-only. Silence/missing footer alone is insufficient automatic-action authority.
-- Focus changes follow a physical user click; preserve the original tab/window when opening the existing fallback.
-- Do not export conversations, raw profiles, credentials, signing secrets or unnecessary user paths in evidence.
+- Observe existing ChatGPT requests only: no ChatGPT API/session polling, duplicate backend requests, broad background scraping, or constant-refresh behavior.
+- Preserve profile/account traffic safety, persistent rate-limit breaker/governor behavior, request identity, durable attempt budgets, and authentication/approval/rate-limit vetoes.
+- Do not write Chrome Preferences, Secure Preferences, or external integrity state to repair registration.
+- Do not use recurring/production CDP `loadUnpacked`, native Win32 foreground routing, Chrome process/window enumeration, or undocumented virtual-desktop switching as passive repair machinery.
+- Preserve the fixed notifier registration/root, exact extension-origin validation, loopback-only helper, rollback lineage, and protected deployment gates.
+- Passive monitoring and notification presentation must not steal focus. Physical notification clicks may use the accepted explicit user-initiated route to the existing target chat.
+- Do not export conversations, raw Chrome profiles, credentials, signing secrets, or unnecessary user paths in evidence.
 
 ## Operator interaction
 
-Complete safe source work and use existing bounded diagnostic/update/deployment routes before asking for manual action. The deterministic work is complete through root-cause reproduction, full-test validation and disposable selective-cleanup proof. Continue automatically through any supported bounded noninteractive cleanup/evidence path under the current requested repair. Manual action is justified only if the next Chrome operation is inherently interactive or another explicit operator-safety boundary is actually reached. After stale-ID cleanup, combine the post-cleanup Chrome restart, Windows reboot/login durability check and subsequent #442 physical click acceptance where practical; do not request repeated reinstalls, Developer Mode toggles or a Store account.
+Complete safe deterministic source, validation, release, and deployment work before asking for manual action. Do not reintroduce already-completed reboot/login, cross-desktop click, Store-registration, or old draft-PR acceptance gates unless current evidence demonstrates a regression that actually requires them.
+
+For future work, treat this file plus current GitHub `main`, release metadata, and current Glass evidence as the continuity entrypoint. Historical roadmap/review documents explain why earlier decisions were made but do not override a newer accepted runtime state.
