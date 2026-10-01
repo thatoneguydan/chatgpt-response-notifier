@@ -22,8 +22,8 @@ const definitiveCodes = [
   'INCOMPLETE_CONTINUE'
 ];
 
-test('Quick Continue 1.2.32 ships the large config editor styling to new and already-open tabs', () => {
-  assert.equal(manifest.version, '1.2.32');
+test('Quick Continue 1.2.33 ships the large config editor styling to new and already-open tabs', () => {
+  assert.equal(manifest.version, '1.2.33');
   const declared = manifest.content_scripts.flatMap((entry) => entry.js || []);
   assert.ok(declared.includes('config-editor-style.js'));
   assert.ok(declared.includes('conversation-state.js'));
@@ -42,9 +42,11 @@ test('config editor caret uses high-contrast theme text instead of a fixed dark-
   assert.match(styleSource, /color:\s*var\(--text-primary, #111111\) !important/);
 });
 
-test('smart watchdog JSON exposes editable timer, attempt cap, and all GitHub status stop policies', () => {
+test('smart watchdog JSON exposes editable timer, attempt cap, status-class gates, and all GitHub status stop policies', () => {
   assert.equal(config.watchdog.timerMinutes, 30);
   assert.equal(config.watchdog.attempts, 3);
+  assert.equal(config.watchdog.respectStopStatusCodes, true);
+  assert.equal(config.watchdog.respectContinueStatusCodes, true);
   assert.deepEqual(Object.keys(config.watchdog.stopOnStatus).sort(), definitiveCodes.sort());
   for (const code of ['PLANNING_ACTIVE', 'COMPLETE_APPLIED', 'COMPLETE_NO_CHANGES', 'BLOCKED_HUMAN']) {
     assert.equal(config.watchdog.stopOnStatus[code], true);

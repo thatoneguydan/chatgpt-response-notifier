@@ -6,7 +6,7 @@ const root = new URL('../../', import.meta.url);
 const source = readFileSync(new URL('extension/page-dom-compat.js', root), 'utf8');
 
 test('page DOM compatibility keeps speaker-label recovery conditional and cached', () => {
-  assert.match(source, /const RUNTIME_VERSION = 6;/);
+  assert.match(source, /const RUNTIME_VERSION = 7;/);
   assert.match(source, /const SPEAKER_CACHE_MS = 500;/);
   assert.match(source, /const speakerTurnCache = new WeakMap\(\);/);
   assert.match(source, /function hydrateLegacyTurnRoles\(root, legacy\)/);
@@ -26,9 +26,24 @@ test('speaker-label fallback caches scans and never recursively rescans from ide
 
 test('semantic boundary compatibility preserves native roles and adds only non-duplicating synthetic wrappers', () => {
   assert.match(source, /function compatibleRoleNodes\(root\)/);
+  assert.match(source, /const legacy = nativeQueryAll\(root, LEGACY_TURN_SELECTOR\);\s+const roles = nativeQueryAll\(root, SEMANTIC_ROLE_SELECTOR\)/);
   assert.match(source, /const syntheticLegacy = legacy\.filter/);
   assert.match(source, /!roles\.some\(\(roleNode\) => turn === roleNode \|\| turn\.contains\?\.\(roleNode\)\)/);
   assert.match(source, /new Set\(\[\.\.\.roles, \.\.\.syntheticLegacy\]\)/);
   assert.match(source, /if \(isSemanticRoleSelector\(value\)\) return compatibleRoleNodes\(this\)/);
   assert.doesNotMatch(source, /document\.body\.innerText|querySelectorAll\(['"]\*['"]\)|TreeWalker/);
+});
+
+test('ordinary composer typing uses a cached composer-first observer fast path', () => {
+  assert.match(source, /const composerMutationRoots = new WeakMap\(\);/);
+  assert.match(source, /function composerForTextMutation\(record\)/);
+  assert.match(source, /const cached = composerMutationRoots\.get\(element\);\s+if \(cached\) \{/);
+  assert.match(source, /if \(cached\.isConnected !== false\) return cached;/);
+  assert.doesNotMatch(source, /cached\?\.isConnected !== false/);
+  assert.match(source, /if \(stableComposerIdentity\(composer\)\) composerMutationRoots\.set\(element, composer\);/);
+  const composerCheck = source.indexOf('if (isComposerTextMutation(record))');
+  const ownedCheck = source.indexOf('if (isOwnedMutation(record)) continue;', composerCheck);
+  assert.ok(composerCheck >= 0 && ownedCheck > composerCheck, 'composer typing must bypass unrelated owned-DOM checks');
+  assert.match(source, /state\?\.monitorObservation !== true \|\| deliveredDraftTransition/);
+  assert.match(source, /state\.lastDraftPresent === present/);
 });

@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 3;
+  const RUNTIME_VERSION = 4;
   const RUNTIME_KEY = '__chatgptNotifierWatchdogPageAuthorityV3';
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
@@ -83,9 +83,10 @@
 
   function isDefinitiveStopStatus(codeValue) {
     const code = String(codeValue || '');
-    try {
-      if (globalThis.ChatGPTNotifierContinuationPolicy?.isDefinitiveStopStatusCode?.(code) === true) return true;
-    } catch {}
+    const policy = globalThis.ChatGPTNotifierContinuationPolicy;
+    if (typeof policy?.isDefinitiveStopStatusCode === 'function') {
+      try { return policy.isDefinitiveStopStatusCode(code) === true; } catch { return false; }
+    }
     return DEFINITIVE_STOP_CODES.has(code);
   }
 

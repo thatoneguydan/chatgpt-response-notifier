@@ -39,9 +39,11 @@ function loadPolicy() {
   return context.ChatGPTNotifierContinuationPolicy;
 }
 
-test('bundled Quick Continue JSON exposes watchdog timing, attempts, and every GitHub status policy', () => {
+test('bundled Quick Continue JSON exposes watchdog timing, gates, attempts, and every GitHub status policy', () => {
   assert.equal(bundled.watchdog.timerMinutes, 30);
   assert.equal(bundled.watchdog.attempts, 3);
+  assert.equal(bundled.watchdog.respectStopStatusCodes, true);
+  assert.equal(bundled.watchdog.respectContinueStatusCodes, true);
   assert.deepEqual(bundled.watchdog.stopOnStatus, {
     PLANNING_ACTIVE: true,
     COMPLETE_APPLIED: true,
@@ -54,6 +56,8 @@ test('bundled Quick Continue JSON exposes watchdog timing, attempts, and every G
   });
   assert.match(configSource, /"watchdog\.timerMinutes" must be between 0\.1 and 1440/);
   assert.match(configSource, /"watchdog\.attempts" must be an integer between 0 and 20/);
+  assert.match(configSource, /"watchdog\.respectStopStatusCodes" must be true or false/);
+  assert.match(configSource, /"watchdog\.respectContinueStatusCodes" must be true or false/);
   assert.match(configSource, /Unknown GitHub status code in watchdog\.stopOnStatus/);
   assert.match(configSource, /typeof stopRaw\[key\] !== 'boolean'/);
 });
@@ -71,16 +75,53 @@ test('runtime policy applies custom cadence and custom per-code stop behavior', 
 
   assert.equal(applied.timerMinutes, 7.5);
   assert.equal(applied.attempts, 5);
+  assert.equal(applied.respectStopStatusCodes, true);
+  assert.equal(applied.respectContinueStatusCodes, true);
   assert.equal(policy.watchdogDelayMs(), 7.5 * 60_000);
   assert.equal(policy.watchdogMaxSends(), 5);
+  assert.equal(policy.statusCodeDisposition('BLOCKED_HUMAN'), 'continue');
   assert.equal(policy.isDefinitiveStopStatusCode('BLOCKED_HUMAN'), false);
   assert.equal(policy.isAutoContinueStatusCode('BLOCKED_HUMAN'), true);
+  assert.equal(policy.statusCodeDisposition('INCOMPLETE_LIMIT'), 'stop');
   assert.equal(policy.isDefinitiveStopStatusCode('INCOMPLETE_LIMIT'), true);
   assert.equal(policy.isAutoContinueStatusCode('INCOMPLETE_LIMIT'), false);
   assert.equal(policy.isDefinitiveStopStatusCode('COMPLETE_APPLIED'), true);
 });
 
-test('Quick Continue publishes normalized settings and syncs them before arming a fresh watchdog', () => {
+test('stop-code and continue-code respect gates independently ignore their configured classes', () => {
+  const policy = loadPolicy();
+
+  policy.applyWatchdogSettings({
+    respectStopStatusCodes: false,
+    respectContinueStatusCodes: true
+  });
+  assert.equal(policy.statusCodeDisposition('COMPLETE_APPLIED'), 'ignore');
+  assert.equal(policy.isDefinitiveStopStatusCode('COMPLETE_APPLIED'), false);
+  assert.equal(policy.isAutoContinueStatusCode('COMPLETE_APPLIED'), true, 'ignored stop codes must not block an already-due timer');
+  assert.deepEqual(
+    { ...policy.classifyObservation({ statusCode: 'COMPLETE_APPLIED' }) },
+    { state: 'waiting', reason: 'status-ignored:COMPLETE_APPLIED', automaticActionAllowed: false }
+  );
+  assert.equal(policy.statusCodeDisposition('INCOMPLETE_CONTINUE'), 'continue');
+  assert.equal(policy.classifyObservation({ statusCode: 'INCOMPLETE_CONTINUE' }).automaticActionAllowed, true);
+
+  policy.applyWatchdogSettings({
+    respectStopStatusCodes: true,
+    respectContinueStatusCodes: false
+  });
+  assert.equal(policy.statusCodeDisposition('COMPLETE_APPLIED'), 'stop');
+  assert.equal(policy.isDefinitiveStopStatusCode('COMPLETE_APPLIED'), true);
+  assert.equal(policy.statusCodeDisposition('INCOMPLETE_CONTINUE'), 'ignore');
+  assert.equal(policy.isAutoContinueStatusCode('INCOMPLETE_CONTINUE'), true, 'ignored continue codes must not stop an already-due timer');
+  assert.deepEqual(
+    { ...policy.classifyObservation({ statusCode: 'INCOMPLETE_CONTINUE' }) },
+    { state: 'waiting', reason: 'status-ignored:INCOMPLETE_CONTINUE', automaticActionAllowed: false }
+  );
+});
+
+test('Quick Continue persists both respect gates and publishes normalized settings before arming a fresh watchdog', () => {
+  assert.match(configSource, /respectStopStatusCodes: value\.watchdog\.respectStopStatusCodes/);
+  assert.match(configSource, /respectContinueStatusCodes: value\.watchdog\.respectContinueStatusCodes/);
   assert.match(contentSource, /toolbar\.dataset\.watchdogSettings = JSON\.stringify\(config\.watchdog\)/);
   assert.match(contentSource, /publishWatchdogConfig\(currentConfig\)/);
   const syncAt = bridgeSource.indexOf('await syncWatchdogSettings(true)');

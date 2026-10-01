@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 5;
+  const RUNTIME_VERSION = 6;
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const USER_TURN_WAIT_MS = 8000;
@@ -112,7 +112,10 @@
 
   function isDefinitiveStopStatus(codeValue) {
     const code = String(codeValue || '');
-    try { if (globalThis.ChatGPTNotifierContinuationPolicy?.isDefinitiveStopStatusCode?.(code) === true) return true; } catch {}
+    const policy = globalThis.ChatGPTNotifierContinuationPolicy;
+    if (typeof policy?.isDefinitiveStopStatusCode === 'function') {
+      try { return policy.isDefinitiveStopStatusCode(code) === true; } catch { return false; }
+    }
     return DEFINITIVE_STOP_CODES.has(code);
   }
   function terminalStatusFromText(value) {

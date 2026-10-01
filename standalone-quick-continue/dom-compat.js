@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   try { globalThis.__chatgptQuickContinueDomCompat?.dispose?.(); } catch {}
 
   if (typeof Document === 'undefined' || typeof Element === 'undefined') return;
@@ -32,6 +32,8 @@
   const nativeElementQuerySelectorAll = Element.prototype.querySelectorAll;
   const nativeClosest = Element.prototype.closest;
   const nativeGetAttribute = Element.prototype.getAttribute;
+  const nativeMutationObserver = globalThis.MutationObserver;
+  const composerMutationRoots = new WeakMap();
 
   function nativeQueryAll(root, selector) {
     try {
@@ -137,19 +139,91 @@
     return looksLikeSendButton(button) ? button : null;
   }
 
+  function elementForMutationNode(node) {
+    if (!node) return null;
+    if (node.nodeType === 1) return node;
+    return node.parentElement || null;
+  }
+
+  function stableComposerIdentity(composer) {
+    return nativeAttribute(composer, 'id') === 'prompt-textarea'
+      || nativeAttribute(composer, 'data-testid') === 'prompt-textarea';
+  }
+
+  function composerForTypingMutation(record) {
+    if (!['childList', 'characterData'].includes(record?.type)) return null;
+    const element = elementForMutationNode(record.target);
+    if (!element) return null;
+    const cached = composerMutationRoots.get(element);
+    if (cached) {
+      if (cached.isConnected !== false) return cached;
+      composerMutationRoots.delete(element);
+    }
+    let composer = null;
+    try { composer = nativeClosest.call(element, '#prompt-textarea, [contenteditable="true"], textarea'); } catch {}
+    if (!composer || !usableComposer(composer)) return null;
+    if (stableComposerIdentity(composer)) composerMutationRoots.set(element, composer);
+    return composer;
+  }
+
+  function shouldFilterComposerTyping(target, options) {
+    const root = document.documentElement;
+    const body = document.body;
+    return Boolean(
+      (target === root || target === body)
+      && options?.childList === true
+      && options?.subtree === true
+      && options?.attributes !== true
+      && options?.characterData !== true
+    );
+  }
+
+  class QuickContinueFilteredMutationObserver {
+    constructor(callback) {
+      if (typeof callback !== 'function') throw new TypeError('MutationObserver callback must be a function');
+      const facade = this;
+      this.filterComposerTyping = false;
+      this.nativeObserver = new nativeMutationObserver((records) => {
+        const filtered = this.filterComposerTyping
+          ? Array.from(records || []).filter((record) => !composerForTypingMutation(record))
+          : Array.from(records || []);
+        if (filtered.length) callback(filtered, facade);
+      });
+    }
+
+    observe(target, options) {
+      this.filterComposerTyping = shouldFilterComposerTyping(target, options);
+      return this.nativeObserver.observe(target, options);
+    }
+
+    disconnect() {
+      return this.nativeObserver.disconnect();
+    }
+
+    takeRecords() {
+      const records = this.nativeObserver.takeRecords();
+      return this.filterComposerTyping
+        ? Array.from(records || []).filter((record) => !composerForTypingMutation(record))
+        : Array.from(records || []);
+    }
+  }
+
   Document.prototype.querySelector = notifierCompatDocumentQuerySelector;
   Element.prototype.querySelector = notifierCompatElementQuerySelector;
   Element.prototype.closest = notifierCompatClosest;
+  if (typeof nativeMutationObserver === 'function') globalThis.MutationObserver = QuickContinueFilteredMutationObserver;
 
   const runtime = {
     version: RUNTIME_VERSION,
     fallbackComposer,
     fallbackSend,
     looksLikeSendButton,
+    composerForTypingMutation,
     dispose() {
       if (Document.prototype.querySelector === notifierCompatDocumentQuerySelector) Document.prototype.querySelector = nativeDocumentQuerySelector;
       if (Element.prototype.querySelector === notifierCompatElementQuerySelector) Element.prototype.querySelector = nativeElementQuerySelector;
       if (Element.prototype.closest === notifierCompatClosest) Element.prototype.closest = nativeClosest;
+      if (globalThis.MutationObserver === QuickContinueFilteredMutationObserver) globalThis.MutationObserver = nativeMutationObserver;
       if (globalThis.__chatgptQuickContinueDomCompat === runtime) delete globalThis.__chatgptQuickContinueDomCompat;
     }
   };

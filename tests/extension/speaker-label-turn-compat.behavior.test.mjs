@@ -146,7 +146,7 @@ test('turn compatibility hydrates unlabeled legacy wrappers from exact hidden sp
 });
 
 test('turn compatibility uses only exact hidden speaker labels for attribute-free role recovery', () => {
-  assert.match(source, /const RUNTIME_VERSION = 6/);
+  assert.match(source, /const RUNTIME_VERSION = 7/);
   assert.match(source, /'h4\.sr-only'/);
   assert.match(source, /text === 'you said:'/);
   assert.match(source, /text === 'chatgpt said:'/);

@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 8;
+  const RUNTIME_VERSION = 9;
   const previousRuntime = globalThis.ChatGPTQuickContinueConfig;
   if (Number(previousRuntime?.runtimeVersion || 0) === RUNTIME_VERSION) return;
   try { previousRuntime?.dispose?.(); } catch {}
@@ -32,6 +32,8 @@
   const DEFAULT_WATCHDOG = Object.freeze({
     timerMinutes: 30,
     attempts: 3,
+    respectStopStatusCodes: true,
+    respectContinueStatusCodes: true,
     stopOnStatus: DEFAULT_STOP_ON_STATUS
   });
   const DEFAULT_SIMPLE_WATCHDOG = Object.freeze({
@@ -86,6 +88,18 @@
     if (!Number.isInteger(attemptsRaw) || attemptsRaw < 0 || attemptsRaw > 20) {
       throw new Error('"watchdog.attempts" must be an integer between 0 and 20.');
     }
+    const respectStopStatusCodes = raw.respectStopStatusCodes == null
+      ? DEFAULT_WATCHDOG.respectStopStatusCodes
+      : raw.respectStopStatusCodes;
+    if (typeof respectStopStatusCodes !== 'boolean') {
+      throw new Error('"watchdog.respectStopStatusCodes" must be true or false.');
+    }
+    const respectContinueStatusCodes = raw.respectContinueStatusCodes == null
+      ? DEFAULT_WATCHDOG.respectContinueStatusCodes
+      : raw.respectContinueStatusCodes;
+    if (typeof respectContinueStatusCodes !== 'boolean') {
+      throw new Error('"watchdog.respectContinueStatusCodes" must be true or false.');
+    }
     const stopRaw = raw.stopOnStatus == null ? {} : raw.stopOnStatus;
     if (!stopRaw || typeof stopRaw !== 'object' || Array.isArray(stopRaw)) {
       throw new Error('"watchdog.stopOnStatus" must be an object.');
@@ -103,6 +117,8 @@
     return Object.freeze({
       timerMinutes: Math.round(timerMinutes * 1000) / 1000,
       attempts: attemptsRaw,
+      respectStopStatusCodes,
+      respectContinueStatusCodes,
       stopOnStatus: Object.freeze(stopOnStatus)
     });
   }
@@ -167,6 +183,8 @@
       watchdog: {
         timerMinutes: value.watchdog.timerMinutes,
         attempts: value.watchdog.attempts,
+        respectStopStatusCodes: value.watchdog.respectStopStatusCodes,
+        respectContinueStatusCodes: value.watchdog.respectContinueStatusCodes,
         stopOnStatus: { ...value.watchdog.stopOnStatus }
       },
       simpleWatchdog: {

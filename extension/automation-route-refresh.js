@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 1;
+  const RUNTIME_VERSION = 2;
   const AUTOMATION_UI_SELECTOR = '[data-chatgpt-notifier-automation-ui-owner]';
   const previousRuntime = globalThis.__chatgptNotifierAutomationRouteRefreshRuntime;
   if (Number(previousRuntime?.version || 0) === RUNTIME_VERSION) return;
@@ -9,7 +9,6 @@
 
   let activeConversationId = conversationIdFromUrl();
   let scheduled = false;
-  let observer = null;
 
   function conversationIdFromUrl(rawUrl = location.href) {
     try {
@@ -36,11 +35,17 @@
     scheduled = false;
     const nextConversationId = conversationIdFromUrl();
     if (nextConversationId === activeConversationId) return;
+    const previousConversationId = activeConversationId;
     activeConversationId = nextConversationId;
 
-    // Enrollment is already durable and keyed by conversation in the background.
-    // Removing only notifier-owned state UI makes attachment-script recreate it
-    // and perform a fresh sender-scoped overview read for the newly selected chat.
+    // A brand-new chat starts without a conversation id. After the first send,
+    // ChatGPT assigns /c/<id> while the background migrates the provisional
+    // automation state. Keep the already-rendered toggle untouched during that
+    // handoff so an "on" toggle cannot flash/revert before migration finishes.
+    if (!previousConversationId && nextConversationId) return;
+
+    // Normal chat-to-chat navigation must still discard the prior chat's UI so
+    // attachment-script performs a fresh sender-scoped overview read.
     invalidateAutomationUi();
   }
 
@@ -50,8 +55,8 @@
     queueMicrotask(syncRoute);
   }
 
-  observer = new MutationObserver(scheduleSync);
-  observer.observe(document.documentElement, { childList: true, subtree: true });
+  // Route changes are navigation events, not editor-mutation events. Avoid a
+  // document-wide MutationObserver here: it ran URL parsing on every keystroke.
   window.addEventListener('popstate', scheduleSync, true);
   window.addEventListener('hashchange', scheduleSync, true);
   try { globalThis.navigation?.addEventListener?.('navigatesuccess', scheduleSync); } catch {}
@@ -60,7 +65,6 @@
     version: RUNTIME_VERSION,
     get activeConversationId() { return activeConversationId; },
     dispose() {
-      try { observer?.disconnect(); } catch {}
       try { window.removeEventListener('popstate', scheduleSync, true); } catch {}
       try { window.removeEventListener('hashchange', scheduleSync, true); } catch {}
       try { globalThis.navigation?.removeEventListener?.('navigatesuccess', scheduleSync); } catch {}
