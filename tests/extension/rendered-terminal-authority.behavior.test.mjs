@@ -210,7 +210,7 @@ test('live terminal parser rejects quoted/code examples and non-terminal standal
   assert.equal(detector.detect(nonTerminal), '');
 });
 
-test('rendered terminal authority is hot-bound and feeds both watchdog parking and durable notification delivery', () => {
+test('rendered terminal authority is hot-bound and feeds both watchdog parking and the Simple status bridge', () => {
   const manifest = JSON.parse(read('extension/manifest.json'));
   const version = read('VERSION.txt').trim();
   const observer = read('extension/terminal-status-live-observer.js');
@@ -224,10 +224,16 @@ test('rendered terminal authority is hot-bound and feeds both watchdog parking a
   assert.ok(manifest.content_scripts[0].js.includes('terminal-status-live-observer.js'));
   assert.ok(manifest.content_scripts[0].js.indexOf('rendered-terminal-status.js') < manifest.content_scripts[0].js.indexOf('terminal-status-live-observer.js'));
 
-  assert.match(observer, /RUNTIME_VERSION = 4/);
+  assert.match(observer, /RUNTIME_VERSION = 5/);
   assert.match(observer, /CHATGPT_RENDERED_TERMINAL_STATUS/);
   assert.match(observer, /CHATGPT_RENDERED_TERMINAL_IDENTITY_QUERY/);
   assert.match(observer, /CHATGPT_RENDERED_TERMINAL_SCAN_DIAGNOSTIC/);
+  assert.match(observer, /chatgpt-notifier-terminal-status-v1/);
+  assert.match(observer, /chatgpt-notifier-terminal-status-query-v1/);
+  assert.match(observer, /chatgpt-notifier-terminal-status-response-v1/);
+  assert.match(observer, /terminalStatusClass/);
+  assert.match(observer, /getWatchdogSettings/);
+  assert.match(observer, /window\.postMessage/);
   assert.match(observer, /MutationObserver/);
   assert.match(observer, /RETRY_DELAYS_MS = Object\.freeze\(\[0, 250, 1000, 3000\]\)/);
   assert.match(observer, /result\?\.ok === true && result\?\.stopped === true/);
