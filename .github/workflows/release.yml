@@ -76,66 +76,189 @@ jobs:
           }
 
           powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Invoke-ExtensionTestSuite.ps1
-          if ($LASTEXITCODE -ne 0) { throw 'Extension tests failed.' }
+          if ($LASTEXITCODE -ne 0) { throw 'Extension architecture/behavior tests failed.' }
+
+          foreach ($script in @(
+            '.\standalone-quick-continue\prompt-format.js',
+            '.\standalone-quick-continue\config.js',
+            '.\standalone-quick-continue\composer-text.js',
+            '.\standalone-quick-continue\content-script.js'
+          )) {
+            node --check $script
+            if ($LASTEXITCODE -ne 0) { throw "Standalone Quick Continue syntax validation failed: $script" }
+          }
+          node --test .\tests\standalone-quick-continue.behavior.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'Standalone Quick Continue behavior tests failed.' }
+
+          $tokens = $null
+          $errors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path '.\tools\Invoke-NotifierManagedUpdateAcceptance.ps1'),
+            [ref]$tokens,
+            [ref]$errors)
+          if (@($errors).Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            throw 'Notifier managed-update acceptance script has PowerShell parse errors.'
+          }
+
+          $manifest = Get-Content -LiteralPath .\extension\manifest.json -Raw | ConvertFrom-Json
+          foreach ($forbidden in @('downloads', 'storage', 'nativeMessaging', 'notifications', 'offscreen')) {
+            if ($manifest.permissions -contains $forbidden) { throw "Forbidden extension permission present: $forbidden" }
+          }
+          if ($manifest.permissions -notcontains 'alarms') { throw 'Bounded recovery requires the reviewed alarms permission.' }
+          if ($manifest.host_permissions -contains 'https://github.com/*') { throw 'Extension must not depend on GitHub browser permissions.' }
+          if ($manifest.host_permissions -notcontains 'ws://127.0.0.1/*') { throw 'Loopback WebSocket permission is missing.' }
+
+          dotnet build .\src\ChatGPTResponseNotifier.Host\ChatGPTResponseNotifier.Host.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Windows helper build failed.' }
+          dotnet build .\installer\ChatGPTResponseNotifier.Setup.csproj --configuration Release
+          if ($LASTEXITCODE -ne 0) { throw 'Setup.exe project build failed.' }
 
       - name: Build, prove, and publish release
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           $ErrorActionPreference = 'Stop'
-          powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File .\tools\Publish-ExtensionRelease.ps1 -Publish
-          if ($LASTEXITCODE -ne 0) { throw 'Release publish failed.' }
+          $version = (Get-Content -LiteralPath .\VERSION.txt -Raw).Trim()
+          if ([string]::IsNullOrWhiteSpace($version)) { throw 'VERSION.txt is empty.' }
+          $tag = "v$version"
+          $releaseNotesPath = '.\RELEASE_NOTES.md'
+          if (-not (Test-Path -LiteralPath $releaseNotesPath -PathType Leaf)) { throw 'RELEASE_NOTES.md is missing.' }
+          $releaseNotes = (Get-Content -LiteralPath $releaseNotesPath -Raw).Trim()
+          if ([string]::IsNullOrWhiteSpace($releaseNotes)) { throw 'RELEASE_NOTES.md is empty.' }
+          $expectedReleaseHeading = "# ChatGPT Response Notifier $version"
+          $releaseHeading = (($releaseNotes -split "`r?`n", 2)[0]).Trim()
+          if ($releaseHeading -ne $expectedReleaseHeading) {
+            throw "RELEASE_NOTES.md heading mismatch. Expected '$expectedReleaseHeading', found '$releaseHeading'."
+          }
+          $artifactRoot = Join-Path $env:RUNNER_TEMP "chatgpt-response-notifier-release-$version"
+          Remove-Item -LiteralPath $artifactRoot -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $artifactRoot -Force | Out-Null
+
+          gh release view $tag --json tagName *> $null
+          $releaseExists = $LASTEXITCODE -eq 0
+
+          if (-not $releaseExists) {
+            $sourceCommit = $env:GITHUB_SHA
+            $bundleOutput = Join-Path $artifactRoot 'bundle'
+            New-Item -ItemType Directory -Path $bundleOutput -Force | Out-Null
+
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-TestBundle.ps1 `
+              -OutputDirectory $bundleOutput `
+              -SourceCommit $sourceCommit
+            if ($LASTEXITCODE -ne 0) { throw 'Managed-update bundle build failed.' }
+
+            $bundleRoot = Join-Path $bundleOutput "ChatGPT-Response-Notifier-$version"
+            $managedZip = Join-Path $artifactRoot "ChatGPT-Response-Notifier-$version.zip"
+            Compress-Archive -Path (Join-Path $bundleRoot '*') -DestinationPath $managedZip -CompressionLevel Optimal -Force
+
+            $setupOutput = Join-Path $artifactRoot 'setup'
+            powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\Build-Installer.ps1 `
+              -OutputDirectory $setupOutput `
+              -SourceCommit $sourceCommit
+            if ($LASTEXITCODE -ne 0) { throw 'Setup.exe build failed.' }
+            $setupExe = Join-Path $setupOutput "ChatGPT-Response-Notifier-Setup-$version.exe"
+            if (-not (Test-Path -LiteralPath $setupExe -PathType Leaf)) { throw 'Setup.exe output is missing.' }
+
+            # Prove the actual installer can install, launch the helper, replace the
+            # same semantic version while that helper is running, and complete its
+            # built-in localhost ping/pong both times. Both install root and bridge
+            # port are disposable, so acceptance cannot stop or bind over the live notifier.
+            $testInstallRoot = Join-Path $env:RUNNER_TEMP ('chatgpt-response-notifier-install-' + [Guid]::NewGuid().ToString('N'))
+            $portProbe = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, 0)
+            $portProbe.Start()
+            try {
+              $testBridgePort = ([System.Net.IPEndPoint]$portProbe.LocalEndpoint).Port
+            }
+            finally {
+              $portProbe.Stop()
+            }
+            $env:CHATGPT_RESPONSE_NOTIFIER_INSTALL_ROOT = $testInstallRoot
+            $env:CHATGPT_RESPONSE_NOTIFIER_TEST_BRIDGE_PORT = [string]$testBridgePort
+            try {
+              foreach ($attempt in 1..2) {
+                $setupProcess = Start-Process -FilePath $setupExe -ArgumentList '--silent','--skip-startup' -PassThru
+                Wait-Process -Id $setupProcess.Id -Timeout 45
+                $setupProcess.Refresh()
+                if ($setupProcess.ExitCode -ne 0) { throw "Setup.exe acceptance attempt $attempt failed with exit code $($setupProcess.ExitCode)." }
+              }
+
+              $statePath = Join-Path $testInstallRoot 'Data\install-state.json'
+              if (-not (Test-Path -LiteralPath $statePath -PathType Leaf)) { throw 'Release acceptance install-state.json is missing after replacement.' }
+              $state = Get-Content -LiteralPath $statePath -Raw | ConvertFrom-Json
+              if ($state.version -ne $version) { throw "Release acceptance version mismatch: $($state.version)" }
+              if ($state.sourceCommit -ne $sourceCommit) { throw "Release acceptance source mismatch: $($state.sourceCommit)" }
+            }
+            finally {
+              $testRootFull = [IO.Path]::GetFullPath($testInstallRoot).TrimEnd('\') + '\'
+              Get-Process -Name 'ChatGPTResponseNotifier.Host' -ErrorAction SilentlyContinue | ForEach-Object {
+                try {
+                  $processPath = [IO.Path]::GetFullPath([string]$_.Path)
+                  if ($processPath.StartsWith($testRootFull, [StringComparison]::OrdinalIgnoreCase)) {
+                    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+                  }
+                } catch {}
+              }
+              Remove-Item Env:CHATGPT_RESPONSE_NOTIFIER_TEST_BRIDGE_PORT -ErrorAction SilentlyContinue
+              Remove-Item Env:CHATGPT_RESPONSE_NOTIFIER_INSTALL_ROOT -ErrorAction SilentlyContinue
+              Remove-Item -LiteralPath $testInstallRoot -Recurse -Force -ErrorAction SilentlyContinue
+            }
+
+            gh release create $tag $managedZip $setupExe `
+              --target $sourceCommit `
+              --title "ChatGPT Response Notifier $version" `
+              --notes $releaseNotes
+            if ($LASTEXITCODE -ne 0) { throw 'GitHub release creation failed.' }
+          }
+          else {
+            git fetch origin "refs/tags/${tag}:refs/tags/${tag}" --force
+            if ($LASTEXITCODE -ne 0) { throw 'Could not fetch existing release tag.' }
+            $sourceCommit = (git rev-list -n 1 $tag).Trim()
+            if ([string]::IsNullOrWhiteSpace($sourceCommit)) { throw 'Could not resolve existing release source commit.' }
+            gh release download $tag --pattern "ChatGPT-Response-Notifier-$version.zip" --dir $artifactRoot --clobber
+            if ($LASTEXITCODE -ne 0) { throw 'Could not download existing managed-update release asset.' }
+            gh release edit $tag --notes $releaseNotes
+            if ($LASTEXITCODE -ne 0) { throw 'Could not refresh existing release notes.' }
+            $managedZip = Join-Path $artifactRoot "ChatGPT-Response-Notifier-$version.zip"
+          }
+
+          if (-not (Test-Path -LiteralPath $managedZip -PathType Leaf)) { throw 'Managed-update release ZIP is missing.' }
+          $sha256 = (Get-FileHash -LiteralPath $managedZip -Algorithm SHA256).Hash.ToLowerInvariant()
+          $downloadUrl = "https://github.com/thatoneguydan/chatgpt-response-notifier/releases/download/$tag/ChatGPT-Response-Notifier-$version.zip"
+          $feedTemp = Join-Path $artifactRoot 'update-manifest.json'
+          [ordered]@{
+            schemaVersion = 1
+            version = $version
+            sourceCommit = $sourceCommit
+            downloadUrl = $downloadUrl
+            sha256 = $sha256
+          } | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $feedTemp -Encoding UTF8
+
+          # Release jobs may start from an older main commit if another release feed
+          # was published while they were queued. Always publish onto the latest main.
+          git fetch origin main
+          if ($LASTEXITCODE -ne 0) { throw 'Could not refresh main before publishing the notifier update feed.' }
+          git checkout -B publish-notifier-feed origin/main
+          if ($LASTEXITCODE -ne 0) { throw 'Could not base the notifier update feed on current main.' }
+          New-Item -ItemType Directory -Path .\update -Force | Out-Null
+          Copy-Item -LiteralPath $feedTemp -Destination .\update\manifest.json -Force
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add update/manifest.json
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) {
+            git commit -m "Publish update manifest for $tag"
+            if ($LASTEXITCODE -ne 0) { throw 'Could not commit the notifier update feed.' }
+            git push origin HEAD:main
+            if ($LASTEXITCODE -ne 0) { throw 'Could not publish the notifier update feed.' }
+          }
 
       - name: Install and verify released notifier on Glass
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $sourceCommit = (git rev-parse HEAD).Trim()
-          $version = (Get-Content .\VERSION.txt -Raw).Trim()
-          $feed = Get-Content .\update\manifest.json -Raw | ConvertFrom-Json
-          if ([string]$feed.version -ne $version) {
-            throw "Published notifier feed version mismatch: expected $version, got $($feed.version)."
-          }
-          $sourceEntry = @($feed.downloads.PSObject.Properties | ForEach-Object {
-            $key = [string]$_.Name
-            $value = $_.Value
-            if ([string]$value.sourceCommit -eq $sourceCommit) {
-              [pscustomobject]@{ Key = $key; Value = $value }
-            }
-          } | Where-Object { $_ } | Select-Object -First 1)
-          if (-not $sourceEntry) {
-            throw "Published notifier feed does not contain a download for source commit $sourceCommit."
-          }
-          $expectedSha = ([string]$sourceEntry.Value.sha256).ToLowerInvariant()
-          if ($expectedSha -notmatch '^[a-f0-9]{64}$') {
-            throw "Published notifier feed SHA is invalid: $expectedSha"
-          }
-
-          $statusUri = 'http://127.0.0.1:38473/status'
-          $updateUri = 'http://127.0.0.1:38473/notifier/update'
-          $deadline = [DateTime]::UtcNow.AddMinutes(8)
-          $lastStatus = $null
-          while ([DateTime]::UtcNow -lt $deadline) {
-            try {
-              $updateResult = Invoke-RestMethod -Uri $updateUri -Method Get -TimeoutSec 120
-              $lastStatus = Invoke-RestMethod -Uri $statusUri -Method Get -TimeoutSec 10
-              if (
-                [string]$lastStatus.installedExtensionVersion -eq $version -and
-                [string]$lastStatus.runningHostVersion -eq $version -and
-                [string]$lastStatus.installedSourceCommit -eq $sourceCommit -and
-                [string]$lastStatus.installedPackageSha256 -eq $expectedSha
-              ) {
-                Write-Host "Installed notifier $version from $sourceCommit and verified running helper/package identity on Glass."
-                exit 0
-              }
-              if ($updateResult -and [string]$updateResult.result -eq 'failed') {
-                Write-Host "Managed updater reported a failed attempt; continuing bounded convergence polling."
-              }
-            }
-            catch {
-              Write-Host "Managed notifier status/update probe not ready: $($_.Exception.Message)"
-            }
-            Start-Sleep -Seconds 5
-          }
-
-          $lastJson = if ($lastStatus) { $lastStatus | ConvertTo-Json -Compress -Depth 6 } else { '<no status response>' }
-          throw "Released notifier $version did not converge to exact source $sourceCommit / SHA $expectedSha on Glass within the bounded acceptance window. Last status: $lastJson"
+          $version = (Get-Content -LiteralPath .\VERSION.txt -Raw).Trim()
+          if ([string]::IsNullOrWhiteSpace($version)) { throw 'VERSION.txt is empty.' }
+          & .\tools\Invoke-NotifierManagedUpdateAcceptance.ps1 -ExpectedVersion $version
