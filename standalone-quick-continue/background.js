@@ -196,6 +196,7 @@ function publicSimpleState(state, extras = {}) {
     nextAt: Number(state.nextAt || 0),
     exhausted: state.exhausted === true || state.phase === 'exhausted',
     lastStatusCode: String(state.lastStatusCode || ''),
+    lastStatusFingerprint: String(state.lastStatusFingerprint || ''),
     ...extras
   };
 }
@@ -263,7 +264,7 @@ async function setSimpleWatchdog(sender, message) {
     exhausted: false,
     settings,
     stopOnStatus: normalizeStopOnStatus(message?.stopOnStatus),
-    lastStatusFingerprint: '',
+    lastStatusFingerprint: String(message?.baselineStatusFingerprint || ''),
     lastStatusCode: ''
   };
   return saveAndScheduleSimpleState(state);
