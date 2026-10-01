@@ -19,16 +19,6 @@ const STATUS_CODES = Object.freeze([
   'INCOMPLETE_CONTINUE',
   'INCOMPLETE_HANDOFF'
 ]);
-const DEFAULT_STOP_ON_STATUS = Object.freeze({
-  PLANNING_ACTIVE: true,
-  COMPLETE_APPLIED: true,
-  COMPLETE_NO_CHANGES: true,
-  BLOCKED_HUMAN: true,
-  INCOMPLETE_LIMIT: false,
-  INCOMPLETE_TOOL_FAILURE: false,
-  INCOMPLETE_CONTINUE: false,
-  INCOMPLETE_HANDOFF: false
-});
 const CONTENT_FILES = [
   'runtime-reset.js',
   'dom-compat.js',
@@ -157,15 +147,6 @@ function normalizeSimpleSettings(value) {
   };
 }
 
-function normalizeStopOnStatus(value) {
-  const raw = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
-  const normalized = {};
-  for (const code of STATUS_CODES) {
-    normalized[code] = typeof raw[code] === 'boolean' ? raw[code] : DEFAULT_STOP_ON_STATUS[code];
-  }
-  return normalized;
-}
-
 async function readSimpleStates() {
   try {
     const stored = (await chrome.storage.local.get(SIMPLE_STATE_KEY))?.[SIMPLE_STATE_KEY];
@@ -263,7 +244,6 @@ async function setSimpleWatchdog(sender, message) {
     nextAt: Math.min(Date.now(), Math.max(Date.now() - 10_000, Number(message.startedAt) || Date.now())) + (settings.timerMinutes * 60 * 1000),
     exhausted: false,
     settings,
-    stopOnStatus: normalizeStopOnStatus(message?.stopOnStatus),
     lastStatusFingerprint: String(message?.baselineStatusFingerprint || ''),
     lastStatusCode: ''
   };
@@ -303,7 +283,7 @@ async function applySimpleStatus(sender, message) {
   if (!Number.isInteger(tabId)) return { enabled: false, reason: 'No ChatGPT tab identity.' };
   const states = await readSimpleStates();
   const state = states[stateKey(tabId)];
-  if (!state?.enabled || state.exhausted === true || state.phase === 'exhausted') return publicSimpleState(state);
+  if (!state?.enabled) return publicSimpleState(state);
 
   const conversationId = String(message?.conversationId || '').trim();
   if (!conversationId || state.conversationId !== conversationId || conversationIdFromUrl(sender?.tab?.url) !== conversationId) {
@@ -312,19 +292,14 @@ async function applySimpleStatus(sender, message) {
 
   const statusCode = String(message?.statusCode || '').trim();
   if (!STATUS_CODES.includes(statusCode)) return publicSimpleState(state, { statusAction: 'ignored-status' });
-  const fingerprint = String(message?.fingerprint || `${conversationId}|${statusCode}`).trim();
+  const statusClass = String(message?.statusClass || '').trim();
+  if (!['stop', 'continue'].includes(statusClass)) return publicSimpleState(state, { statusAction: 'ignored-status-class' });
+  const fingerprint = String(message?.fingerprint || '').trim();
   if (!fingerprint || fingerprint === state.lastStatusFingerprint) return publicSimpleState(state, { statusAction: 'duplicate' });
 
   const refreshedSettings = normalizeSimpleSettings(message?.settings);
   if (refreshedSettings) state.settings = refreshedSettings;
-  if (message?.stopOnStatus && typeof message.stopOnStatus === 'object' && !Array.isArray(message.stopOnStatus)) {
-    state.stopOnStatus = normalizeStopOnStatus(message.stopOnStatus);
-  } else if (!state.stopOnStatus) {
-    state.stopOnStatus = normalizeStopOnStatus(null);
-  }
-
-  const stopClass = state.stopOnStatus[statusCode] === true;
-  const respected = stopClass
+  const respected = statusClass === 'stop'
     ? state.settings?.respectStopStatusCodes !== false
     : state.settings?.respectContinueStatusCodes !== false;
   state.lastStatusFingerprint = fingerprint;
@@ -336,8 +311,14 @@ async function applySimpleStatus(sender, message) {
     return publicSimpleState(state, { statusAction: 'ignored' });
   }
 
-  if (stopClass) {
+  if (statusClass === 'stop') {
     return clearSimpleState(tabId, { reason: 'status-stop', statusCode, statusAction: 'stop' });
+  }
+
+  if (state.exhausted === true || state.phase === 'exhausted') {
+    states[stateKey(tabId)] = state;
+    await writeSimpleStates(states);
+    return publicSimpleState(state, { statusAction: 'exhausted', statusCode });
   }
 
   state.attemptsUsed = Number(state.attemptsUsed || 0) + 1;
