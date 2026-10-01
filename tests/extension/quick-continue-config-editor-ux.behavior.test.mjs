@@ -22,8 +22,8 @@ const definitiveCodes = [
   'INCOMPLETE_CONTINUE'
 ];
 
-test('Quick Continue 1.2.34 ships the large config editor styling to new and already-open tabs', () => {
-  assert.equal(manifest.version, '1.2.34');
+test('Quick Continue 1.2.35 ships the large config editor styling to new and already-open tabs', () => {
+  assert.equal(manifest.version, '1.2.35');
   const declared = manifest.content_scripts.flatMap((entry) => entry.js || []);
   assert.ok(declared.includes('config-editor-style.js'));
   assert.ok(declared.includes('conversation-state.js'));
@@ -42,11 +42,11 @@ test('config editor caret uses high-contrast theme text instead of a fixed dark-
   assert.match(styleSource, /color:\s*var\(--text-primary, #111111\) !important/);
 });
 
-test('smart watchdog JSON exposes editable timer, attempt cap, status-class gates, and all GitHub status stop policies', () => {
+test('smart watchdog JSON keeps timing, attempt cap, and the GitHub status classification table', () => {
   assert.equal(config.watchdog.timerMinutes, 30);
   assert.equal(config.watchdog.attempts, 3);
-  assert.equal(config.watchdog.respectStopStatusCodes, true);
-  assert.equal(config.watchdog.respectContinueStatusCodes, true);
+  assert.equal(config.watchdog.respectStopStatusCodes, undefined);
+  assert.equal(config.watchdog.respectContinueStatusCodes, undefined);
   assert.deepEqual(Object.keys(config.watchdog.stopOnStatus).sort(), definitiveCodes.sort());
   for (const code of ['PLANNING_ACTIVE', 'COMPLETE_APPLIED', 'COMPLETE_NO_CHANGES', 'BLOCKED_HUMAN']) {
     assert.equal(config.watchdog.stopOnStatus[code], true);
@@ -56,21 +56,28 @@ test('smart watchdog JSON exposes editable timer, attempt cap, status-class gate
   }
 });
 
-test('Simple watchdog JSON exposes every fixed-sequence timing and remains status-blind', () => {
+test('Simple watchdog JSON owns both status-class respect gates and observes exact status footers', () => {
   assert.deepEqual(config.simpleWatchdog, {
     timerMinutes: 30,
     attempts: 3,
     stopToRefreshSeconds: 30,
-    refreshToContinueSeconds: 30
+    refreshToContinueSeconds: 30,
+    respectStopStatusCodes: true,
+    respectContinueStatusCodes: true
   });
   assert.match(conversationStateSource, /Toggle simple fallback watchdog/);
+  assert.match(conversationStateSource, /SIMPLE_STATUS_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATUS'/);
+  assert.match(conversationStateSource, /\^\\\[GITHUB_STATUS: \(\[A-Z\]\[A-Z0-9_\]\*\)\\\]\$/);
+  assert.match(conversationStateSource, /candidate\.closest\?\.\('pre, code, blockquote'\)/);
+  assert.match(backgroundSource, /SIMPLE_STATUS_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATUS'/);
+  assert.match(backgroundSource, /const stopClass = state\.stopOnStatus\[statusCode\] === true/);
+  assert.match(backgroundSource, /state\.settings\?\.respectStopStatusCodes !== false/);
+  assert.match(backgroundSource, /state\.settings\?\.respectContinueStatusCodes !== false/);
+  assert.match(backgroundSource, /reason: 'status-stop'/);
+  assert.match(backgroundSource, /statusAction: 'continue'/);
   assert.match(backgroundSource, /phase: 'countdown'/);
   assert.match(backgroundSource, /state\.phase = 'stop-wait'/);
   assert.match(backgroundSource, /chrome\.tabs\.reload\(tabId\)/);
   assert.match(backgroundSource, /state\.phase = 'refresh-wait'/);
   assert.match(backgroundSource, /action: 'send-continue'/);
-  for (const code of definitiveCodes) {
-    assert.equal(backgroundSource.includes(code), false, `Simple background path must not inspect ${code}`);
-    assert.equal(conversationStateSource.includes(code), false, `Simple page path must not inspect ${code}`);
-  }
 });
