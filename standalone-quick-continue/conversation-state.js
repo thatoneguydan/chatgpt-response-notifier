@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 5;
+  const RUNTIME_VERSION = 6;
   const STORAGE_PREFIX = 'quick-continue:manual-timestamp:';
   const CLOCK_SELECTOR = '[aria-label="Current local time"]';
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
@@ -94,12 +94,15 @@
 
   async function restoreForConversation(nextConversationId, previousConversationId) {
     const generation = ++restoreGeneration;
-    desiredEnabled = false;
+    const carryProvisional = !previousConversationId && provisionalTouched;
+    desiredEnabled = carryProvisional ? provisionalEnabled : false;
     applyDesiredState();
 
     if (!nextConversationId) {
-      provisionalEnabled = false;
-      provisionalTouched = false;
+      if (!carryProvisional) {
+        provisionalEnabled = false;
+        provisionalTouched = false;
+      }
       return;
     }
 
@@ -115,7 +118,7 @@
       return;
     }
 
-    if (!previousConversationId && provisionalTouched) {
+    if (carryProvisional) {
       desiredEnabled = provisionalEnabled;
       try { await writeStoredState(nextConversationId, desiredEnabled); } catch {}
       if (generation !== restoreGeneration || activeConversationId !== nextConversationId) return;
@@ -176,8 +179,7 @@
     renderSimpleCountdown();
     if (!simpleButton) return;
     const pressed = String(simpleEnabled);
-    if (simpleButton.getAttribute('aria-pressed') === pressed) return;
-    simpleButton.setAttribute('aria-pressed', pressed);
+    if (simpleButton.getAttribute('aria-pressed') !== pressed) simpleButton.setAttribute('aria-pressed', pressed);
     Object.assign(simpleButton.style, {
       background: simpleEnabled ? '#16a34a' : 'var(--main-surface-secondary, rgba(127,127,127,.10))',
       color: simpleEnabled ? '#fff' : 'inherit'
@@ -359,9 +361,11 @@
     const nextConversationId = conversationIdFromUrl();
     if (nextConversationId !== activeConversationId) {
       const previousConversationId = activeConversationId || '';
+      const carrySimpleFromUnsavedChat = !previousConversationId && Boolean(nextConversationId) && simpleEnabled;
       activeConversationId = nextConversationId;
       restoreForConversation(nextConversationId, previousConversationId).catch(() => {});
-      restoreSimpleForConversation(nextConversationId).catch(() => {});
+      if (!carrySimpleFromUnsavedChat) restoreSimpleForConversation(nextConversationId).catch(() => {});
+      else renderSimpleState(simpleState);
     } else {
       applyDesiredState();
     }
