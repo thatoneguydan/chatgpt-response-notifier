@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 7;
+  const RUNTIME_VERSION = 8;
   const STORAGE_PREFIX = 'quick-continue:manual-timestamp:';
   const CLOCK_SELECTOR = '[aria-label="Current local time"]';
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
@@ -10,6 +10,8 @@
   const SIMPLE_STATE_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATE';
   const SIMPLE_SET_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_SET';
   const SIMPLE_GET_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_GET';
+  const SIMPLE_STATUS_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATUS';
+  const SIMPLE_STATUS_DEBOUNCE_MS = 250;
   const previousRuntime = globalThis.__chatgptQuickContinueConversationStateRuntime;
   if (Number(previousRuntime?.version || 0) === RUNTIME_VERSION) return;
   try { previousRuntime?.dispose?.(); } catch {}
@@ -30,6 +32,9 @@
   let simpleState = null;
   let simpleRow = null;
   let simpleTickTimer = null;
+  let simpleStatusTimer = null;
+  let lastSimpleStatusFingerprint = '';
+  let simpleStatusInFlightFingerprint = '';
   let simpleConfig = null;
   let unsubscribeConfig = null;
   let disposed = false;
@@ -178,6 +183,11 @@
     if (disposed) return;
     simpleState = state && typeof state === 'object' ? state : { enabled: state === true };
     simpleEnabled = simpleState.enabled === true;
+    if (typeof simpleState.lastStatusFingerprint === 'string') lastSimpleStatusFingerprint = simpleState.lastStatusFingerprint;
+    if (!simpleEnabled) {
+      lastSimpleStatusFingerprint = '';
+      simpleStatusInFlightFingerprint = '';
+    }
     const exhausted = simpleState.exhausted === true || simpleState.phase === 'exhausted';
     if (simpleEnabled && !exhausted && simpleTickTimer === null) simpleTickTimer = setInterval(renderSimpleCountdown, 1000);
     if ((!simpleEnabled || exhausted) && simpleTickTimer !== null) { clearInterval(simpleTickTimer); simpleTickTimer = null; }
@@ -204,6 +214,109 @@
     });
   }
 
+  function roleOfTurn(turn) {
+    try {
+      const direct = String(turn?.getAttribute?.('data-turn') || turn?.getAttribute?.('data-message-author-role') || '').trim().toLowerCase();
+      if (direct === 'user' || direct === 'assistant') return direct;
+      if (turn?.querySelector?.('[data-message-author-role="user"]')) return 'user';
+      if (turn?.querySelector?.('[data-message-author-role="assistant"]')) return 'assistant';
+    } catch {}
+    return '';
+  }
+
+  function turnId(turn, role, index) {
+    return String(turn?.getAttribute?.('data-testid') || turn?.id || `${role}-${index}`).trim();
+  }
+
+  function conversationTurns() {
+    try {
+      const wrappers = Array.from(document.querySelectorAll('[data-testid^="conversation-turn-"]'));
+      if (wrappers.length) return wrappers;
+      const selector = '[data-turn="user"], [data-turn="assistant"], [data-message-author-role="user"], [data-message-author-role="assistant"]';
+      return Array.from(document.querySelectorAll(selector)).filter((node) => {
+        try { return !node.parentElement?.closest?.(selector); } catch { return true; }
+      });
+    } catch {
+      return [];
+    }
+  }
+
+  function terminalCodeFromElement(element) {
+    if (!element) return '';
+    let text = '';
+    try { text = String(element.innerText || element.textContent || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim(); } catch {}
+    const match = text.match(/^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/);
+    if (!match) return '';
+    const code = match[1];
+    return Array.from(configApi?.statusCodes || []).includes(code) ? code : '';
+  }
+
+  function latestSimpleTerminal() {
+    const turns = conversationTurns();
+    let latestUserIndex = -1;
+    for (let index = 0; index < turns.length; index += 1) {
+      if (roleOfTurn(turns[index]) === 'user') latestUserIndex = index;
+    }
+    if (latestUserIndex < 0) return null;
+    const conversationId = conversationIdFromUrl();
+    let terminal = null;
+    for (let index = latestUserIndex + 1; index < turns.length; index += 1) {
+      if (roleOfTurn(turns[index]) !== 'assistant') continue;
+      const root = (() => {
+        try { return turns[index].matches?.('[data-message-author-role="assistant"]') ? turns[index] : turns[index].querySelector?.('[data-message-author-role="assistant"]') || turns[index]; }
+        catch { return turns[index]; }
+      })();
+      let candidates = [];
+      try { candidates = Array.from(root.querySelectorAll?.('p, li') || []); } catch {}
+      for (let candidateIndex = candidates.length - 1; candidateIndex >= 0; candidateIndex -= 1) {
+        const candidate = candidates[candidateIndex];
+        try { if (candidate.closest?.('pre, code, blockquote')) continue; } catch {}
+        const statusCode = terminalCodeFromElement(candidate);
+        if (!statusCode) continue;
+        const fingerprint = `${conversationId || location.pathname}|${turnId(turns[index], 'assistant', index)}|${statusCode}`;
+        terminal = { statusCode, conversationId, fingerprint };
+        break;
+      }
+    }
+    return terminal;
+  }
+
+  async function inspectSimpleTerminal() {
+    simpleStatusTimer = null;
+    if (disposed || !simpleEnabled || simpleState?.exhausted === true || simpleState?.phase === 'exhausted') return;
+    const config = simpleConfig;
+    if (!config?.simpleWatchdog || (!config.simpleWatchdog.respectStopStatusCodes && !config.simpleWatchdog.respectContinueStatusCodes)) return;
+    const terminal = latestSimpleTerminal();
+    if (!terminal?.statusCode || !terminal.fingerprint) return;
+    if (terminal.fingerprint === lastSimpleStatusFingerprint || terminal.fingerprint === simpleStatusInFlightFingerprint) return;
+    simpleStatusInFlightFingerprint = terminal.fingerprint;
+    let response = null;
+    try {
+      response = await chrome.runtime.sendMessage({
+        type: SIMPLE_STATUS_MESSAGE,
+        conversationId: terminal.conversationId,
+        statusCode: terminal.statusCode,
+        fingerprint: terminal.fingerprint,
+        settings: config.simpleWatchdog,
+        stopOnStatus: config.watchdog?.stopOnStatus
+      });
+    } catch {}
+    if (disposed) return;
+    if (simpleStatusInFlightFingerprint === terminal.fingerprint) simpleStatusInFlightFingerprint = '';
+    if (response && typeof response === 'object') {
+      lastSimpleStatusFingerprint = terminal.fingerprint;
+      renderSimpleState(response);
+    } else if (simpleEnabled) {
+      scheduleSimpleStatusInspection(500);
+    }
+  }
+
+  function scheduleSimpleStatusInspection(delayMs = SIMPLE_STATUS_DEBOUNCE_MS) {
+    if (disposed || !simpleEnabled) return;
+    if (simpleStatusTimer !== null) clearTimeout(simpleStatusTimer);
+    simpleStatusTimer = setTimeout(() => { inspectSimpleTerminal().catch(() => {}); }, Math.max(0, Number(delayMs) || 0));
+  }
+
   async function setSimpleEnabled(nextEnabled) {
     if (disposed) return;
     const generation = ++simpleRequestGeneration;
@@ -217,9 +330,12 @@
       showStatus('Simple watchdog config unavailable.');
       return;
     }
+    const baselineStatusFingerprint = nextEnabled ? String(latestSimpleTerminal()?.fingerprint || '') : '';
+    lastSimpleStatusFingerprint = baselineStatusFingerprint;
     renderSimpleState(nextEnabled ? {
       enabled: true, phase: 'countdown', attemptsRemaining: config.simpleWatchdog.attempts,
-      nextAt: startedAt + config.simpleWatchdog.timerMinutes * 60_000
+      nextAt: startedAt + config.simpleWatchdog.timerMinutes * 60_000,
+      lastStatusFingerprint: baselineStatusFingerprint
     } : { enabled: false });
     let response = null;
     try {
@@ -228,12 +344,15 @@
         enabled: nextEnabled === true,
         conversationId,
         startedAt,
-        settings: config?.simpleWatchdog
+        settings: config?.simpleWatchdog,
+        stopOnStatus: config?.watchdog?.stopOnStatus,
+        baselineStatusFingerprint
       });
     } catch {}
     if (disposed || generation !== simpleRequestGeneration || conversationIdFromUrl() !== conversationId) return;
     renderSimpleState(response);
     if (nextEnabled && response?.enabled !== true) showStatus(String(response?.reason || 'Simple watchdog could not start.'));
+    if (response?.enabled === true) scheduleSimpleStatusInspection();
   }
 
   function handleSimpleButtonClick(event) {
@@ -288,6 +407,7 @@
     try { response = await chrome.runtime.sendMessage({ type: SIMPLE_GET_MESSAGE, conversationId }); } catch {}
     if (disposed || generation !== simpleRestoreGeneration || activeConversationId !== conversationId) return;
     renderSimpleState(response);
+    if (response?.enabled === true) scheduleSimpleStatusInspection();
   }
 
   function composerElement() {
@@ -367,6 +487,8 @@
     if (nextConversationId !== activeConversationId) {
       const previousConversationId = activeConversationId || '';
       activeConversationId = nextConversationId;
+      lastSimpleStatusFingerprint = '';
+      simpleStatusInFlightFingerprint = '';
       restoreForConversation(nextConversationId, previousConversationId).catch(() => {});
       // Always query the background on route assignment. Its GET path owns the
       // provisional -> real-conversation migration, while the current UI state
@@ -422,12 +544,19 @@
     applyDesiredState();
   }
 
-  function handleDocumentMutations() {
+  function mutationInsideToolbar(record) {
+    const target = record?.target?.nodeType === 1 ? record.target : record?.target?.parentElement;
+    if (!target) return false;
+    try { return Boolean(target.closest?.(`#${TOOLBAR_ID}`)); } catch { return false; }
+  }
+
+  function handleDocumentMutations(records) {
     if (disposed) return;
     // Route changes are also covered by Navigation/popstate; this observer only
-    // needs to repair a detached/remounted toolbar. Avoid URL parsing and other
-    // work for every editor keystroke while the toolbar is healthy.
+    // repairs a detached/remounted toolbar and inspects real ChatGPT output.
+    // Toolbar countdown churn is excluded, and dom-compat filters composer typing.
     if (!simpleButton?.isConnected || document.getElementById(TOOLBAR_ID) !== simpleButton?.parentElement) scheduleSync();
+    if (simpleEnabled && Array.from(records || []).some((record) => !mutationInsideToolbar(record))) scheduleSimpleStatusInspection();
   }
 
   try {
@@ -450,6 +579,7 @@
     get activeConversationId() { return activeConversationId || ''; },
     get desiredEnabled() { return desiredEnabled; },
     get simpleEnabled() { return simpleEnabled; },
+    latestSimpleTerminal,
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -458,6 +588,7 @@
       simpleRequestGeneration += 1;
       try { unsubscribeConfig?.(); } catch {}
       try { if (simpleTickTimer !== null) clearInterval(simpleTickTimer); } catch {}
+      try { if (simpleStatusTimer !== null) clearTimeout(simpleStatusTimer); } catch {}
       try { simpleRow?.remove(); } catch {}
       try { observer?.disconnect(); } catch {}
       try { document.removeEventListener('click', persistUserChoiceSoon, true); } catch {}
