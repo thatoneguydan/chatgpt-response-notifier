@@ -1,13 +1,16 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 4;
+  const RUNTIME_VERSION = 5;
   const TURN_SELECTOR = '[data-testid^="conversation-turn-"]';
   const RETRY_DELAYS_MS = Object.freeze([0, 250, 1000, 3000]);
   const NO_STATUS_DIAGNOSTIC_DELAY_MS = 1500;
   const NO_STATUS_DIAGNOSTIC_MIN_INTERVAL_MS = 10000;
   const SCAN_DEBOUNCE_MS = 250;
   const MAX_SCAN_INTERVAL_MS = 1500;
+  const TERMINAL_BRIDGE_MARKER = 'chatgpt-notifier-terminal-status-v1';
+  const TERMINAL_QUERY_MARKER = 'chatgpt-notifier-terminal-status-query-v1';
+  const TERMINAL_RESPONSE_MARKER = 'chatgpt-notifier-terminal-status-response-v1';
 
   try { globalThis.__chatgptNotifierRenderedTerminalObserver?.dispose?.(); } catch {}
 
@@ -150,6 +153,57 @@
     };
   }
 
+  function terminalStatusClass(statusCode) {
+    const code = String(statusCode || '');
+    if (globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(code) !== true) return '';
+    try {
+      const settings = globalThis.ChatGPTNotifierContinuationPolicy?.getWatchdogSettings?.() || null;
+      return settings?.stopOnStatus?.[code] === true ? 'stop' : 'continue';
+    } catch {
+      return '';
+    }
+  }
+
+  function terminalBridgePayload(current) {
+    const snapshot = current?.snapshot || null;
+    const statusCode = String(current?.statusCode || '');
+    const statusClass = terminalStatusClass(statusCode);
+    if (!snapshot?.conversationId || !snapshot?.promptKey || !snapshot?.assistantKey || !statusCode || !statusClass) return null;
+    const fingerprint = `${snapshot.promptKey}|${snapshot.assistantKey}|${snapshot.assistantRevision}|${statusCode}`;
+    return {
+      conversationId: String(snapshot.conversationId),
+      promptKey: String(snapshot.promptKey),
+      assistantKey: String(snapshot.assistantKey),
+      assistantRevision: String(snapshot.assistantRevision || ''),
+      statusCode,
+      statusClass,
+      fingerprint
+    };
+  }
+
+  function publishTerminalBridge(current) {
+    const terminal = terminalBridgePayload(current);
+    if (!terminal) return false;
+    try {
+      window.postMessage({ marker: TERMINAL_BRIDGE_MARKER, terminal }, location.origin);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function handleTerminalBridgeQuery(event) {
+    if (event?.source !== window || event?.origin !== location.origin) return;
+    const data = event?.data;
+    if (!data || data.marker !== TERMINAL_QUERY_MARKER) return;
+    const requestId = String(data.requestId || '');
+    if (!requestId) return;
+    const terminal = terminalBridgePayload(statusForLatestAssistant());
+    try {
+      window.postMessage({ marker: TERMINAL_RESPONSE_MARKER, requestId, terminal }, location.origin);
+    } catch {}
+  }
+
   function clearRetryTimers() {
     for (const timer of retryTimers) {
       try { clearTimeout(timer); } catch {}
@@ -278,6 +332,7 @@
       statusCode: code,
       statusLine: `[GITHUB_STATUS: ${code}]`
     };
+    publishTerminalBridge(current);
     const key = `${current.snapshot.promptKey}|${current.snapshot.assistantKey}|${current.snapshot.assistantRevision}|${current.statusCode}`;
     if (key === deliveredKey || key === inFlightKey) return;
     clearRetryTimers();
@@ -319,6 +374,7 @@
   }
 
   try { chrome.runtime.onMessage.addListener(handleRuntimeMessage); } catch {}
+  try { window.addEventListener('message', handleTerminalBridgeQuery, { signal: abortController.signal }); } catch {}
   try {
     observer = new MutationObserver((records) => {
       if (Array.from(records || []).some((record) => !globalThis.ChatGPTNotifierOwnedDomMutationFilter?.isComposerTextMutation?.(record))) scheduleScan();
@@ -331,6 +387,8 @@
     version: RUNTIME_VERSION,
     scan,
     latestIdentity,
+    statusForLatestAssistant,
+    terminalBridgePayload,
     dispose() {
       try { abortController.abort(); } catch {}
       try { observer?.disconnect(); } catch {}
