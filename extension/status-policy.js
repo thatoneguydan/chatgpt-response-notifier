@@ -1,10 +1,10 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 12;
+  const RUNTIME_VERSION = 13;
   if (globalThis.ChatGPTNotifierContinuationPolicy?.runtimeVersion === RUNTIME_VERSION) return;
 
-  const MONITOR_POLICY_VERSION = 9;
+  const MONITOR_POLICY_VERSION = 10;
   const WATCHDOG_SETTINGS_STORAGE_KEY = 'codeWatchdogSettingsV1';
   const MISSING_FOOTER_GRACE_MS = 30_000;
   const SILENT_IDLE_FIRST_MS = 90_000;
@@ -25,7 +25,13 @@
     PLANNING_ACTIVE: true, COMPLETE_APPLIED: true, COMPLETE_NO_CHANGES: true, BLOCKED_HUMAN: true,
     INCOMPLETE_LIMIT: false, INCOMPLETE_TOOL_FAILURE: false, INCOMPLETE_CONTINUE: false, INCOMPLETE_HANDOFF: false
   });
-  const DEFAULT_WATCHDOG_SETTINGS = Object.freeze({ timerMinutes: 30, attempts: 3, stopOnStatus: DEFAULT_STOP_ON_STATUS });
+  const DEFAULT_WATCHDOG_SETTINGS = Object.freeze({
+    timerMinutes: 30,
+    attempts: 3,
+    respectStopStatusCodes: true,
+    respectContinueStatusCodes: true,
+    stopOnStatus: DEFAULT_STOP_ON_STATUS
+  });
   const AUTO_CONTINUE_STATUS_CODES = Object.freeze(STATUS_CODES.filter((code) => !DEFAULT_STOP_ON_STATUS[code]));
   const DEFINITIVE_STOP_STATUS_CODES = Object.freeze(STATUS_CODES.filter((code) => DEFAULT_STOP_ON_STATUS[code]));
   const EXPLICIT_INTERRUPTION_KINDS = new Set([
@@ -51,6 +57,10 @@
     if (!Number.isFinite(timerMinutes) || timerMinutes < 0.1 || timerMinutes > 1440) throw new Error('watchdog timerMinutes must be between 0.1 and 1440');
     const attempts = raw.attempts == null ? DEFAULT_WATCHDOG_SETTINGS.attempts : Number(raw.attempts);
     if (!Number.isInteger(attempts) || attempts < 0 || attempts > 20) throw new Error('watchdog attempts must be an integer between 0 and 20');
+    const respectStopStatusCodes = raw.respectStopStatusCodes == null ? DEFAULT_WATCHDOG_SETTINGS.respectStopStatusCodes : raw.respectStopStatusCodes;
+    if (typeof respectStopStatusCodes !== 'boolean') throw new Error('watchdog respectStopStatusCodes must be boolean');
+    const respectContinueStatusCodes = raw.respectContinueStatusCodes == null ? DEFAULT_WATCHDOG_SETTINGS.respectContinueStatusCodes : raw.respectContinueStatusCodes;
+    if (typeof respectContinueStatusCodes !== 'boolean') throw new Error('watchdog respectContinueStatusCodes must be boolean');
     const stopRaw = raw.stopOnStatus == null ? {} : raw.stopOnStatus;
     if (!stopRaw || typeof stopRaw !== 'object' || Array.isArray(stopRaw)) throw new Error('watchdog stopOnStatus must be an object');
     for (const key of Object.keys(stopRaw)) {
@@ -59,11 +69,23 @@
     }
     const stopOnStatus = {};
     for (const code of STATUS_CODES) stopOnStatus[code] = Object.prototype.hasOwnProperty.call(stopRaw, code) ? stopRaw[code] : DEFAULT_STOP_ON_STATUS[code];
-    return Object.freeze({ timerMinutes: Math.round(timerMinutes * 1000) / 1000, attempts, stopOnStatus: Object.freeze(stopOnStatus) });
+    return Object.freeze({
+      timerMinutes: Math.round(timerMinutes * 1000) / 1000,
+      attempts,
+      respectStopStatusCodes,
+      respectContinueStatusCodes,
+      stopOnStatus: Object.freeze(stopOnStatus)
+    });
   }
 
   function cloneWatchdogSettings(value = watchdogSettings) {
-    return { timerMinutes: Number(value.timerMinutes), attempts: Number(value.attempts), stopOnStatus: { ...value.stopOnStatus } };
+    return {
+      timerMinutes: Number(value.timerMinutes),
+      attempts: Number(value.attempts),
+      respectStopStatusCodes: value.respectStopStatusCodes !== false,
+      respectContinueStatusCodes: value.respectContinueStatusCodes !== false,
+      stopOnStatus: { ...value.stopOnStatus }
+    };
   }
   function applyWatchdogSettings(value) { watchdogSettings = normalizeWatchdogSettings(value); return cloneWatchdogSettings(); }
   function watchdogDelayMs() { return Math.max(6_000, Math.round(Number(watchdogSettings.timerMinutes || 30) * 60_000)); }
@@ -83,16 +105,16 @@
     });
   }
 
-  function isDefinitiveStopStatusCode(value) {
+  function statusCodeDisposition(value) {
     const statusCode = String(value || '');
-    return STATUS_CODE_SET.has(statusCode) && watchdogSettings.stopOnStatus[statusCode] === true;
+    if (!STATUS_CODE_SET.has(statusCode)) return 'unknown';
+    if (watchdogSettings.stopOnStatus[statusCode] === true) {
+      return watchdogSettings.respectStopStatusCodes === true ? 'stop' : 'ignore';
+    }
+    return watchdogSettings.respectContinueStatusCodes === true ? 'continue' : 'ignore';
   }
-  function isAutoContinueStatusCode(value) {
-    const statusCode = String(value || '');
-    if (!statusCode || isDefinitiveStopStatusCode(statusCode)) return false;
-    if (STATUS_CODE_SET.has(statusCode)) return true;
-    return globalThis.ChatGPTNotifierStatusCode?.isStatusCode?.(statusCode) === true;
-  }
+  function isDefinitiveStopStatusCode(value) { return statusCodeDisposition(value) === 'stop'; }
+  function isAutoContinueStatusCode(value) { return statusCodeDisposition(value) === 'continue'; }
   function isCurrentExplicitInterruption(observation = {}) {
     if (observation.explicitInterruption !== true || observation.applicationStateIdentityMatched === false) return false;
     return EXPLICIT_INTERRUPTION_KINDS.has(String(observation.interruptionKind || ''))
@@ -154,7 +176,11 @@
     if (observation.rateLimited === true) return { state: 'attention', reason: 'rate-limited', automaticActionAllowed: false, openProfileBreaker: true };
     if (observation.hasDraft === true) return { state: 'paused', reason: 'draft-present', automaticActionAllowed: false };
     if (observation.hasUpload === true) return { state: 'paused', reason: 'upload-present', automaticActionAllowed: false };
-    if (validStatus) return { state: 'coded-terminal', reason: String(observation.statusCode), automaticActionAllowed: isAutoContinueStatusCode(observation.statusCode) };
+    if (validStatus) {
+      const disposition = statusCodeDisposition(observation.statusCode);
+      if (disposition === 'ignore') return { state: 'waiting', reason: `status-ignored:${String(observation.statusCode)}`, automaticActionAllowed: false };
+      return { state: 'coded-terminal', reason: String(observation.statusCode), automaticActionAllowed: disposition === 'continue' };
+    }
     if (isCurrentExplicitInterruption(observation)) return { state: 'attention', reason: String(observation.interruptionKind), automaticActionAllowed: false, recoveryCandidate: true };
     if (observation.stopGenerating === true || observation.toolActivity === true) return { state: 'working', reason: observation.toolActivity ? 'tool-activity' : 'generation-active', automaticActionAllowed: false };
     if (observation.explicitInterruption === true) return { state: 'attention', reason: String(observation.interruptionKind || 'explicit-interruption'), automaticActionAllowed: false, recoveryCandidate: true };
@@ -226,7 +252,7 @@
     autoContinueStatusCodes: AUTO_CONTINUE_STATUS_CODES, definitiveStopStatusCodes: DEFINITIVE_STOP_STATUS_CODES,
     statusCodes: STATUS_CODES, defaultWatchdogSettings: DEFAULT_WATCHDOG_SETTINGS,
     normalizeWatchdogSettings, applyWatchdogSettings, getWatchdogSettings, watchdogDelayMs, watchdogMaxSends,
-    classifyApplicationText, isDefinitiveStopStatusCode, isAutoContinueStatusCode, isCurrentExplicitInterruption,
+    classifyApplicationText, statusCodeDisposition, isDefinitiveStopStatusCode, isAutoContinueStatusCode, isCurrentExplicitInterruption,
     withStickyExplicitInterruption,
     thresholds: Object.freeze({
       missingFooterGraceMs: MISSING_FOOTER_GRACE_MS, silentIdleFirstMs: SILENT_IDLE_FIRST_MS,
