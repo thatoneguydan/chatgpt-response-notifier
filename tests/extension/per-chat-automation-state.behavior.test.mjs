@@ -17,13 +17,15 @@ test('automation enrollment is durable and keyed independently by conversation',
   assert.match(monitorSource, /const enrollment = active\?\.id \? await getEnrollment\(active\.id\) : null/);
 });
 
-test('chat route changes invalidate only notifier state UI so the next render reads that chat state', () => {
+test('first new-chat route assignment preserves provisional automation UI while normal chat navigation refreshes it', () => {
   assert.doesNotThrow(() => new vm.Script(routeRefreshSource));
+  assert.match(routeRefreshSource, /const RUNTIME_VERSION = 2;/);
   assert.match(routeRefreshSource, /AUTOMATION_UI_SELECTOR = '\[data-chatgpt-notifier-automation-ui-owner\]'/);
-  assert.match(routeRefreshSource, /nextConversationId === activeConversationId/);
-  assert.match(routeRefreshSource, /invalidateAutomationUi\(\)/);
-  assert.match(routeRefreshSource, /MutationObserver\(scheduleSync\)/);
+  assert.match(routeRefreshSource, /const previousConversationId = activeConversationId;/);
+  assert.match(routeRefreshSource, /if \(!previousConversationId && nextConversationId\) return;/);
+  assert.match(routeRefreshSource, /invalidateAutomationUi\(\);/);
   assert.match(routeRefreshSource, /navigatesuccess/);
+  assert.doesNotMatch(routeRefreshSource, /new MutationObserver/);
   assert.doesNotMatch(routeRefreshSource, /fetch\s*\(|XMLHttpRequest|WebSocket|tabs\.update|windows\.update/);
 });
 
