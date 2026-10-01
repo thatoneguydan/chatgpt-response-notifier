@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 8;
+  const RUNTIME_VERSION = 9;
   const STORAGE_PREFIX = 'quick-continue:manual-timestamp:';
   const CLOCK_SELECTOR = '[aria-label="Current local time"]';
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
@@ -11,7 +11,10 @@
   const SIMPLE_SET_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_SET';
   const SIMPLE_GET_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_GET';
   const SIMPLE_STATUS_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATUS';
-  const SIMPLE_STATUS_DEBOUNCE_MS = 250;
+  const TERMINAL_BRIDGE_MARKER = 'chatgpt-notifier-terminal-status-v1';
+  const TERMINAL_QUERY_MARKER = 'chatgpt-notifier-terminal-status-query-v1';
+  const TERMINAL_RESPONSE_MARKER = 'chatgpt-notifier-terminal-status-response-v1';
+  const TERMINAL_QUERY_TIMEOUT_MS = 250;
   const previousRuntime = globalThis.__chatgptQuickContinueConversationStateRuntime;
   if (Number(previousRuntime?.version || 0) === RUNTIME_VERSION) return;
   try { previousRuntime?.dispose?.(); } catch {}
@@ -32,7 +35,6 @@
   let simpleState = null;
   let simpleRow = null;
   let simpleTickTimer = null;
-  let simpleStatusTimer = null;
   let lastSimpleStatusFingerprint = '';
   let simpleStatusInFlightFingerprint = '';
   let simpleConfig = null;
@@ -214,107 +216,82 @@
     });
   }
 
-  function roleOfTurn(turn) {
-    try {
-      const direct = String(turn?.getAttribute?.('data-turn') || turn?.getAttribute?.('data-message-author-role') || '').trim().toLowerCase();
-      if (direct === 'user' || direct === 'assistant') return direct;
-      if (turn?.querySelector?.('[data-message-author-role="user"]')) return 'user';
-      if (turn?.querySelector?.('[data-message-author-role="assistant"]')) return 'assistant';
-    } catch {}
-    return '';
+  function normalizeTerminalSignal(value) {
+    const terminal = value && typeof value === 'object' ? value : null;
+    if (!terminal) return null;
+    const conversationId = String(terminal.conversationId || '').trim();
+    const statusCode = String(terminal.statusCode || '').trim();
+    const statusClass = String(terminal.statusClass || '').trim();
+    const fingerprint = String(terminal.fingerprint || '').trim();
+    if (!conversationId || !fingerprint || !['stop', 'continue'].includes(statusClass)) return null;
+    if (!Array.from(configApi?.statusCodes || []).includes(statusCode)) return null;
+    return { conversationId, statusCode, statusClass, fingerprint };
   }
 
-  function turnId(turn, role, index) {
-    return String(turn?.getAttribute?.('data-testid') || turn?.id || `${role}-${index}`).trim();
-  }
-
-  function conversationTurns() {
-    try {
-      const wrappers = Array.from(document.querySelectorAll('[data-testid^="conversation-turn-"]'));
-      if (wrappers.length) return wrappers;
-      const selector = '[data-turn="user"], [data-turn="assistant"], [data-message-author-role="user"], [data-message-author-role="assistant"]';
-      return Array.from(document.querySelectorAll(selector)).filter((node) => {
-        try { return !node.parentElement?.closest?.(selector); } catch { return true; }
-      });
-    } catch {
-      return [];
-    }
-  }
-
-  function terminalCodeFromElement(element) {
-    if (!element) return '';
-    let text = '';
-    try { text = String(element.innerText || element.textContent || '').replace(/[\u200B-\u200D\uFEFF]/g, '').trim(); } catch {}
-    const match = text.match(/^\[GITHUB_STATUS: ([A-Z][A-Z0-9_]*)\]$/);
-    if (!match) return '';
-    const code = match[1];
-    return Array.from(configApi?.statusCodes || []).includes(code) ? code : '';
-  }
-
-  function latestSimpleTerminal() {
-    const turns = conversationTurns();
-    let latestUserIndex = -1;
-    for (let index = 0; index < turns.length; index += 1) {
-      if (roleOfTurn(turns[index]) === 'user') latestUserIndex = index;
-    }
-    if (latestUserIndex < 0) return null;
-    const conversationId = conversationIdFromUrl();
-    let terminal = null;
-    for (let index = latestUserIndex + 1; index < turns.length; index += 1) {
-      if (roleOfTurn(turns[index]) !== 'assistant') continue;
-      const root = (() => {
-        try { return turns[index].matches?.('[data-message-author-role="assistant"]') ? turns[index] : turns[index].querySelector?.('[data-message-author-role="assistant"]') || turns[index]; }
-        catch { return turns[index]; }
-      })();
-      let candidates = [];
-      try { candidates = Array.from(root.querySelectorAll?.('p, li') || []); } catch {}
-      for (let candidateIndex = candidates.length - 1; candidateIndex >= 0; candidateIndex -= 1) {
-        const candidate = candidates[candidateIndex];
-        try { if (candidate.closest?.('pre, code, blockquote')) continue; } catch {}
-        const statusCode = terminalCodeFromElement(candidate);
-        if (!statusCode) continue;
-        const fingerprint = `${conversationId || location.pathname}|${turnId(turns[index], 'assistant', index)}|${statusCode}`;
-        terminal = { statusCode, conversationId, fingerprint };
-        break;
-      }
-    }
-    return terminal;
-  }
-
-  async function inspectSimpleTerminal() {
-    simpleStatusTimer = null;
-    if (disposed || !simpleEnabled || simpleState?.exhausted === true || simpleState?.phase === 'exhausted') return;
+  async function applyTerminalSignal(signalValue) {
+    if (disposed || !simpleEnabled) return null;
+    const signal = normalizeTerminalSignal(signalValue);
+    if (!signal || signal.conversationId !== conversationIdFromUrl()) return null;
     const config = simpleConfig;
-    if (!config?.simpleWatchdog || (!config.simpleWatchdog.respectStopStatusCodes && !config.simpleWatchdog.respectContinueStatusCodes)) return;
-    const terminal = latestSimpleTerminal();
-    if (!terminal?.statusCode || !terminal.fingerprint) return;
-    if (terminal.fingerprint === lastSimpleStatusFingerprint || terminal.fingerprint === simpleStatusInFlightFingerprint) return;
-    simpleStatusInFlightFingerprint = terminal.fingerprint;
+    if (!config?.simpleWatchdog) return null;
+    const respectClass = signal.statusClass === 'stop'
+      ? config.simpleWatchdog.respectStopStatusCodes !== false
+      : config.simpleWatchdog.respectContinueStatusCodes !== false;
+    if (!respectClass) return null;
+    if (signal.fingerprint === lastSimpleStatusFingerprint || signal.fingerprint === simpleStatusInFlightFingerprint) return null;
+
+    simpleStatusInFlightFingerprint = signal.fingerprint;
     let response = null;
     try {
       response = await chrome.runtime.sendMessage({
         type: SIMPLE_STATUS_MESSAGE,
-        conversationId: terminal.conversationId,
-        statusCode: terminal.statusCode,
-        fingerprint: terminal.fingerprint,
-        settings: config.simpleWatchdog,
-        stopOnStatus: config.watchdog?.stopOnStatus
+        conversationId: signal.conversationId,
+        statusCode: signal.statusCode,
+        statusClass: signal.statusClass,
+        fingerprint: signal.fingerprint,
+        settings: config.simpleWatchdog
       });
     } catch {}
-    if (disposed) return;
-    if (simpleStatusInFlightFingerprint === terminal.fingerprint) simpleStatusInFlightFingerprint = '';
+    if (disposed) return null;
+    if (simpleStatusInFlightFingerprint === signal.fingerprint) simpleStatusInFlightFingerprint = '';
     if (response && typeof response === 'object') {
-      lastSimpleStatusFingerprint = terminal.fingerprint;
+      lastSimpleStatusFingerprint = signal.fingerprint;
       renderSimpleState(response);
-    } else if (simpleEnabled) {
-      scheduleSimpleStatusInspection(500);
     }
+    return response;
   }
 
-  function scheduleSimpleStatusInspection(delayMs = SIMPLE_STATUS_DEBOUNCE_MS) {
-    if (disposed || !simpleEnabled) return;
-    if (simpleStatusTimer !== null) clearTimeout(simpleStatusTimer);
-    simpleStatusTimer = setTimeout(() => { inspectSimpleTerminal().catch(() => {}); }, Math.max(0, Number(delayMs) || 0));
+  function handleNotifierTerminalMessage(event) {
+    if (event?.source !== window || event?.origin !== location.origin) return;
+    const data = event?.data;
+    if (!data || data.marker !== TERMINAL_BRIDGE_MARKER) return;
+    applyTerminalSignal(data.terminal).catch(() => {});
+  }
+
+  function queryNotifierTerminalSignal(timeoutMs = TERMINAL_QUERY_TIMEOUT_MS) {
+    return new Promise((resolve) => {
+      if (disposed) { resolve(null); return; }
+      const requestId = `quick-continue-terminal-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+      let timer = null;
+      let settled = false;
+      const finish = (value) => {
+        if (settled) return;
+        settled = true;
+        if (timer !== null) clearTimeout(timer);
+        try { window.removeEventListener('message', onMessage); } catch {}
+        resolve(normalizeTerminalSignal(value));
+      };
+      const onMessage = (event) => {
+        if (event?.source !== window || event?.origin !== location.origin) return;
+        const data = event?.data;
+        if (!data || data.marker !== TERMINAL_RESPONSE_MARKER || String(data.requestId || '') !== requestId) return;
+        finish(data.terminal || null);
+      };
+      try { window.addEventListener('message', onMessage); } catch { resolve(null); return; }
+      timer = setTimeout(() => finish(null), Math.max(25, Number(timeoutMs) || TERMINAL_QUERY_TIMEOUT_MS));
+      try { window.postMessage({ marker: TERMINAL_QUERY_MARKER, requestId }, location.origin); }
+      catch { finish(null); }
+    });
   }
 
   async function setSimpleEnabled(nextEnabled) {
@@ -330,7 +307,14 @@
       showStatus('Simple watchdog config unavailable.');
       return;
     }
-    const baselineStatusFingerprint = nextEnabled ? String(latestSimpleTerminal()?.fingerprint || '') : '';
+
+    let baselineSignal = null;
+    if (nextEnabled) {
+      try { baselineSignal = await queryNotifierTerminalSignal(); } catch {}
+      if (disposed || generation !== simpleRequestGeneration || conversationIdFromUrl() !== conversationId) return;
+    }
+    const baselineStatusFingerprint = baselineSignal?.conversationId === conversationId
+      ? String(baselineSignal.fingerprint || '') : '';
     lastSimpleStatusFingerprint = baselineStatusFingerprint;
     renderSimpleState(nextEnabled ? {
       enabled: true, phase: 'countdown', attemptsRemaining: config.simpleWatchdog.attempts,
@@ -345,14 +329,12 @@
         conversationId,
         startedAt,
         settings: config?.simpleWatchdog,
-        stopOnStatus: config?.watchdog?.stopOnStatus,
         baselineStatusFingerprint
       });
     } catch {}
     if (disposed || generation !== simpleRequestGeneration || conversationIdFromUrl() !== conversationId) return;
     renderSimpleState(response);
     if (nextEnabled && response?.enabled !== true) showStatus(String(response?.reason || 'Simple watchdog could not start.'));
-    if (response?.enabled === true) scheduleSimpleStatusInspection();
   }
 
   function handleSimpleButtonClick(event) {
@@ -407,7 +389,12 @@
     try { response = await chrome.runtime.sendMessage({ type: SIMPLE_GET_MESSAGE, conversationId }); } catch {}
     if (disposed || generation !== simpleRestoreGeneration || activeConversationId !== conversationId) return;
     renderSimpleState(response);
-    if (response?.enabled === true) scheduleSimpleStatusInspection();
+    if (response?.enabled === true) {
+      let signal = null;
+      try { signal = await queryNotifierTerminalSignal(); } catch {}
+      if (disposed || generation !== simpleRestoreGeneration || activeConversationId !== conversationId) return;
+      if (signal) await applyTerminalSignal(signal);
+    }
   }
 
   function composerElement() {
@@ -544,19 +531,12 @@
     applyDesiredState();
   }
 
-  function mutationInsideToolbar(record) {
-    const target = record?.target?.nodeType === 1 ? record.target : record?.target?.parentElement;
-    if (!target) return false;
-    try { return Boolean(target.closest?.(`#${TOOLBAR_ID}`)); } catch { return false; }
-  }
-
-  function handleDocumentMutations(records) {
+  function handleDocumentMutations() {
     if (disposed) return;
-    // Route changes are also covered by Navigation/popstate; this observer only
-    // repairs a detached/remounted toolbar and inspects real ChatGPT output.
-    // Toolbar countdown churn is excluded, and dom-compat filters composer typing.
+    // Route changes are also covered by Navigation/popstate; this observer now
+    // only repairs a detached/remounted toolbar. Terminal GitHub status parsing
+    // stays exclusively in the notifier's rendered-terminal authority.
     if (!simpleButton?.isConnected || document.getElementById(TOOLBAR_ID) !== simpleButton?.parentElement) scheduleSync();
-    if (simpleEnabled && Array.from(records || []).some((record) => !mutationInsideToolbar(record))) scheduleSimpleStatusInspection();
   }
 
   try {
@@ -569,6 +549,7 @@
   document.addEventListener('keydown', handleClockKeydown, true);
   window.addEventListener('popstate', scheduleSync, true);
   window.addEventListener('hashchange', scheduleSync, true);
+  window.addEventListener('message', handleNotifierTerminalMessage);
   try { globalThis.navigation?.addEventListener?.('navigatesuccess', scheduleSync); } catch {}
   try { chrome.storage.onChanged.addListener(handleStorageChanged); } catch {}
   try { chrome.runtime.onMessage.addListener(handleRuntimeMessage); } catch {}
@@ -579,7 +560,7 @@
     get activeConversationId() { return activeConversationId || ''; },
     get desiredEnabled() { return desiredEnabled; },
     get simpleEnabled() { return simpleEnabled; },
-    latestSimpleTerminal,
+    queryNotifierTerminalSignal,
     dispose() {
       if (disposed) return;
       disposed = true;
@@ -588,13 +569,13 @@
       simpleRequestGeneration += 1;
       try { unsubscribeConfig?.(); } catch {}
       try { if (simpleTickTimer !== null) clearInterval(simpleTickTimer); } catch {}
-      try { if (simpleStatusTimer !== null) clearTimeout(simpleStatusTimer); } catch {}
       try { simpleRow?.remove(); } catch {}
       try { observer?.disconnect(); } catch {}
       try { document.removeEventListener('click', persistUserChoiceSoon, true); } catch {}
       try { document.removeEventListener('keydown', handleClockKeydown, true); } catch {}
       try { window.removeEventListener('popstate', scheduleSync, true); } catch {}
       try { window.removeEventListener('hashchange', scheduleSync, true); } catch {}
+      try { window.removeEventListener('message', handleNotifierTerminalMessage); } catch {}
       try { globalThis.navigation?.removeEventListener?.('navigatesuccess', scheduleSync); } catch {}
       try { chrome.storage.onChanged.removeListener(handleStorageChanged); } catch {}
       try { chrome.runtime.onMessage.removeListener(handleRuntimeMessage); } catch {}
