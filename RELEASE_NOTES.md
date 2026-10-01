@@ -1,4 +1,11 @@
-# ChatGPT Response Notifier 0.9.100
+# ChatGPT Response Notifier 0.9.101
+
+- Preserves Monitor, manual timestamp, and Simple toggle state while a newly created ChatGPT chat transitions from the unsaved route to its assigned conversation ID, instead of repainting the controls off during route ownership transfer.
+- Adds `watchdog.respectStopStatusCodes` and `watchdog.respectContinueStatusCodes` to Quick Continue JSON. The existing `stopOnStatus` table still defines the stop/continue classes, while either class can now be independently ignored without being reinterpreted as the opposite action.
+- Removes remaining per-keystroke work from both notifier and standalone Quick Continue document-wide mutation observers by fast-pathing stable composer mutations and suppressing ordinary typing before unrelated toolbar/status observers wake.
+- Adds deterministic regressions for stop/continue/ignore status dispositions, new-chat toggle migration, semantic-role compatibility, and both notifier and Quick Continue composer-mutation hot paths.
+
+## Previous: 0.9.100
 
 - Extends the existing document-start DOM compatibility MutationObserver owner to suppress ordinary composer text records before terminal-status, watchdog and Quick Continue bridge callbacks can run, eliminating their per-keystroke assistant/status scans.
 - Preserves draft safety by allowing only the monitor-shaped observer to see empty/non-empty draft transitions; additional characters in an already-nonempty draft stay invisible to downstream observers.
