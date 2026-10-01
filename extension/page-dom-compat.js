@@ -312,7 +312,8 @@
   }
 
   function compatibleRoleNodes(root) {
-    const legacy = nativeQueryAll(root, LEGANTIC_ROLE_SELECTOR).filter((node) => semanticRole(node));
+    const legacy = nativeQueryAll(root, LEGACY_TURN_SELECTOR);
+    const roles = nativeQueryAll(root, SEMANTIC_ROLE_SELECTOR).filter((node) => semanticRole(node));
     hydrateLegacyTurnRoles(root, legacy);
     if (!legacy.length && !roles.length) return speakerLabelTurns(root).filter((node) => semanticRole(node));
 
