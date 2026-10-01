@@ -8,6 +8,7 @@ const readText = (relative) => readFileSync(new URL(relative, root), 'utf8');
 
 test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap path', () => {
   const manifest = JSON.parse(readText('extension/manifest.json'));
+  const version = readText('VERSION.txt').trim();
   const bootstrap = readText('extension/diagnostics-bootstrap.js');
   const background = readText('extension/quick-continue-monitor-bridge-background.js');
   const bridge = readText('extension/quick-continue-monitor-bridge.js');
@@ -15,7 +16,7 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   const pageAuthority = readText('extension/watchdog-page-authority-v3.js');
   const backgroundAuthority = readText('extension/watchdog-authority-v3-background.js');
 
-  assert.equal(manifest.version, '0.9.100');
+  assert.equal(manifest.version, version);
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-monitor-bridge.js')));
   assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-fallback.js')));
   assert.ok(!manifest.content_scripts.some((entry) => entry.js?.includes('quick-continue-status-stabilizer.js')));
@@ -28,7 +29,7 @@ test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap 
   assert.match(bootstrap, /importScripts\('watchdog-authority-v3-background\.js'\)/);
   assert.match(background, /BRIDGE_FILE = 'quick-continue-monitor-bridge\.js'/);
   assert.match(background, /STATUS_FILE = 'quick-continue-status-owner-v6\.js'/);
-  assert.match(background, /BRIDGE_RUNTIME_VERSION = 5/);
+  assert.match(background, /BRIDGE_RUNTIME_VERSION = 6/);
   assert.match(background, /STATUS_RUNTIME_VERSION = 8/);
   const bridgeRuntimeVersion = Number(bridge.match(/const RUNTIME_VERSION = (\d+)/)?.[1] || 0);
   const requiredBridgeRuntimeVersion = Number(background.match(/const BRIDGE_RUNTIME_VERSION = (\d+)/)?.[1] || 0);
