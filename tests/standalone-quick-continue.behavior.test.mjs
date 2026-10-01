@@ -30,7 +30,7 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['runtime-reset.js', 'dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'send-transaction.js', 'config-editor-style.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.31');
+  assert.equal(manifest.version, '1.2.32');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -341,13 +341,18 @@ test('composer replacement uses an editor transaction and refuses altered line b
   assert.deepEqual(textarea.events, ['input']);
 });
 
-test('manual timestamp preference is isolated by ChatGPT conversation and follows SPA navigation', () => {
+test('manual timestamp and Simple preferences retain their pre-send state across first route assignment', () => {
   assert.doesNotThrow(() => new vm.Script(conversationStateSource));
   assert.match(conversationStateSource, /STORAGE_PREFIX = 'quick-continue:manual-timestamp:'/);
   assert.match(conversationStateSource, /function conversationIdFromUrl/);
   assert.match(conversationStateSource, /chrome\.storage\.local\.get\(key\)/);
   assert.match(conversationStateSource, /chrome\.storage\.local\.set\(\{ \[storageKey\(conversationId\)\]: enabled === true \}\)/);
-  assert.match(conversationStateSource, /if \(!previousConversationId && provisionalTouched\)/);
+  assert.match(conversationStateSource, /const carryProvisional = !previousConversationId && provisionalTouched/);
+  assert.match(conversationStateSource, /desiredEnabled = carryProvisional \? provisionalEnabled : false/);
+  assert.match(conversationStateSource, /if \(carryProvisional\)/);
+  assert.match(conversationStateSource, /const carrySimpleFromUnsavedChat = !previousConversationId && Boolean\(nextConversationId\) && simpleEnabled/);
+  assert.match(conversationStateSource, /if \(!carrySimpleFromUnsavedChat\) restoreSimpleForConversation\(nextConversationId\)/);
+  assert.match(conversationStateSource, /simpleButton\.getAttribute\('aria-pressed'\) !== pressed/);
   assert.match(conversationStateSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
   assert.match(conversationStateSource, /navigatesuccess/);
   assert.match(conversationStateSource, /event\?\.isTrusted !== true/);
@@ -368,7 +373,7 @@ test('prompt and config APIs are versioned so reinjection cannot retain stale gl
   assert.match(hoverEditSource, /const RUNTIME_VERSION = 10/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
-  assert.match(conversationStateSource, /const RUNTIME_VERSION = 5/);
+  assert.match(conversationStateSource, /const RUNTIME_VERSION = 6/);
   assert.match(conversationStateSource, /__chatgptQuickContinueConversationStateRuntime/);
 });
 

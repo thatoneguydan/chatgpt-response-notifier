@@ -26,6 +26,7 @@ The independent review also reproduced phrase/location detection gaps, passive h
 
 ## Boundaries
 
+- **Permanent install-independence policy:** ChatGPT Response Notifier and ChatGPT Quick Continue are deployed independently. Never hold either extension's requested install or update for human/user testing, live proof, acceptance evidence, or unresolved acceptance work for either extension. Human testing may inform follow-up debugging after installation, but it is not an installation prerequisite unless the operator explicitly requests that gate for that specific deployment.
 - Do not write Chrome Preferences, Secure Preferences or external integrity state to repair registration.
 - Do not use recurring/production CDP `loadUnpacked`, native Win32 foreground routing or Chrome process/window enumeration as a repair.
 - Preserve the stable install root/key, exact extension-origin validation, loopback-only helper, rollback and protected deployment gates.
