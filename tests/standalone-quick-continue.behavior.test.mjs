@@ -30,7 +30,7 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['runtime-reset.js', 'dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'send-transaction.js', 'config-editor-style.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.35');
+  assert.equal(manifest.version, '1.2.36');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -379,7 +379,7 @@ test('prompt and config APIs are versioned so reinjection cannot retain stale gl
   assert.match(hoverEditSource, /const RUNTIME_VERSION = 11/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
-  assert.match(conversationStateSource, /const RUNTIME_VERSION = 8/);
+  assert.match(conversationStateSource, /const RUNTIME_VERSION = 9/);
   assert.match(conversationStateSource, /__chatgptQuickContinueConversationStateRuntime/);
 });
 
