@@ -5,6 +5,9 @@ on:
     branches: [main]
     paths-ignore:
       - update/manifest.json
+      - PROJECT.md
+      - ROADMAP.md
+      - docs/**
       - standalone-quick-continue/**
       - tests/**
       - tools/quick-continue-*
