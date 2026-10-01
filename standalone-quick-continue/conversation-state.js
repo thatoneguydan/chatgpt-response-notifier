@@ -158,13 +158,15 @@
   function renderSimpleCountdown() {
     if (disposed || !simpleRow) return;
     const active = simpleState?.enabled === true;
+    const exhausted = simpleState?.exhausted === true || simpleState?.phase === 'exhausted';
     const remaining = Math.max(0, Number(simpleState?.attemptsRemaining || 0));
     const seconds = Math.max(0, Math.ceil((Number(simpleState?.nextAt || 0) - Date.now()) / 1000));
     const countdown = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
     const phase = simpleState?.phase;
     const label = phase === 'stop-wait' ? 'Refresh in' : phase === 'refresh-wait' ? 'Continue in' : 'Next auto-continue';
-    const text = active ? `${label} ${countdown} · ${remaining} auto-continues left`
-      : simpleState?.exhausted === true ? 'Auto-continues exhausted' : '';
+    const text = active && exhausted ? 'Auto-continues exhausted'
+      : active ? `${label} ${countdown} · ${remaining} auto-continues left`
+      : '';
     if (simpleRow.textContent !== text) simpleRow.textContent = text;
     if (simpleRow.hidden !== !text) simpleRow.hidden = !text;
     const root = simpleRow.parentElement;
@@ -176,8 +178,9 @@
     if (disposed) return;
     simpleState = state && typeof state === 'object' ? state : { enabled: state === true };
     simpleEnabled = simpleState.enabled === true;
-    if (simpleEnabled && simpleTickTimer === null) simpleTickTimer = setInterval(renderSimpleCountdown, 1000);
-    if (!simpleEnabled && simpleTickTimer !== null) { clearInterval(simpleTickTimer); simpleTickTimer = null; }
+    const exhausted = simpleState.exhausted === true || simpleState.phase === 'exhausted';
+    if (simpleEnabled && !exhausted && simpleTickTimer === null) simpleTickTimer = setInterval(renderSimpleCountdown, 1000);
+    if ((!simpleEnabled || exhausted) && simpleTickTimer !== null) { clearInterval(simpleTickTimer); simpleTickTimer = null; }
     renderSimpleCountdown();
     if (!simpleButton) return;
     const pressed = String(simpleEnabled);

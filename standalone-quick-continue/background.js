@@ -159,6 +159,7 @@ function publicSimpleState(state, extras = {}) {
     attemptsUsed: Number(state.attemptsUsed || 0),
     attemptsRemaining: Math.max(0, Number(state.settings?.attempts || 0) - Number(state.attemptsUsed || 0)),
     nextAt: Number(state.nextAt || 0),
+    exhausted: state.exhausted === true || state.phase === 'exhausted',
     ...extras
   };
 }
@@ -182,7 +183,7 @@ async function clearSimpleState(tabId, extras = {}) {
 }
 
 function scheduleSimpleAlarm(state) {
-  if (!state?.enabled || !Number.isInteger(state.tabId)) return;
+  if (!state?.enabled || state.exhausted === true || state.phase === 'exhausted' || !Number.isInteger(state.tabId)) return;
   const when = Math.max(Date.now() + 250, Number(state.nextAt || 0));
   try { chrome.alarms.create(simpleAlarmName(state.tabId), { when }); } catch {}
 }
@@ -191,7 +192,11 @@ async function saveAndScheduleSimpleState(state, states = null) {
   const nextStates = states || await readSimpleStates();
   nextStates[stateKey(state.tabId)] = state;
   await writeSimpleStates(nextStates);
-  scheduleSimpleAlarm(state);
+  if (state.exhausted === true || state.phase === 'exhausted') {
+    try { await chrome.alarms.clear(simpleAlarmName(state.tabId)); } catch {}
+  } else {
+    scheduleSimpleAlarm(state);
+  }
   await notifySimpleState(state.tabId, state);
   return publicSimpleState(state);
 }
@@ -219,6 +224,7 @@ async function setSimpleWatchdog(sender, message) {
     phase: 'countdown',
     attemptsUsed: 0,
     nextAt: Math.min(Date.now(), Math.max(Date.now() - 10_000, Number(message.startedAt) || Date.now())) + (settings.timerMinutes * 60 * 1000),
+    exhausted: false,
     settings
   };
   return saveAndScheduleSimpleState(state);
@@ -255,7 +261,7 @@ async function tabForSimpleState(state) {
 async function handleSimpleAlarm(tabId) {
   const states = await readSimpleStates();
   const state = states[stateKey(tabId)];
-  if (!state?.enabled) return;
+  if (!state?.enabled || state.exhausted === true || state.phase === 'exhausted') return;
   if (!await tabForSimpleState(state)) {
     await clearSimpleState(tabId, { reason: 'chat-unavailable' });
     return;
@@ -291,7 +297,10 @@ async function handleSimpleAlarm(tabId) {
     } catch {}
     state.attemptsUsed = Number(state.attemptsUsed || 0) + 1;
     if (state.attemptsUsed >= state.settings.attempts) {
-      await clearSimpleState(tabId, { exhausted: true });
+      state.phase = 'exhausted';
+      state.nextAt = 0;
+      state.exhausted = true;
+      await saveAndScheduleSimpleState(state, states);
       return;
     }
     state.phase = 'countdown';
@@ -306,7 +315,7 @@ async function handleSimpleAlarm(tabId) {
 async function restoreSimpleAlarms() {
   const states = await readSimpleStates();
   for (const state of Object.values(states)) {
-    if (!state?.enabled || !Number.isInteger(state?.tabId)) continue;
+    if (!state?.enabled || state.exhausted === true || state.phase === 'exhausted' || !Number.isInteger(state?.tabId)) continue;
     scheduleSimpleAlarm(state);
   }
 }
