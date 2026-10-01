@@ -121,9 +121,12 @@ test('Quick Continue migrates legacy watchdog gate values into Simple and serial
   assert.match(configSource, /respectStopStatusCodes: value\.simpleWatchdog\.respectStopStatusCodes/);
   assert.match(configSource, /respectContinueStatusCodes: value\.simpleWatchdog\.respectContinueStatusCodes/);
   assert.match(conversationStateSource, /settings: config\.simpleWatchdog/);
-  assert.match(conversationStateSource, /stopOnStatus: config\.watchdog\?\.stopOnStatus/);
+  assert.match(conversationStateSource, /statusClass: signal\.statusClass/);
+  assert.doesNotMatch(conversationStateSource, /stopOnStatus:\s*config\.watchdog/);
+  assert.match(simpleBackgroundSource, /const statusClass = String\(message\?\.statusClass/);
   assert.match(simpleBackgroundSource, /state\.settings\?\.respectStopStatusCodes !== false/);
   assert.match(simpleBackgroundSource, /state\.settings\?\.respectContinueStatusCodes !== false/);
+  assert.doesNotMatch(simpleBackgroundSource, /normalizeStopOnStatus|state\.stopOnStatus/);
 });
 
 test('Quick Continue still publishes normalized normal-watchdog settings before arming a fresh smart watchdog', () => {

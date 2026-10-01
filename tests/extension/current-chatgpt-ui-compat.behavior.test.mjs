@@ -6,13 +6,14 @@ import test from 'node:test';
 const root = new URL('../../', import.meta.url);
 const read = (relative) => readFileSync(new URL(relative, root), 'utf8');
 const manifest = JSON.parse(read('extension/manifest.json'));
+const version = read('VERSION.txt').trim();
 const domCompat = read('extension/page-dom-compat.js');
 const runtimeCompat = read('extension/page-runtime-compat-background.js');
 const refreshPolicy = read('extension/recovery-refresh-policy-background.js');
 const bootstrap = read('extension/diagnostics-bootstrap.js');
 
 test('current ChatGPT UI compatibility loads before page readers and stays page-local', () => {
-  assert.equal(manifest.version, '0.9.101');
+  assert.equal(manifest.version, version);
   assert.equal(manifest.content_scripts[0].js[0], 'page-dom-compat.js');
   assert.match(domCompat, /RUNTIME_VERSION = 7/);
   assert.match(domCompat, /OWNED_ROOT_SELECTOR = '#chatgpt-quick-continue-toolbar'/);
