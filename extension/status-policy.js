@@ -114,7 +114,13 @@
     return watchdogSettings.respectContinueStatusCodes === true ? 'continue' : 'ignore';
   }
   function isDefinitiveStopStatusCode(value) { return statusCodeDisposition(value) === 'stop'; }
-  function isAutoContinueStatusCode(value) { return statusCodeDisposition(value) === 'continue'; }
+  function isAutoContinueStatusCode(value) {
+    const disposition = statusCodeDisposition(value);
+    // Legacy watchdog send guards use this as "may the timer continue past this
+    // status?" Ignored codes therefore return true here, while
+    // classifyObservation() still prevents them from triggering a coded action.
+    return disposition === 'continue' || disposition === 'ignore';
+  }
   function isCurrentExplicitInterruption(observation = {}) {
     if (observation.explicitInterruption !== true || observation.applicationStateIdentityMatched === false) return false;
     return EXPLICIT_INTERRUPTION_KINDS.has(String(observation.interruptionKind || ''))
