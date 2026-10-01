@@ -10,6 +10,8 @@ const readJson = (relative) => JSON.parse(readText(relative));
 const bundled = readJson('standalone-quick-continue/config.json');
 const configSource = readText('standalone-quick-continue/config.js');
 const contentSource = readText('standalone-quick-continue/content-script.js');
+const conversationStateSource = readText('standalone-quick-continue/conversation-state.js');
+const simpleBackgroundSource = readText('standalone-quick-continue/background.js');
 const bridgeSource = readText('extension/quick-continue-monitor-bridge.js');
 const statusCodeSource = readText('extension/status-code.js');
 const policySource = readText('extension/status-policy.js');
@@ -39,11 +41,11 @@ function loadPolicy() {
   return context.ChatGPTNotifierContinuationPolicy;
 }
 
-test('bundled Quick Continue JSON exposes watchdog timing, gates, attempts, and every GitHub status policy', () => {
+test('bundled Quick Continue JSON keeps classification under watchdog and moves both respect gates under Simple', () => {
   assert.equal(bundled.watchdog.timerMinutes, 30);
   assert.equal(bundled.watchdog.attempts, 3);
-  assert.equal(bundled.watchdog.respectStopStatusCodes, true);
-  assert.equal(bundled.watchdog.respectContinueStatusCodes, true);
+  assert.equal(bundled.watchdog.respectStopStatusCodes, undefined);
+  assert.equal(bundled.watchdog.respectContinueStatusCodes, undefined);
   assert.deepEqual(bundled.watchdog.stopOnStatus, {
     PLANNING_ACTIVE: true,
     COMPLETE_APPLIED: true,
@@ -54,15 +56,17 @@ test('bundled Quick Continue JSON exposes watchdog timing, gates, attempts, and 
     INCOMPLETE_CONTINUE: false,
     INCOMPLETE_HANDOFF: false
   });
+  assert.equal(bundled.simpleWatchdog.respectStopStatusCodes, true);
+  assert.equal(bundled.simpleWatchdog.respectContinueStatusCodes, true);
   assert.match(configSource, /"watchdog\.timerMinutes" must be between 0\.1 and 1440/);
   assert.match(configSource, /"watchdog\.attempts" must be an integer between 0 and 20/);
-  assert.match(configSource, /"watchdog\.respectStopStatusCodes" must be true or false/);
-  assert.match(configSource, /"watchdog\.respectContinueStatusCodes" must be true or false/);
+  assert.match(configSource, /"simpleWatchdog\.respectStopStatusCodes" must be true or false/);
+  assert.match(configSource, /"simpleWatchdog\.respectContinueStatusCodes" must be true or false/);
   assert.match(configSource, /Unknown GitHub status code in watchdog\.stopOnStatus/);
   assert.match(configSource, /typeof stopRaw\[key\] !== 'boolean'/);
 });
 
-test('runtime policy applies custom cadence and custom per-code stop behavior', () => {
+test('normal runtime policy continues to honor the shared classification table with both classes respected by default', () => {
   const policy = loadPolicy();
   const applied = policy.applyWatchdogSettings({
     timerMinutes: 7.5,
@@ -88,7 +92,7 @@ test('runtime policy applies custom cadence and custom per-code stop behavior', 
   assert.equal(policy.isDefinitiveStopStatusCode('COMPLETE_APPLIED'), true);
 });
 
-test('stop-code and continue-code respect gates independently ignore their configured classes', () => {
+test('notifier policy still implements class gating internally, but Quick Continue no longer publishes user gates to it', () => {
   const policy = loadPolicy();
 
   policy.applyWatchdogSettings({
@@ -96,32 +100,33 @@ test('stop-code and continue-code respect gates independently ignore their confi
     respectContinueStatusCodes: true
   });
   assert.equal(policy.statusCodeDisposition('COMPLETE_APPLIED'), 'ignore');
-  assert.equal(policy.isDefinitiveStopStatusCode('COMPLETE_APPLIED'), false);
-  assert.equal(policy.isAutoContinueStatusCode('COMPLETE_APPLIED'), true, 'ignored stop codes must not block an already-due timer');
-  assert.deepEqual(
-    { ...policy.classifyObservation({ statusCode: 'COMPLETE_APPLIED' }) },
-    { state: 'waiting', reason: 'status-ignored:COMPLETE_APPLIED', automaticActionAllowed: false }
-  );
   assert.equal(policy.statusCodeDisposition('INCOMPLETE_CONTINUE'), 'continue');
-  assert.equal(policy.classifyObservation({ statusCode: 'INCOMPLETE_CONTINUE' }).automaticActionAllowed, true);
 
   policy.applyWatchdogSettings({
     respectStopStatusCodes: true,
     respectContinueStatusCodes: false
   });
   assert.equal(policy.statusCodeDisposition('COMPLETE_APPLIED'), 'stop');
-  assert.equal(policy.isDefinitiveStopStatusCode('COMPLETE_APPLIED'), true);
   assert.equal(policy.statusCodeDisposition('INCOMPLETE_CONTINUE'), 'ignore');
-  assert.equal(policy.isAutoContinueStatusCode('INCOMPLETE_CONTINUE'), true, 'ignored continue codes must not stop an already-due timer');
-  assert.deepEqual(
-    { ...policy.classifyObservation({ statusCode: 'INCOMPLETE_CONTINUE' }) },
-    { state: 'waiting', reason: 'status-ignored:INCOMPLETE_CONTINUE', automaticActionAllowed: false }
-  );
+
+  assert.match(contentSource, /toolbar\.dataset\.watchdogSettings = JSON\.stringify\(config\.watchdog\)/);
+  assert.doesNotMatch(configSource, /respectStopStatusCodes: value\.watchdog\.respectStopStatusCodes/);
+  assert.doesNotMatch(configSource, /respectContinueStatusCodes: value\.watchdog\.respectContinueStatusCodes/);
 });
 
-test('Quick Continue persists both respect gates and publishes normalized settings before arming a fresh watchdog', () => {
-  assert.match(configSource, /respectStopStatusCodes: value\.watchdog\.respectStopStatusCodes/);
-  assert.match(configSource, /respectContinueStatusCodes: value\.watchdog\.respectContinueStatusCodes/);
+test('Quick Continue migrates legacy watchdog gate values into Simple and serializes them only there', () => {
+  assert.match(configSource, /normalizeSimpleWatchdog\(value\.simpleWatchdog, value\.watchdog\)/);
+  assert.match(configSource, /typeof legacy\.respectStopStatusCodes === 'boolean'/);
+  assert.match(configSource, /typeof legacy\.respectContinueStatusCodes === 'boolean'/);
+  assert.match(configSource, /respectStopStatusCodes: value\.simpleWatchdog\.respectStopStatusCodes/);
+  assert.match(configSource, /respectContinueStatusCodes: value\.simpleWatchdog\.respectContinueStatusCodes/);
+  assert.match(conversationStateSource, /settings: config\.simpleWatchdog/);
+  assert.match(conversationStateSource, /stopOnStatus: config\.watchdog\?\.stopOnStatus/);
+  assert.match(simpleBackgroundSource, /state\.settings\?\.respectStopStatusCodes !== false/);
+  assert.match(simpleBackgroundSource, /state\.settings\?\.respectContinueStatusCodes !== false/);
+});
+
+test('Quick Continue still publishes normalized normal-watchdog settings before arming a fresh smart watchdog', () => {
   assert.match(contentSource, /toolbar\.dataset\.watchdogSettings = JSON\.stringify\(config\.watchdog\)/);
   assert.match(contentSource, /publishWatchdogConfig\(currentConfig\)/);
   const syncAt = bridgeSource.indexOf('await syncWatchdogSettings(true)');
