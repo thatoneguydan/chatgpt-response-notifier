@@ -11,6 +11,7 @@ const config = JSON.parse(readText('standalone-quick-continue/config.json'));
 const SIMPLE_STATE_KEY = 'quickContinueSimpleWatchdogStates';
 const SIMPLE_ALARM_PREFIX = 'quick-continue-simple-watchdog:';
 const SET = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_SET';
+const GET = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_GET';
 const ACTION = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_ACTION';
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -42,7 +43,7 @@ function createHarness() {
 
   const chrome = {
     runtime: {
-      getManifest: () => ({ version: '1.2.29' }),
+      getManifest: () => ({ version: '1.2.33' }),
       reload() {},
       onMessage: { addListener: (listener) => messageListeners.push(listener) },
       onStartup: { addListener: (listener) => startupListeners.push(listener) },
@@ -124,7 +125,7 @@ function createHarness() {
   return { storage, alarms, sentMessages, reloads, tab, sendRuntimeMessage, fireSimpleAlarm, state, actionMessages };
 }
 
-test('Simple mode executes the fixed Stop, reload, Continue sequence and repeats from its configured timer', async () => {
+test('Simple mode executes the fixed sequence and stays enabled after attempts exhaust until explicitly turned off', async () => {
   const harness = createHarness();
   const settings = {
     timerMinutes: 7,
@@ -169,9 +170,22 @@ test('Simple mode executes the fixed Stop, reload, Continue sequence and repeats
   await harness.fireSimpleAlarm();
   harness.state().nextAt = 0;
   await harness.fireSimpleAlarm();
-  await settle(() => harness.state() === null, 'attempt exhaustion');
+  await settle(() => harness.state()?.phase === 'exhausted', 'attempt exhaustion');
+  assert.equal(harness.state().enabled, true);
+  assert.equal(harness.state().exhausted, true);
+  assert.equal(harness.state().attemptsUsed, 2);
+  assert.equal(harness.alarms.has(SIMPLE_ALARM_PREFIX + harness.tab.id), false);
   assert.equal(harness.actionMessages().filter((entry) => entry.action === 'send-continue').length, 2);
   assert.deepEqual(harness.reloads, [41, 41]);
+
+  const exhausted = await harness.sendRuntimeMessage({ type: GET, conversationId: 'simple-mode-test' });
+  assert.equal(exhausted.enabled, true);
+  assert.equal(exhausted.exhausted, true);
+  assert.equal(exhausted.attemptsRemaining, 0);
+
+  const disabled = await harness.sendRuntimeMessage({ type: SET, enabled: false });
+  assert.equal(disabled.enabled, false);
+  assert.equal(harness.state(), null);
 });
 
 test('Simple mode progresses when Stop is absent and does not consult GitHub status policy', async () => {
@@ -199,6 +213,9 @@ test('Simple mode progresses when Stop is absent and does not consult GitHub sta
   assert.match(backgroundSource, /await chrome\.tabs\.sendMessage\(tabId, \{ type: SIMPLE_ACTION_MESSAGE, action: 'stop' \}\);[\s\S]*state\.phase = 'stop-wait'/);
   assert.match(backgroundSource, /try \{ await chrome\.tabs\.reload\(tabId\); \} catch \{\}[\s\S]*state\.phase = 'refresh-wait'/);
   assert.match(backgroundSource, /action: 'send-continue'[\s\S]*state\.attemptsUsed = Number/);
+  assert.match(backgroundSource, /state\.phase = 'exhausted'[\s\S]*state\.exhausted = true[\s\S]*saveAndScheduleSimpleState/);
+  assert.match(conversationStateSource, /active && exhausted \? 'Auto-continues exhausted'/);
+  assert.match(conversationStateSource, /background: simpleEnabled \? '#16a34a'/);
   assert.match(conversationStateSource, /button\[data-testid="stop-button"\]/);
   assert.match(conversationStateSource, /sendApi\.submit\(composer, text, \{ replace: true, timeoutMs: 5000 \}\)/);
 });
@@ -230,7 +247,7 @@ test('Simple starts on an unsaved chat and keeps its click deadline when the cha
   assert.equal(enabled.nextAt, startedAt + config.simpleWatchdog.timerMinutes * 60_000);
   const deadline = enabled.nextAt;
   harness.tab.url = 'https://chatgpt.com/c/newly-saved-chat';
-  const restored = await harness.sendRuntimeMessage({ type: 'QUICK_CONTINUE_SIMPLE_WATCHDOG_GET', conversationId: 'newly-saved-chat' });
+  const restored = await harness.sendRuntimeMessage({ type: GET, conversationId: 'newly-saved-chat' });
   assert.equal(restored.enabled, true);
   assert.equal(restored.nextAt, deadline);
   assert.equal(harness.state().conversationId, 'newly-saved-chat');
