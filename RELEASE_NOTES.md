@@ -1,4 +1,12 @@
-# ChatGPT Response Notifier 0.9.102
+# ChatGPT Response Notifier 0.9.103
+
+- Makes Quick Continue's Simple watchdog the sole production automatic-continuation scheduler behind Monitor; the legacy notifier watchdog scheduler and timer surface are retired in production while historical implementation remains directly testable.
+- Monitor now publishes its on/off state to Quick Continue, and trusted monitored user sends reset the Simple countdown without letting programmatic auto-continues reset their own retry budget.
+- Hardens each timer expiry into an explicit Stop → configured wait → page reload → confirmed page-load completion → configured wait → Continue sequence, so a visible “connection interrupted” state is refreshed before Continue is attempted.
+- Moves the temporary Simple control and JSON Edit action into a hamburger menu; Project remains focused only on choosing/sending project continuation prompts.
+- Pairs with Quick Continue 1.2.37, where all active timer/retry/refresh settings live under `simpleWatchdog`; `watchdog` now contains only the shared GitHub-status stop/continue classification table.
+
+## Previous: 0.9.102
 
 - Exposes the notifier's existing rendered-terminal authority as a sanitized in-page status bridge so Quick Continue Simple can consume the exact same proven terminal detector and stop/continue classification instead of maintaining a second DOM parser.
 - Reuses the rendered-terminal detector's current-turn boundary handling, including sibling `COMPLETE_APPLIED` footer support, quoted/code/list exclusions, conflict rejection, and stable prompt/assistant identity.
