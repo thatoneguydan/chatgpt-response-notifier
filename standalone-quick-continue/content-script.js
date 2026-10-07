@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 12;
+  const RUNTIME_VERSION = 13;
   const prompts = globalThis.ChatGPTQuickContinuePrompts;
   const configApi = globalThis.ChatGPTQuickContinueConfig;
   const composerApi = globalThis.ChatGPTQuickContinueComposer;
@@ -375,6 +375,22 @@
     if (menuPopover && !menuPopover.hidden) closeMenuPopover();
   }
 
+  function handleQuickContinueMenuClick(event) {
+    const target = event?.target;
+    if (!(target instanceof Element)) return;
+    let button = null;
+    try { button = target.closest(`#${TOOLBAR_ID} button[aria-label="Quick Continue menu"]`); } catch {}
+    if (!button) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const liveMenu = button.closest(`#${TOOLBAR_ID}`)?.querySelector?.('[role="group"][aria-label="Quick Continue menu popover"]') || null;
+    if (!liveMenu) return;
+    menuPopover = liveMenu;
+    menuItems = liveMenu.querySelector?.('#chatgpt-quick-continue-menu-items') || menuItems;
+    if (liveMenu.hidden) openMenuPopover();
+    else closeMenuPopover();
+  }
+
   async function saveConfigEditor() {
     if (!editorTextarea) return;
     let parsed = null;
@@ -466,11 +482,6 @@
     menuButton.setAttribute('aria-label', 'Quick Continue menu');
     styleButton(menuButton);
     Object.assign(menuButton.style, { padding: '5px 7px', fontSize: '12px' });
-    menuButton.addEventListener('click', (event) => {
-      event.preventDefault(); event.stopPropagation();
-      if (!menuPopover) return;
-      if (menuPopover.hidden) openMenuPopover(); else closeMenuPopover();
-    });
     root.append(menuButton);
 
     const time = document.createElement('span');
@@ -761,6 +772,7 @@
   observer = new MutationObserver(handleDocumentMutations);
   observer.observe(document.documentElement, { childList: true, subtree: true });
   document.addEventListener('pointerdown', handleDocumentPointerDown, true);
+  document.addEventListener('click', handleQuickContinueMenuClick, true);
   document.addEventListener('input', handleComposerInput, { capture: true, passive: true });
   document.addEventListener('scroll', schedulePosition, { capture: true, passive: true });
   document.addEventListener('visibilitychange', scheduleSync, true);
@@ -785,6 +797,7 @@
       try { if (toolbarHideTimer !== null) clearTimeout(toolbarHideTimer); } catch {}
       try { if (statusTimer !== null) clearTimeout(statusTimer); } catch {}
       try { document.removeEventListener('pointerdown', handleDocumentPointerDown, true); } catch {}
+      try { document.removeEventListener('click', handleQuickContinueMenuClick, true); } catch {}
       try { document.removeEventListener('input', handleComposerInput, true); } catch {}
       try { document.removeEventListener('scroll', schedulePosition, true); } catch {}
       try { document.removeEventListener('visibilitychange', scheduleSync, true); } catch {}
