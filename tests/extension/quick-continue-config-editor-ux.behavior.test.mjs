@@ -23,8 +23,8 @@ const definitiveCodes = [
   'INCOMPLETE_CONTINUE'
 ];
 
-test('Quick Continue 1.2.36 ships the large config editor styling to new and already-open tabs', () => {
-  assert.equal(manifest.version, '1.2.36');
+test('Quick Continue ships the large config editor styling to new and already-open tabs', () => {
+  assert.match(manifest.version, /^1\.2\.\d+$/);
   const declared = manifest.content_scripts.flatMap((entry) => entry.js || []);
   assert.ok(declared.includes('config-editor-style.js'));
   assert.ok(declared.includes('conversation-state.js'));
@@ -43,9 +43,9 @@ test('config editor caret uses high-contrast theme text instead of a fixed dark-
   assert.match(styleSource, /color:\s*var\(--text-primary, #111111\) !important/);
 });
 
-test('smart watchdog JSON keeps timing, attempt cap, and the GitHub status classification table', () => {
-  assert.equal(config.watchdog.timerMinutes, 30);
-  assert.equal(config.watchdog.attempts, 3);
+test('watchdog JSON keeps only the shared GitHub status classification table', () => {
+  assert.equal(config.watchdog.timerMinutes, undefined);
+  assert.equal(config.watchdog.attempts, undefined);
   assert.equal(config.watchdog.respectStopStatusCodes, undefined);
   assert.equal(config.watchdog.respectContinueStatusCodes, undefined);
   assert.deepEqual(Object.keys(config.watchdog.stopOnStatus).sort(), definitiveCodes.sort());
@@ -57,7 +57,7 @@ test('smart watchdog JSON keeps timing, attempt cap, and the GitHub status class
   }
 });
 
-test('Simple watchdog JSON owns only the two respect gates and consumes notifier-classified terminal outcomes', () => {
+test('Simple watchdog JSON owns timing, retries, refresh delays, and terminal-status gates', () => {
   assert.deepEqual(config.simpleWatchdog, {
     timerMinutes: 30,
     attempts: 3,
@@ -66,7 +66,7 @@ test('Simple watchdog JSON owns only the two respect gates and consumes notifier
     respectStopStatusCodes: true,
     respectContinueStatusCodes: true
   });
-  assert.match(conversationStateSource, /Toggle simple fallback watchdog/);
+  assert.match(conversationStateSource, /Toggle Simple watchdog/);
   assert.match(conversationStateSource, /SIMPLE_STATUS_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATUS'/);
   assert.match(conversationStateSource, /TERMINAL_BRIDGE_MARKER = 'chatgpt-notifier-terminal-status-v1'/);
   assert.match(conversationStateSource, /queryNotifierTerminalSignal/);
@@ -83,6 +83,8 @@ test('Simple watchdog JSON owns only the two respect gates and consumes notifier
   assert.doesNotMatch(backgroundSource, /normalizeStopOnStatus|DEFAULT_STOP_ON_STATUS/);
   assert.match(backgroundSource, /state\.phase = 'stop-wait'/);
   assert.match(backgroundSource, /chrome\.tabs\.reload\(tabId\)/);
+  assert.match(backgroundSource, /state\.phase = 'refresh-loading'/);
+  assert.match(backgroundSource, /String\(tab\.status \|\| ''\) !== 'complete'/);
   assert.match(backgroundSource, /state\.phase = 'refresh-wait'/);
   assert.match(backgroundSource, /action: 'send-continue'/);
 });
