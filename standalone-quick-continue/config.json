@@ -3,8 +3,6 @@
   "projectText": "[{time}] Continue {project} from canonical GitHub state until you finish or need me.",
   "manualTimestampText": "[{time}] {message}",
   "watchdog": {
-    "timerMinutes": 30,
-    "attempts": 3,
     "stopOnStatus": {
       "PLANNING_ACTIVE": true,
       "COMPLETE_APPLIED": true,
