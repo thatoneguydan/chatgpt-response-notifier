@@ -171,13 +171,13 @@
       throw new Error('"monitorWatchdog.attempts" must be an integer between 0 and 20.');
     }
     const stopToRefreshSeconds = raw.stopToRefreshSeconds == null
-      ? DEFAULT_MONITOR_WATCHDOG.stopToRefreshSeconds
+      ? (seed.stopToRefreshSeconds == null ? DEFAULT_MONITOR_WATCHDOG.stopToRefreshSeconds : Number(seed.stopToRefreshSeconds))
       : Number(raw.stopToRefreshSeconds);
     if (!Number.isFinite(stopToRefreshSeconds) || stopToRefreshSeconds < 0 || stopToRefreshSeconds > 3600) {
       throw new Error('"monitorWatchdog.stopToRefreshSeconds" must be between 0 and 3600.');
     }
     const refreshToContinueSeconds = raw.refreshToContinueSeconds == null
-      ? DEFAULT_MONITOR_WATCHDOG.refreshToContinueSeconds
+      ? (seed.refreshToContinueSeconds == null ? DEFAULT_MONITOR_WATCHDOG.refreshToContinueSeconds : Number(seed.refreshToContinueSeconds))
       : Number(raw.refreshToContinueSeconds);
     if (!Number.isFinite(refreshToContinueSeconds) || refreshToContinueSeconds < 0 || refreshToContinueSeconds > 3600) {
       throw new Error('"monitorWatchdog.refreshToContinueSeconds" must be between 0 and 3600.');
