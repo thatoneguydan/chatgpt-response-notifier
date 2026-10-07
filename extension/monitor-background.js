@@ -19,7 +19,9 @@
   const CODE_WATCHDOG_RETRY_MS = 60_000;
   const DEFAULT_CODE_WATCHDOG_MAX_SENDS = 3;
   const CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS = 15_000;
-  const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 14;
+  const LEGACY_CODE_WATCHDOG_RETIRED = true;
+  globalThis.__chatgptNotifierLegacyWatchdogRetired = LEGACY_CODE_WATCHDOG_RETIRED;
+  const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 15;
   const HOT_PAGE_MONITOR_RUNTIME_VERSION = 12;
   const HOT_PAGE_STATUS_RUNTIME_VERSION = 15;
   const HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3;
@@ -406,6 +408,17 @@
   async function scheduleCodeWatchdog(recordValue, when) {
     const record = recordValue || null;
     if (!record?.conversationId || record.stopped === true) return record;
+    if (LEGACY_CODE_WATCHDOG_RETIRED) {
+      await cancelCodeWatchdogAlarm(record.conversationId);
+      return await putCodeWatchdog(record.conversationId, {
+        ...record,
+        stopped: true,
+        stopReason: 'retired-simple-primary',
+        deadlineAt: 0,
+        retryAt: 0,
+        retryReason: ''
+      });
+    }
     const deadlineAt = Math.max(Date.now() + 1000, Number(when || 0));
     const updated = await putCodeWatchdog(record.conversationId, {
       ...record,
@@ -420,6 +433,7 @@
   async function scheduleCodeWatchdogRetry(recordValue, reason = 'retry') {
     const record = recordValue || null;
     if (!record?.conversationId || record.stopped === true) return record;
+    if (LEGACY_CODE_WATCHDOG_RETIRED) return await scheduleCodeWatchdog(record, 0);
     const retryAt = Date.now() + CODE_WATCHDOG_RETRY_MS;
     const updated = await putCodeWatchdog(record.conversationId, {
       ...record,
@@ -681,6 +695,10 @@
   }
 
   async function handleCodeWatchdogAlarmState(conversationId) {
+    if (LEGACY_CODE_WATCHDOG_RETIRED) {
+      await clearCodeWatchdog(conversationId);
+      return;
+    }
     let record = await readCodeWatchdog(conversationId);
     if (!record || record.stopped === true) return;
     const enrollment = await getEnrollment(conversationId);
@@ -946,11 +964,21 @@
       return null;
     }
     const run = await updateRun(clean, sender);
-    const codeWatchdog = await reconcileCodeWatchdog(clean, sender);
-    const watchdogSignature = codeWatchdogOverviewSignature(codeWatchdog);
-    const previousWatchdogSignature = codeWatchdogOverviewSignatures.get(clean.conversationId);
-    const watchdogChanged = watchdogSignature !== previousWatchdogSignature;
-    if (watchdogChanged) codeWatchdogOverviewSignatures.set(clean.conversationId, watchdogSignature);
+    let watchdogChanged = false;
+    if (LEGACY_CODE_WATCHDOG_RETIRED) {
+      const existing = await readCodeWatchdog(clean.conversationId);
+      if (existing) {
+        await clearCodeWatchdog(clean.conversationId);
+        codeWatchdogOverviewSignatures.delete(clean.conversationId);
+        watchdogChanged = true;
+      }
+    } else {
+      const codeWatchdog = await reconcileCodeWatchdog(clean, sender);
+      const watchdogSignature = codeWatchdogOverviewSignature(codeWatchdog);
+      const previousWatchdogSignature = codeWatchdogOverviewSignatures.get(clean.conversationId);
+      watchdogChanged = watchdogSignature !== previousWatchdogSignature;
+      if (watchdogChanged) codeWatchdogOverviewSignatures.set(clean.conversationId, watchdogSignature);
+    }
     if ((enrollmentChanged || watchdogChanged) && senderTarget) publishAutomationOverview(senderTarget).catch(() => {});
     return run;
   }
@@ -1111,6 +1139,10 @@
 
   async function armCodeWatchdogFromManualEnable(target, snapshotValue = null, activatedAt = Date.now()) {
     if (!target?.id || !Number.isInteger(target?.tab?.id)) return null;
+    if (LEGACY_CODE_WATCHDOG_RETIRED) {
+      await clearCodeWatchdog(target.id);
+      return null;
+    }
     const activationAt = Math.max(0, Number(activatedAt || Date.now()));
     return await queueCodeWatchdogMutation(target.id, async () => {
       const current = await readCodeWatchdog(target.id);
@@ -1139,6 +1171,7 @@
   }
 
   async function resetCodeWatchdogBudgetForTarget(message, target) {
+    if (LEGACY_CODE_WATCHDOG_RETIRED) return { ok: false, reason: 'legacy-watchdog-retired', requestId: String(message?.requestId || '') };
     if (!target?.id || !Number.isInteger(target?.tab?.id)) return { ok: false, error: 'Open a monitored ChatGPT conversation to reset auto-continues.', reason: 'watchdog-target-unavailable' };
     if (message?.conversationId && String(message.conversationId) !== String(target.id)) return { ok: false, error: 'The ChatGPT conversation changed before the reset was applied.', reason: 'target-conversation-changed' };
     const enrollment = await getEnrollment(target.id);
@@ -1165,6 +1198,7 @@
   async function resetSenderCodeWatchdogBudget(message, sender) { return await resetCodeWatchdogBudgetForTarget(message, senderChatTarget(sender)); }
 
   async function stopSenderCodeWatchdogTimer(message, sender) {
+    if (LEGACY_CODE_WATCHDOG_RETIRED) return { ok: false, reason: 'legacy-watchdog-retired', requestId: String(message?.requestId || '') };
     const target = senderChatTarget(sender);
     if (!target?.id || !Number.isInteger(target?.tab?.id) || (message?.conversationId && String(message.conversationId) !== target.id)) return { ok: false, reason: 'watchdog-target-unavailable' };
     const enrollment = await getEnrollment(target.id);
@@ -1182,6 +1216,7 @@
   }
 
   async function armCodeWatchdogForTarget(message, target) {
+    if (LEGACY_CODE_WATCHDOG_RETIRED) return { ok: false, armed: false, reason: 'legacy-watchdog-retired', requestId: String(message?.requestId || '') };
     if (!target?.id || !Number.isInteger(target?.tab?.id)) return { ok: false, error: 'Open a monitored ChatGPT conversation to start the auto-continue timer.', reason: 'watchdog-target-unavailable' };
     if (message?.conversationId && String(message.conversationId) !== String(target.id)) return { ok: false, error: 'The ChatGPT conversation changed before the timer was started.', reason: 'target-conversation-changed' };
     const enrollment = await getEnrollment(target.id);
@@ -1248,7 +1283,7 @@
             manualSnapshot = snapshot?.conversationId ? snapshot : null;
             if (manualSnapshot) await handleSnapshot(manualSnapshot, { tab: target.tab, documentId: manualSnapshot.documentId || '' });
           } catch {}
-          await armCodeWatchdogFromManualEnable(target, manualSnapshot, activatedAt);
+          if (!LEGACY_CODE_WATCHDOG_RETIRED) await armCodeWatchdogFromManualEnable(target, manualSnapshot, activatedAt);
           if (message?.resumeExistingRun === true) {
             try { await globalThis.__chatgptNotifierBoundedRecovery?.resumeConversation?.(target.id); } catch {}
           }
@@ -1402,6 +1437,13 @@
 
   async function restoreCodeWatchdogAlarms(now = Date.now()) {
     const records = (await getAll(PROFILE_STORE)).filter((record) => String(record?.key || '').startsWith(CODE_WATCHDOG_RECORD_PREFIX));
+    if (LEGACY_CODE_WATCHDOG_RETIRED) {
+      for (const record of records) {
+        const conversationId = String(record?.conversationId || '');
+        if (conversationId) await clearCodeWatchdog(conversationId);
+      }
+      return;
+    }
     for (const record of records) {
       const conversationId = String(record?.conversationId || '');
       if (!conversationId || record.stopped === true) continue;
@@ -1426,7 +1468,8 @@
   }
 
   globalThis.__chatgptNotifierMonitorBackground = Object.freeze({
-    version: 5,
+    version: 6,
+    legacyCodeWatchdogRetired: LEGACY_CODE_WATCHDOG_RETIRED,
     automationSchemaVersion: AUTOMATION_SCHEMA_VERSION,
     getEnrollment,
     setEnrollment,
