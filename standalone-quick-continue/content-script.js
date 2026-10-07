@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 11;
+  const RUNTIME_VERSION = 12;
   const prompts = globalThis.ChatGPTQuickContinuePrompts;
   const configApi = globalThis.ChatGPTQuickContinueConfig;
   const composerApi = globalThis.ChatGPTQuickContinueComposer;
@@ -31,7 +31,8 @@
   let projectList = null;
   let projectInput = null;
   let projectSend = null;
-  let browsePanel = null;
+  let menuPopover = null;
+  let menuItems = null;
   let editorPanel = null;
   let editorTextarea = null;
   let editorError = null;
@@ -232,8 +233,8 @@
     return spaceBelow > spaceAbove ? 'below' : 'above';
   }
 
-  function positionProjectPopover() {
-    if (disposed || !projectPopover || projectPopover.hidden || !toolbar) return;
+  function positionPopover(popover) {
+    if (disposed || !popover || popover.hidden || !toolbar) return;
     const toolbarRect = toolbar.getBoundingClientRect();
     let occupiedTop = toolbarRect.top;
     for (const row of toolbar.querySelectorAll('[data-chatgpt-notifier-watchdog-status-owner], #chatgpt-quick-continue-simple-countdown')) {
@@ -242,34 +243,42 @@
       occupiedTop = Math.min(occupiedTop, row.getBoundingClientRect().top);
     }
     const occupiedRect = { top: occupiedTop, bottom: toolbarRect.bottom };
-    const direction = preferredPopoverDirection(occupiedRect, projectPopover.offsetHeight, window.innerHeight);
+    const direction = preferredPopoverDirection(occupiedRect, popover.offsetHeight, window.innerHeight);
     if (direction === 'below') {
-      projectPopover.style.top = 'calc(100% + 6px)';
-      projectPopover.style.bottom = 'auto';
+      popover.style.top = 'calc(100% + 6px)';
+      popover.style.bottom = 'auto';
     } else {
-      projectPopover.style.top = 'auto';
-      projectPopover.style.bottom = `calc(100% + ${Math.ceil(toolbarRect.top - occupiedTop) + 6}px)`;
+      popover.style.top = 'auto';
+      popover.style.bottom = `calc(100% + ${Math.ceil(toolbarRect.top - occupiedTop) + 6}px)`;
     }
   }
 
+  function positionProjectPopover() { positionPopover(projectPopover); }
+  function positionMenuPopover() { positionPopover(menuPopover); }
+
   function setEditorMode(editing) {
-    if (!browsePanel || !editorPanel) return;
-    browsePanel.hidden = Boolean(editing);
+    if (!menuItems || !editorPanel) return;
+    menuItems.hidden = Boolean(editing);
     editorPanel.hidden = !editing;
-    if (projectPopover) {
-      projectPopover.style.minWidth = editing ? '540px' : '250px';
-      projectPopover.style.maxWidth = editing ? 'calc(100vw - 24px)' : '330px';
+    if (menuPopover) {
+      menuPopover.style.minWidth = editing ? '540px' : '190px';
+      menuPopover.style.maxWidth = editing ? 'calc(100vw - 24px)' : '260px';
     }
     if (!editing) setEditorError('');
-    positionProjectPopover();
+    positionMenuPopover();
   }
 
   function closeProjectPopover({ clear = false } = {}) {
     if (!projectPopover) return;
     projectPopover.hidden = true;
-    setEditorMode(false);
     if (clear && projectInput) projectInput.value = '';
     updateProjectSendState();
+  }
+
+  function closeMenuPopover() {
+    if (!menuPopover) return;
+    menuPopover.hidden = true;
+    setEditorMode(false);
   }
 
   function canSendProject() {
@@ -333,27 +342,37 @@
 
   async function openProjectPopover() {
     if (disposed || !projectPopover) return;
+    closeMenuPopover();
     projectPopover.hidden = false;
-    setEditorMode(false);
     const config = await ensureConfig();
     if (config) renderProjectList(config.projects);
     updateProjectSendState();
     positionProjectPopover();
   }
 
+  function openMenuPopover() {
+    if (disposed || !menuPopover) return;
+    closeProjectPopover();
+    menuPopover.hidden = false;
+    setEditorMode(false);
+    positionMenuPopover();
+  }
+
   async function openConfigEditor() {
     const config = await ensureConfig();
-    if (disposed || !config || !editorTextarea) return;
+    if (disposed || !config || !editorTextarea || !menuPopover) return;
+    closeProjectPopover();
+    menuPopover.hidden = false;
     editorTextarea.value = configApi.serialize(config);
     setEditorError('');
     setEditorMode(true);
-    positionProjectPopover();
+    positionMenuPopover();
   }
 
   function handleDocumentPointerDown(event) {
-    if (!projectPopover || projectPopover.hidden) return;
     if (toolbar?.contains(event.target)) return;
-    closeProjectPopover();
+    if (projectPopover && !projectPopover.hidden) closeProjectPopover();
+    if (menuPopover && !menuPopover.hidden) closeMenuPopover();
   }
 
   async function saveConfigEditor() {
@@ -379,6 +398,8 @@
       return Boolean(
         root.querySelector('button[aria-label="Send timestamped Continue"]')
         && root.querySelector('button[aria-label="Project Continue"]')
+        && root.querySelector('button[aria-label="Quick Continue menu"]')
+        && root.querySelector('#chatgpt-quick-continue-menu-items')
         && root.querySelector('[aria-label="Current local time"]')
       );
     } catch { return false; }
@@ -393,7 +414,8 @@
     projectList = null;
     projectInput = null;
     projectSend = null;
-    browsePanel = null;
+    menuPopover = null;
+    menuItems = null;
     editorPanel = null;
     editorTextarea = null;
     editorError = null;
@@ -403,8 +425,6 @@
   }
 
   function buildToolbar() {
-    // Invalidated extension worlds can leave DOM without accessible globals.
-    // Remove every stale copy before mounting the current singleton.
     for (const stale of document.querySelectorAll(`#${TOOLBAR_ID}`)) stale.remove();
     const root = document.createElement('div');
     root.id = TOOLBAR_ID;
@@ -440,6 +460,19 @@
     });
     root.append(projectButton);
 
+    const menuButton = document.createElement('button');
+    menuButton.type = 'button';
+    menuButton.textContent = '☰';
+    menuButton.setAttribute('aria-label', 'Quick Continue menu');
+    styleButton(menuButton);
+    Object.assign(menuButton.style, { padding: '5px 7px', fontSize: '12px' });
+    menuButton.addEventListener('click', (event) => {
+      event.preventDefault(); event.stopPropagation();
+      if (!menuPopover) return;
+      if (menuPopover.hidden) openMenuPopover(); else closeMenuPopover();
+    });
+    root.append(menuButton);
+
     const time = document.createElement('span');
     time.setAttribute('aria-label', 'Current local time');
     Object.assign(time.style, { marginLeft: '2px', padding: '0 3px', opacity: '.65', fontVariantNumeric: 'tabular-nums' });
@@ -453,33 +486,24 @@
     root.append(statusNode);
     status = statusNode;
 
-    const popover = document.createElement('div');
-    popover.hidden = true;
-    popover.setAttribute('role', 'group');
-    popover.setAttribute('aria-label', 'Project Continue');
-    Object.assign(popover.style, {
+    const popoverStyle = {
       position: 'absolute', right: '0', bottom: 'calc(100% + 6px)', display: 'flex', flexDirection: 'column',
-      alignItems: 'stretch', gap: '6px', minWidth: '250px', maxWidth: '330px', padding: '7px',
+      alignItems: 'stretch', gap: '6px', padding: '7px',
       border: '1px solid var(--border-light, rgba(127,127,127,.28))', borderRadius: '9px',
       background: 'var(--main-surface-primary, #fff)', color: 'var(--text-primary, #111)', boxShadow: '0 4px 18px rgba(0,0,0,.14)'
-    });
+    };
 
-    const header = document.createElement('div');
-    Object.assign(header.style, { display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '8px' });
+    const project = document.createElement('div');
+    project.hidden = true;
+    project.setAttribute('role', 'group');
+    project.setAttribute('aria-label', 'Project Continue');
+    Object.assign(project.style, popoverStyle, { minWidth: '250px', maxWidth: '330px' });
     const savedLabel = document.createElement('div');
     savedLabel.textContent = 'Projects';
     Object.assign(savedLabel.style, { padding: '1px 2px', opacity: '.62', fontWeight: '600' });
-    header.append(savedLabel);
-    const editButton = document.createElement('button');
-    editButton.type = 'button'; editButton.textContent = 'Edit'; editButton.setAttribute('aria-label', 'Edit Quick Continue JSON');
-    styleButton(editButton);
-    Object.assign(editButton.style, { padding: '3px 6px', fontSize: '10px' });
-    editButton.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); openConfigEditor(); });
-    header.append(editButton); popover.append(header);
-
+    project.append(savedLabel);
     const browse = document.createElement('div');
     Object.assign(browse.style, { display: 'flex', flexDirection: 'column', gap: '6px' });
-    browsePanel = browse;
     const list = document.createElement('div');
     Object.assign(list.style, { display: 'flex', flexDirection: 'column', gap: '3px', maxHeight: '190px', overflowY: 'auto' });
     browse.append(list); projectList = list;
@@ -506,7 +530,26 @@
     send.type = 'button'; send.textContent = 'Send'; send.setAttribute('aria-label', 'Send custom Project Continue');
     styleButton(send); send.disabled = true;
     send.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); sendCustomProject(); });
-    customRow.append(send); projectSend = send; browse.append(customRow); popover.append(browse);
+    customRow.append(send); projectSend = send; browse.append(customRow); project.append(browse);
+
+    const menu = document.createElement('div');
+    menu.hidden = true;
+    menu.setAttribute('role', 'group');
+    menu.setAttribute('aria-label', 'Quick Continue menu popover');
+    Object.assign(menu.style, popoverStyle, { minWidth: '190px', maxWidth: '260px' });
+    const items = document.createElement('div');
+    items.id = 'chatgpt-quick-continue-menu-items';
+    Object.assign(items.style, { display: 'flex', flexDirection: 'column', gap: '4px' });
+    const editButton = document.createElement('button');
+    editButton.type = 'button';
+    editButton.textContent = 'Edit JSON';
+    editButton.setAttribute('aria-label', 'Edit Quick Continue JSON');
+    styleButton(editButton);
+    Object.assign(editButton.style, { width: '100%', textAlign: 'left' });
+    editButton.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); openConfigEditor(); });
+    items.append(editButton);
+    menu.append(items);
+    menuItems = items;
 
     const editor = document.createElement('div');
     editor.hidden = true;
@@ -538,9 +581,10 @@
     const save = document.createElement('button');
     save.type = 'button'; save.textContent = 'Save'; save.setAttribute('aria-label', 'Save Quick Continue JSON'); styleButton(save);
     save.addEventListener('click', (event) => { event.preventDefault(); event.stopPropagation(); saveConfigEditor(); });
-    editorActions.append(save); editor.append(editorActions); popover.append(editor);
+    editorActions.append(save); editor.append(editorActions); menu.append(editor);
 
-    root.append(popover); projectPopover = popover;
+    root.append(project); projectPopover = project;
+    root.append(menu); menuPopover = menu;
     (document.body || document.documentElement).append(root);
     toolbar = root;
     try { resizeObserver?.observe(root); } catch {}
@@ -651,6 +695,7 @@
     if (root.style.top !== nextTop) root.style.top = nextTop;
     root.style.visibility = 'visible';
     positionProjectPopover();
+    positionMenuPopover();
   }
 
   function scheduleSync() {
@@ -681,7 +726,7 @@
   function handleDocumentMutations(records) {
     if (disposed) return;
     if (notifierOnlyMutation(records)) {
-      if (projectPopover && !projectPopover.hidden) schedulePosition();
+      if ((projectPopover && !projectPopover.hidden) || (menuPopover && !menuPopover.hidden)) schedulePosition();
       return;
     }
     if (toolbar?.isConnected && Array.from(records || []).every((record) => {
@@ -708,7 +753,7 @@
     if (disposed) return;
     currentConfig = nextConfig;
     publishWatchdogConfig(nextConfig);
-    if (projectList && (!editorPanel || editorPanel.hidden)) renderProjectList(nextConfig.projects);
+    if (projectList) renderProjectList(nextConfig.projects);
     updateProjectSendState();
   });
 
