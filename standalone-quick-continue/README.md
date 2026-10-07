@@ -22,6 +22,8 @@ Manual timestamp mode is remembered independently for each ChatGPT conversation.
 
 ## Primary Simple watchdog
 
+Quick Continue 1.2.37 is the first release where this Simple path is the primary Monitor watchdog rather than a fallback path.
+
 Quick Continue's Simple watchdog is the production continuation scheduler behind Monitor. The former notifier watchdog scheduler and notifier countdown surface are retired in production.
 
 Monitor state is passed to Quick Continue without ChatGPT API polling. When Monitor is enabled, trusted manual sends and trusted Quick Continue/Project sends reset the Simple watchdog to a fresh configured countdown. Programmatic automatic Continue sends do not reset their own finite retry allowance.
