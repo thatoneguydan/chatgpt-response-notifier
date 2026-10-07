@@ -36,6 +36,7 @@ function createHarness() {
   const startupListeners = [];
   const installedListeners = [];
   const removedListeners = [];
+  const updatedListeners = [];
   const tab = {
     id: 41,
     url: 'https://chatgpt.com/c/simple-mode-test',
@@ -78,7 +79,8 @@ function createHarness() {
         assert.equal(tabId, tab.id);
         reloads.push(tabId);
       },
-      onRemoved: { addListener: (listener) => removedListeners.push(listener) }
+      onRemoved: { addListener: (listener) => removedListeners.push(listener) },
+      onUpdated: { addListener: (listener) => updatedListeners.push(listener) }
     },
     scripting: { async executeScript() {} }
   };
@@ -125,8 +127,23 @@ function createHarness() {
     return sentMessages.filter((entry) => entry?.type === ACTION);
   }
 
-  return { storage, alarms, sentMessages, reloads, tab, sendRuntimeMessage, fireSimpleAlarm, state, actionMessages };
+  function fireTabUpdated(changeInfo) {
+    assert.equal(updatedListeners.length, 1);
+    updatedListeners[0](tab.id, structuredClone(changeInfo), structuredClone(tab));
+    return tick();
+  }
+
+  return { storage, alarms, sentMessages, reloads, tab, sendRuntimeMessage, fireSimpleAlarm, fireTabUpdated, state, actionMessages };
 }
+
+test('background relays same-document ChatGPT URL changes to the page runtime without polling', async () => {
+  const harness = createHarness();
+  harness.tab.url = 'https://chatgpt.com/';
+  await harness.fireTabUpdated({ url: harness.tab.url });
+  const routeMessages = harness.sentMessages.filter((entry) => entry?.type === 'QUICK_CONTINUE_ROUTE_CHANGED');
+  assert.equal(routeMessages.length, 1);
+  assert.equal(routeMessages[0].url, 'https://chatgpt.com/');
+});
 
 test('Simple mode executes the fixed sequence and stays enabled after attempts exhaust until explicitly turned off', async () => {
   const harness = createHarness();
