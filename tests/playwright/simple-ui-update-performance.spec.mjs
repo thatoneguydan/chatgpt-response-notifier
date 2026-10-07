@@ -58,6 +58,11 @@ test('Simple starts before a new chat has a saved conversation ID', async ({ fix
     history.pushState({}, '', '/');
     window.__fixture.remountComposer();
   });
+  await expect.poll(() => evaluateInExtensionWorld(
+    fixturePage,
+    'ChatGPT Quick Continue',
+    'globalThis.__chatgptQuickContinueConversationStateRuntime?.activeConversationId ?? null'
+  )).toBe('');
   await expect(fixturePage.locator(simple)).toBeHidden();
   await openQuickContinueMenu(fixturePage);
   await fixturePage.locator(simple).click();
