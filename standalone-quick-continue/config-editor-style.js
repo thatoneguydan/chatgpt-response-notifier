@@ -11,7 +11,8 @@
 #chatgpt-quick-continue-toolbar [hidden] {
   display: none !important;
 }
-#chatgpt-quick-continue-simple-countdown {
+#chatgpt-quick-continue-simple-countdown,
+#chatgpt-quick-continue-monitor-countdown {
   position: absolute;
   box-sizing: border-box;
   width: calc(100% + 2px);
@@ -31,6 +32,7 @@
   font-variant-numeric: tabular-nums;
 }
 #chatgpt-quick-continue-simple-countdown[hidden],
+#chatgpt-quick-continue-monitor-countdown[hidden],
 #chatgpt-quick-continue-toolbar[data-simple-watchdog-active="true"] [data-chatgpt-notifier-watchdog-status-owner] {
   display: none !important;
 }
