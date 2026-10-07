@@ -6,6 +6,8 @@ const readText = (relative) => readFileSync(new URL(`../../${relative}`, import.
 const styleSource = readText('standalone-quick-continue/config-editor-style.js');
 const backgroundSource = readText('standalone-quick-continue/background.js');
 const conversationStateSource = readText('standalone-quick-continue/conversation-state.js');
+const monitorWatchdogSource = readText('standalone-quick-continue/monitor-watchdog.js');
+const monitorBackgroundSource = readText('standalone-quick-continue/monitor-watchdog-background.js');
 const notifierObserverSource = readText('extension/terminal-status-live-observer.js');
 const installerSource = readText('standalone-quick-continue/Install.ps1');
 const releaseWorkflow = readText('.github/workflows/quick-continue-release.yml');
@@ -27,12 +29,18 @@ test('Quick Continue ships the large config editor styling to new and already-op
   assert.match(manifest.version, /^1\.2\.\d+$/);
   const declared = manifest.content_scripts.flatMap((entry) => entry.js || []);
   assert.ok(declared.includes('config-editor-style.js'));
+  assert.ok(declared.includes('monitor-watchdog.js'));
   assert.ok(declared.includes('conversation-state.js'));
   assert.match(backgroundSource, /'config-editor-style\.js'[\s\S]*'content-script\.js'/);
+  assert.match(backgroundSource, /'monitor-watchdog\.js'/);
   assert.match(backgroundSource, /'conversation-state\.js'/);
   assert.match(installerSource, /'config-editor-style\.js'/);
+  assert.match(installerSource, /'monitor-watchdog-background\.js'/);
+  assert.match(installerSource, /'monitor-watchdog\.js'/);
   assert.match(installerSource, /'conversation-state\.js'/);
   assert.match(releaseWorkflow, /'config-editor-style\.js'/);
+  assert.match(releaseWorkflow, /'monitor-watchdog-background\.js'/);
+  assert.match(releaseWorkflow, /'monitor-watchdog\.js'/);
   assert.match(releaseWorkflow, /'conversation-state\.js'/);
   assert.match(styleSource, /width:\s*min\(780px, calc\(100vw - 32px\)\)/);
   assert.match(styleSource, /height:\s*min\(560px, calc\(100vh - 180px\)\)/);
@@ -55,6 +63,15 @@ test('watchdog JSON keeps only the shared GitHub status classification table', (
   for (const code of ['INCOMPLETE_LIMIT', 'INCOMPLETE_TOOL_FAILURE', 'INCOMPLETE_HANDOFF', 'INCOMPLETE_CONTINUE']) {
     assert.equal(config.watchdog.stopOnStatus[code], false);
   }
+});
+
+test('Monitor watchdog JSON starts from Simple defaults but owns an independent runtime and config block', () => {
+  assert.deepEqual(config.monitorWatchdog, config.simpleWatchdog);
+  assert.match(monitorWatchdogSource, /config\?\.monitorWatchdog/);
+  assert.match(monitorWatchdogSource, /MONITOR_STATUS_MESSAGE = 'QUICK_CONTINUE_MONITOR_WATCHDOG_STATUS'/);
+  assert.match(monitorBackgroundSource, /quickContinueMonitorWatchdogStates/);
+  assert.match(monitorBackgroundSource, /quick-continue-monitor-watchdog:/);
+  assert.doesNotMatch(conversationStateSource, /QUICK_CONTINUE_MONITOR_WATCHDOG_/);
 });
 
 test('Simple watchdog JSON owns timing, retries, refresh delays, and terminal-status gates', () => {
