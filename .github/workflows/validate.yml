@@ -81,10 +81,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Extension architecture/behavior tests failed.' }
 
           foreach ($script in @(
+            '.\standalone-quick-continue\background.js',
+            '.\standalone-quick-continue\monitor-watchdog-background.js',
             '.\standalone-quick-continue\prompt-format.js',
             '.\standalone-quick-continue\config.js',
             '.\standalone-quick-continue\composer-text.js',
-            '.\standalone-quick-continue\content-script.js'
+            '.\standalone-quick-continue\content-script.js',
+            '.\standalone-quick-continue\monitor-watchdog.js',
+            '.\standalone-quick-continue\conversation-state.js'
           )) {
             node --check $script
             if ($LASTEXITCODE -ne 0) { throw "Standalone Quick Continue syntax validation failed: $script" }
