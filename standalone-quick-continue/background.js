@@ -419,14 +419,8 @@ async function handleSimpleAlarm(tabId) {
     try {
       sendResult = await chrome.tabs.sendMessage(tabId, { type: SIMPLE_ACTION_MESSAGE, action: 'send-continue' });
     } catch {}
-    if (sendResult?.ok !== true) {
-      state.phase = 'refresh-loading';
-      state.reloadStartedAt = Date.now();
-      state.nextAt = Date.now() + SIMPLE_REFRESH_READY_POLL_MS;
-      await saveAndScheduleSimpleState(state, states);
-      return;
-    }
     state.attemptsUsed = Number(state.attemptsUsed || 0) + 1;
+    state.lastSendFailure = sendResult?.ok === true ? '' : String(sendResult?.reason || 'send-failed');
     if (state.attemptsUsed >= state.settings.attempts) {
       state.phase = 'exhausted';
       state.nextAt = 0;
@@ -435,6 +429,7 @@ async function handleSimpleAlarm(tabId) {
       return;
     }
     state.phase = 'countdown';
+    state.reloadStartedAt = 0;
     state.nextAt = Date.now() + (state.settings.timerMinutes * 60 * 1000);
     await saveAndScheduleSimpleState(state, states);
     return;
