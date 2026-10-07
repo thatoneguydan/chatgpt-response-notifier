@@ -575,7 +575,7 @@
   }
 
   function restartPrimaryWatchdogFromTrustedSend() {
-    if (disposed || !simpleEnabled || !simpleRestoreReady) return;
+    if (disposed || !simpleRestoreReady) return;
     const authority = monitorWatchdogAuthority();
     if (authority?.enabled !== true) return;
     const now = Date.now();
