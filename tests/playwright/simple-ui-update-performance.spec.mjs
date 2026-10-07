@@ -10,8 +10,12 @@ const menuButtonName = 'Quick Continue menu';
 async function openQuickContinueMenu(page) {
   const simpleButton = page.locator(simple);
   await expect(simpleButton).toHaveCount(1);
-  if (!(await simpleButton.isVisible())) {
-    await page.getByRole('button', { name: menuButtonName, exact: true }).click();
+  for (let attempt = 0; attempt < 4 && !(await simpleButton.isVisible()); attempt += 1) {
+    const menuButton = page.getByRole('button', { name: menuButtonName, exact: true });
+    await expect(menuButton).toHaveCount(1);
+    await menuButton.click();
+    if (await simpleButton.isVisible()) break;
+    await page.waitForTimeout(100);
   }
   await expect(simpleButton).toBeVisible();
 }
