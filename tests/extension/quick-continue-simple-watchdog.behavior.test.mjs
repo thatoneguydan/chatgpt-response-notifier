@@ -39,6 +39,7 @@ function createHarness() {
   const tab = {
     id: 41,
     url: 'https://chatgpt.com/c/simple-mode-test',
+    status: 'complete',
     discarded: false,
     frozen: false
   };
@@ -156,8 +157,12 @@ test('Simple mode executes the fixed sequence and stays enabled after attempts e
 
   harness.state().nextAt = 0;
   await harness.fireSimpleAlarm();
-  await settle(() => harness.state()?.phase === 'refresh-wait', 'refresh-wait phase');
+  await settle(() => harness.state()?.phase === 'refresh-loading', 'refresh-loading phase');
   assert.deepEqual(harness.reloads, [41]);
+
+  harness.state().nextAt = 0;
+  await harness.fireSimpleAlarm();
+  await settle(() => harness.state()?.phase === 'refresh-wait', 'refresh-wait phase');
 
   harness.state().nextAt = 0;
   await harness.fireSimpleAlarm();
@@ -165,6 +170,8 @@ test('Simple mode executes the fixed sequence and stays enabled after attempts e
   assert.deepEqual(harness.actionMessages().at(-1), { type: ACTION, action: 'send-continue' });
   assert.equal(harness.state().attemptsUsed, 1);
 
+  harness.state().nextAt = 0;
+  await harness.fireSimpleAlarm();
   harness.state().nextAt = 0;
   await harness.fireSimpleAlarm();
   harness.state().nextAt = 0;
@@ -187,6 +194,38 @@ test('Simple mode executes the fixed sequence and stays enabled after attempts e
   const disabled = await harness.sendRuntimeMessage({ type: SET, enabled: false });
   assert.equal(disabled.enabled, false);
   assert.equal(harness.state(), null);
+});
+
+test('Simple waits for a completed page reload before starting the configured post-refresh delay', async () => {
+  const harness = createHarness();
+  await harness.sendRuntimeMessage({
+    type: SET,
+    enabled: true,
+    conversationId: 'simple-mode-test',
+    settings: config.simpleWatchdog
+  });
+
+  harness.state().nextAt = 0;
+  await harness.fireSimpleAlarm();
+  harness.state().nextAt = 0;
+  await harness.fireSimpleAlarm();
+  await settle(() => harness.state()?.phase === 'refresh-loading', 'refresh-loading phase');
+
+  harness.tab.status = 'loading';
+  harness.state().nextAt = 0;
+  await harness.fireSimpleAlarm();
+  assert.equal(harness.state().phase, 'refresh-loading');
+  assert.equal(harness.actionMessages().filter((entry) => entry.action === 'send-continue').length, 0);
+
+  harness.tab.status = 'complete';
+  harness.state().nextAt = 0;
+  await harness.fireSimpleAlarm();
+  assert.equal(harness.state().phase, 'refresh-wait');
+  assert.equal(harness.actionMessages().filter((entry) => entry.action === 'send-continue').length, 0);
+
+  harness.state().nextAt = 0;
+  await harness.fireSimpleAlarm();
+  assert.equal(harness.actionMessages().filter((entry) => entry.action === 'send-continue').length, 1);
 });
 
 test('Simple status gates consume the notifier canonical terminal authority instead of duplicating a DOM parser', () => {
