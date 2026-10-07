@@ -47,7 +47,7 @@ function createHarness() {
 
   const chrome = {
     runtime: {
-      getManifest: () => ({ version: '1.2.38' }),
+      getManifest: () => ({ version: '1.2.39' }),
       reload() {},
       onMessage: { addListener: (listener) => messageListeners.push(listener) },
       onStartup: { addListener: (listener) => startupListeners.push(listener) },
@@ -99,7 +99,10 @@ function createHarness() {
     structuredClone,
     setTimeout,
     clearTimeout,
-    fetch: async () => ({ ok: false })
+    fetch: async () => ({ ok: false }),
+    // This harness intentionally exercises only the preserved Simple engine.
+    // Monitor is loaded by background.js in production and has its own harness/tests.
+    importScripts() {}
   };
   context.globalThis = context;
   vm.runInNewContext(backgroundSource, context);
