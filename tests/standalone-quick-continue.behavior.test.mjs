@@ -44,6 +44,9 @@ test('managed updater talks only to loopback, reloads itself only for a newer in
   assert.match(backgroundSource, /if \(!managedUpdateShouldReload\(installedVersion, runningVersion\)\) return false/);
   assert.match(backgroundSource, /chrome\.runtime\.reload\(\)/);
   assert.match(backgroundSource, /chrome\.tabs\.query\(\{ url: \['https:\/\/chatgpt\.com\/\*'\] \}\)/);
+  assert.match(backgroundSource, /ROUTE_CHANGED_MESSAGE = 'QUICK_CONTINUE_ROUTE_CHANGED'/);
+  assert.match(backgroundSource, /chrome\.tabs\.onUpdated\.addListener/);
+  assert.match(backgroundSource, /typeof changeInfo\?\.url !== 'string'/);
   assert.match(backgroundSource, /chrome\.scripting\.executeScript/);
   assert.match(backgroundSource, /'dom-compat\.js'/);
   assert.match(backgroundSource, /'runtime-reset\.js'/);
@@ -364,6 +367,8 @@ test('manual timestamp and Simple preferences retain their pre-send state across
   assert.match(conversationStateSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
   assert.match(conversationStateSource, /navigatesuccess/);
   assert.match(conversationStateSource, /conversationIdFromUrl\(\) !== activeConversationId/);
+  assert.match(conversationStateSource, /ROUTE_CHANGED_MESSAGE = 'QUICK_CONTINUE_ROUTE_CHANGED'/);
+  assert.match(conversationStateSource, /message\?\.type === ROUTE_CHANGED_MESSAGE[\s\S]*scheduleSync\(\)/);
   assert.match(conversationStateSource, /event\?\.isTrusted !== true/);
   assert.match(conversationStateSource, /restoreGeneration \+= 1;\s+const enabled = currentEnabled\(\)/);
   assert.match(conversationStateSource, /handleStorageChanged[\s\S]*restoreGeneration \+= 1;/);
