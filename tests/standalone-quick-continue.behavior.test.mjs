@@ -30,7 +30,7 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
   assert.deepEqual(manifest.content_scripts[0].js, ['runtime-reset.js', 'dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'send-transaction.js', 'config-editor-style.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.38');
+  assert.equal(manifest.version, '1.2.39');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -260,6 +260,10 @@ test('shared send transaction selects live authority and proves submission accep
 test('project picker stays non-modal while JSON editing moves to the hamburger menu', () => {
   assert.match(contentSource, /menuButton\.textContent = '☰'/);
   assert.match(contentSource, /menuButton\.setAttribute\('aria-label', 'Quick Continue menu'\)/);
+  assert.match(contentSource, /function handleQuickContinueMenuClick\(event\)/);
+  assert.match(contentSource, /document\.addEventListener\('click', handleQuickContinueMenuClick, true\)/);
+  assert.match(contentSource, /document\.removeEventListener\('click', handleQuickContinueMenuClick, true\)/);
+  assert.doesNotMatch(contentSource, /menuButton\.addEventListener\('click'/);
   assert.match(contentSource, /editButton\.textContent = 'Edit JSON'/);
   assert.match(contentSource, /editButton\.setAttribute\('aria-label', 'Edit Quick Continue JSON'\)/);
   assert.match(contentSource, /placeholder = 'Other project…'/);
@@ -383,7 +387,7 @@ test('prompt and config APIs are versioned so reinjection cannot retain stale gl
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
   assert.match(configSource, /chrome\.storage\.onChanged\.removeListener\(handleStorageChanged\)/);
-  assert.match(contentSource, /const RUNTIME_VERSION = 12/);
+  assert.match(contentSource, /const RUNTIME_VERSION = 13/);
   assert.match(hoverEditSource, /const RUNTIME_VERSION = 11/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
@@ -620,7 +624,7 @@ test('toolbar self-heals missing core controls and recovers from transient compo
 });
 
 test('standalone runtime hot-replaces stale generations, restores a detached toolbar, and ignores notifier-only churn', () => {
-  assert.match(contentSource, /const RUNTIME_VERSION = 12/);
+  assert.match(contentSource, /const RUNTIME_VERSION = 13/);
   assert.match(contentSource, /const previousRuntime = globalThis\.__chatgptQuickContinueRuntime/);
   assert.match(contentSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.doesNotMatch(contentSource, /__chatgptQuickContinueInstalled/);
