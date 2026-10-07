@@ -2,7 +2,7 @@
 
 (() => {
   const QUICK_CONTINUE_TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
-  const ATTACHMENT_RUNTIME_VERSION = 16;
+  const ATTACHMENT_RUNTIME_VERSION = 17;
   const AUTOMATION_OWNER_ATTR = 'data-chatgpt-notifier-automation-owner';
   const AUTOMATION_UI_OWNER_ATTR = 'data-chatgpt-notifier-automation-ui-owner';
   const PRIMARY_WATCHDOG_ATTR = 'data-chatgpt-notifier-primary-watchdog';
@@ -188,6 +188,10 @@
 
     watchdogPauseButton.hidden = !monitoring;
     watchdogResetButton.hidden = !monitoring;
+    // The buttons have inline flex styling, which can override the UA
+    // [hidden] rule. Set display explicitly when monitoring is disabled.
+    watchdogPauseButton.style.display = monitoring ? 'inline-flex' : 'none';
+    watchdogResetButton.style.display = monitoring ? 'inline-flex' : 'none';
     watchdogPauseButton.disabled = !monitoring;
     watchdogResetButton.disabled = !monitoring;
 
@@ -404,6 +408,8 @@
       watchdogPauseButton = toolbar.querySelector('[id^="chatgpt-notifier-monitor-watchdog-pause-v"]');
       watchdogResetButton = toolbar.querySelector('[id^="chatgpt-notifier-monitor-watchdog-reset-v"]');
       if (!watchdogPauseButton || !watchdogResetButton) {
+        watchdogPauseButton?.remove();
+        watchdogResetButton?.remove();
         const controls = buildWatchdogControls();
         existing.insertAdjacentElement('afterend', controls.pause);
         controls.pause.insertAdjacentElement('afterend', controls.reset);
@@ -443,8 +449,9 @@
     if (automationBusy) return automationOverview;
     const indicator = ensureAutomationIndicator();
     if (!indicator || document.visibilityState === 'hidden') return automationOverview;
+    const requestedPath = location.pathname;
     const overview = await readAutomationOverview();
-    if (!overview) return automationOverview;
+    if (!overview || location.pathname !== requestedPath) return automationOverview;
     return applyAutomationOverview(overview);
   }
 
@@ -578,8 +585,15 @@
   try { chrome.runtime.onMessage.addListener(handleAutomationStateMessage); } catch {}
   document.addEventListener('visibilitychange', handleVisibilityChange, true);
   window.addEventListener('focus', handleWindowFocus, true);
+  let observedPathname = location.pathname;
   automationIndicatorObserver = new MutationObserver((records) => {
     if (!ownsAutomationUi()) return;
+    // Reuse this existing observer to catch ChatGPT's pushState-only route
+    // remounts; no extra observer, polling, or per-keystroke URL parsing.
+    if (location.pathname !== observedPathname) {
+      observedPathname = location.pathname;
+      try { globalThis.__chatgptNotifierAutomationRouteRefreshRuntime?.scheduleSync?.(); } catch {}
+    }
     if (!document.getElementById(AUTOMATION_RUNTIME_STYLE_ID)) ensureAutomationRuntimeStyle();
     if (Array.from(records || []).some((record) => record.type === 'attributes' && record.attributeName === MONITOR_WATCHDOG_STATE_ATTR)) {
       renderWatchdogControls();
