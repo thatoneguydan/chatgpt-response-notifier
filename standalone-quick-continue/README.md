@@ -26,6 +26,8 @@ Quick Continue 1.2.37 is the first release where this Simple path is the primary
 
 Quick Continue 1.2.38 also rechecks the current conversation identity during existing DOM mutation handling, so same-document route changes cannot leave the primary watchdog bound to the previous conversation.
 
+Quick Continue 1.2.39 delegates the hamburger toggle at the document runtime level, so the menu keeps working after same-document composer/toolbar remounts instead of depending on one button instance retaining its listener.
+
 Quick Continue's Simple watchdog is the production continuation scheduler behind Monitor. The former notifier watchdog scheduler and notifier countdown surface are retired in production.
 
 Monitor state is passed to Quick Continue without ChatGPT API polling. When Monitor is enabled, trusted manual sends and trusted Quick Continue/Project sends reset the Simple watchdog to a fresh configured countdown. Programmatic automatic Continue sends do not reset their own finite retry allowance.
