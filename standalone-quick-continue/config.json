@@ -30,5 +30,13 @@
     "time tracker",
     "rx ingest",
     "civitai sync"
-  ]
+  ],
+  "monitorWatchdog": {
+    "timerMinutes": 30,
+    "attempts": 3,
+    "stopToRefreshSeconds": 30,
+    "refreshToContinueSeconds": 30,
+    "respectStopStatusCodes": true,
+    "respectContinueStatusCodes": true
+  }
 }

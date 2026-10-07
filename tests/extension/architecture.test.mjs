@@ -205,12 +205,13 @@ test('monitored chats default to a 30-minute local code watchdog with a three-se
   assert.doesNotMatch(monitor, /\bfetch\s*\(/);
 });
 
-test('in-page Monitor state delegates automatic continuation to the Simple watchdog', () => {
+test('in-page Monitor state delegates automatic continuation to its independent Quick Continue watchdog', () => {
   const attachment = text('extension/attachment-script.js');
   const monitor = text('extension/monitor-background.js');
   const timer = text('extension/quick-continue-status-owner-v6.js');
   const bridge = text('extension/quick-continue-monitor-bridge.js');
-  const conversation = text('standalone-quick-continue/conversation-state.js');
+  const monitorRuntime = text('standalone-quick-continue/monitor-watchdog.js');
+  const simpleRuntime = text('standalone-quick-continue/conversation-state.js');
 
   assert.match(attachment, /document\.createElement\('button'\)/);
   assert.match(attachment, /PRIMARY_WATCHDOG_ATTR = 'data-chatgpt-notifier-primary-watchdog'/);
@@ -228,9 +229,11 @@ test('in-page Monitor state delegates automatic continuation to the Simple watch
 
   assert.match(monitor, /LEGACY_CODE_WATCHDOG_RETIRED/);
   assert.match(monitor, /reason: 'legacy-watchdog-retired'/);
-  assert.match(conversation, /monitorWatchdogAuthority/);
-  assert.match(conversation, /restartPrimaryWatchdogFromTrustedSend/);
-  assert.match(conversation, /setSimpleEnabled\(true\)/);
+  assert.match(monitorRuntime, /monitorWatchdogAuthority/);
+  assert.match(monitorRuntime, /restartMonitorWatchdogFromTrustedSend/);
+  assert.match(monitorRuntime, /setMonitorEnabled\(true\)/);
+  assert.match(monitorRuntime, /config\?\.monitorWatchdog/);
+  assert.doesNotMatch(simpleRuntime, /monitorWatchdogAuthority|setMonitorEnabled|PRIMARY_WATCHDOG_ATTR/);
   assert.doesNotMatch(timer, /RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER|STOP_CODE_WATCHDOG_TIMER_FOR_SENDER|RUN_CODE_WATCHDOG_NOW_V3/);
 });
 

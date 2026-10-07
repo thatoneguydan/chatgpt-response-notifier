@@ -47,46 +47,61 @@ test('Continue and Project actions enable Monitor but never arm the retired noti
   assert.doesNotMatch(bridge, /latestAssistantSnapshot|statusCode|assistantKey/);
 });
 
-test('production bootstrap selects Simple as the only automatic watchdog scheduler', () => {
+test('production keeps the retired notifier scheduler off while Quick Continue owns Monitor scheduling', () => {
   const background = readText('extension/background.js');
   const monitor = readText('extension/monitor-background.js');
   const soleAuthority = readText('extension/watchdog-sole-continuation-authority-background.js');
+  const monitorBackground = readText('standalone-quick-continue/monitor-watchdog-background.js');
 
+  // The compatibility flag still retires the old notifier scheduler; it is not
+  // the Monitor implementation anymore. Monitor now has an independent engine.
   assert.match(background, /__chatgptNotifierPrimaryWatchdogMode = Object\.freeze\(\{[\s\S]*simplePrimary: true/);
   assert.match(monitor, /LEGACY_CODE_WATCHDOG_RETIRED = globalThis\.__chatgptNotifierPrimaryWatchdogMode\?\.simplePrimary === true/);
   assert.match(monitor, /if \(LEGACY_CODE_WATCHDOG_RETIRED\) \{[\s\S]*clearCodeWatchdog\(conversationId\)/);
   assert.match(monitor, /reason: 'legacy-watchdog-retired'/);
   assert.match(soleAuthority, /legacyWatchdogRetired = globalThis\.__chatgptNotifierLegacyWatchdogRetired === true/);
   assert.match(soleAuthority, /if \(!legacyWatchdogRetired\) retireShortCadenceState/);
+  assert.match(monitorBackground, /quickContinueMonitorWatchdogStates/);
+  assert.match(monitorBackground, /quick-continue-monitor-watchdog:/);
+  assert.doesNotMatch(monitorBackground, /quickContinueSimpleWatchdogStates/);
 });
 
-test('Monitor publishes its state to Quick Continue and Simple consumes that state after restore', () => {
+test('Monitor publishes its state to the independent Monitor runtime, never to Simple', () => {
   const attachment = readText('extension/attachment-script.js');
-  const conversation = readText('standalone-quick-continue/conversation-state.js');
+  const monitorRuntime = readText('standalone-quick-continue/monitor-watchdog.js');
+  const simpleRuntime = readText('standalone-quick-continue/conversation-state.js');
 
   assert.match(attachment, /PRIMARY_WATCHDOG_ATTR = 'data-chatgpt-notifier-primary-watchdog'/);
   assert.match(attachment, /publishPrimaryWatchdogAuthority/);
   assert.match(attachment, /enabled: overview\.automationEnabled === true && overview\.pausedByUser !== true/);
   assert.match(attachment, /setAttribute\?\.\(PRIMARY_WATCHDOG_ATTR, JSON\.stringify\(command\)\)/);
 
-  assert.match(conversation, /PRIMARY_WATCHDOG_ATTR = 'data-chatgpt-notifier-primary-watchdog'/);
-  assert.match(conversation, /function monitorWatchdogAuthority\(\)/);
-  assert.match(conversation, /if \(disposed \|\| !simpleRestoreReady\) return/);
-  assert.match(conversation, /if \(authority\.enabled !== simpleEnabled\) setSimpleEnabled\(authority\.enabled\)/);
-  assert.match(conversation, /simpleRestoreReady = true;[\s\S]*applyMonitorWatchdogAuthority\(\)/);
+  assert.match(monitorRuntime, /PRIMARY_WATCHDOG_ATTR = 'data-chatgpt-notifier-primary-watchdog'/);
+  assert.match(monitorRuntime, /function monitorWatchdogAuthority\(\)/);
+  assert.match(monitorRuntime, /if \(authority\.enabled !== monitorEnabled\) setMonitorEnabled\(authority\.enabled\)/);
+  assert.match(monitorRuntime, /QUICK_CONTINUE_MONITOR_WATCHDOG_SET/);
+  assert.match(monitorRuntime, /config\?\.monitorWatchdog/);
+
+  assert.doesNotMatch(simpleRuntime, /PRIMARY_WATCHDOG_ATTR/);
+  assert.doesNotMatch(simpleRuntime, /QUICK_CONTINUE_MONITOR_WATCHDOG_/);
+  assert.match(simpleRuntime, /QUICK_CONTINUE_SIMPLE_WATCHDOG_SET/);
 });
 
-test('trusted monitored sends reset the Simple primary timer without affecting programmatic auto-continues', () => {
-  const conversation = readText('standalone-quick-continue/conversation-state.js');
+test('trusted monitored sends reset only the Monitor timer; Simple remains independent', () => {
+  const monitorRuntime = readText('standalone-quick-continue/monitor-watchdog.js');
+  const simpleRuntime = readText('standalone-quick-continue/conversation-state.js');
 
-  assert.match(conversation, /function restartPrimaryWatchdogFromTrustedSend\(\)/);
-  assert.match(conversation, /authority\?\.enabled !== true/);
-  assert.match(conversation, /setSimpleEnabled\(true\)/);
-  assert.match(conversation, /event\?\.isTrusted !== true/);
-  assert.match(conversation, /Send timestamped Continue/);
-  assert.match(conversation, /Send custom Project Continue/);
-  assert.match(conversation, /testId\.includes\('send-button'\)/);
-  assert.match(conversation, /event\?\.key !== 'Enter'/);
+  assert.match(monitorRuntime, /function restartMonitorWatchdogFromTrustedSend\(\)/);
+  assert.match(monitorRuntime, /authority\?\.enabled !== true/);
+  assert.match(monitorRuntime, /setMonitorEnabled\(true\)/);
+  assert.match(monitorRuntime, /event\?\.isTrusted !== true/);
+  assert.match(monitorRuntime, /Send timestamped Continue/);
+  assert.match(monitorRuntime, /Send custom Project Continue/);
+  assert.match(monitorRuntime, /testId\.includes\('send-button'\)/);
+  assert.match(monitorRuntime, /event\?\.key !== 'Enter'/);
+
+  assert.doesNotMatch(simpleRuntime, /restartPrimaryWatchdogFromTrustedSend/);
+  assert.doesNotMatch(simpleRuntime, /setMonitorEnabled/);
 });
 
 test('the retired notifier watchdog timer surface removes stale nodes and has no send authority', () => {

@@ -10,6 +10,7 @@ $requiredFiles = @(
     'manifest.json',
     'dom-compat.js',
     'background.js',
+    'monitor-watchdog-background.js',
     'prompt-format.js',
     'config.js',
     'config.json',
@@ -19,6 +20,7 @@ $requiredFiles = @(
     'config-editor-style.js',
     'content-script.js',
     'hover-edit-script.js',
+    'monitor-watchdog.js',
     'conversation-state.js'
 )
 
@@ -35,6 +37,7 @@ $managedFiles = @(
     'manifest.json',
     'dom-compat.js',
     'background.js',
+    'monitor-watchdog-background.js',
     'prompt-format.js',
     'config.js',
     'config.json',
@@ -44,6 +47,7 @@ $managedFiles = @(
     'config-editor-style.js',
     'content-script.js',
     'hover-edit-script.js',
+    'monitor-watchdog.js',
     'conversation-state.js',
     'README.md'
 )
@@ -76,4 +80,4 @@ Write-Host '  3. Choose Load unpacked'
 Write-Host "  4. Select: $InstallRoot"
 Write-Host ''
 Write-Host 'After the one-time load, managed updates are downloaded by the existing notifier helper. Quick Continue reloads itself and reinjects the current runtime into already-open ChatGPT tabs.'
-Write-Host 'Use Project > Edit to change the live JSON config without reloading Chrome or ChatGPT.'
+Write-Host 'Use ☰ > Edit JSON to change the live JSON config without reloading Chrome or ChatGPT.'

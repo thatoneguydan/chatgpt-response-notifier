@@ -12,6 +12,7 @@ const manifest = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'manifest.j
 const bundledConfig = JSON.parse(fs.readFileSync(path.join(extensionRoot, 'config.json'), 'utf8'));
 const domCompatSource = fs.readFileSync(path.join(extensionRoot, 'dom-compat.js'), 'utf8');
 const backgroundSource = fs.readFileSync(path.join(extensionRoot, 'background.js'), 'utf8');
+const monitorBackgroundSource = fs.readFileSync(path.join(extensionRoot, 'monitor-watchdog-background.js'), 'utf8');
 const promptSource = fs.readFileSync(path.join(extensionRoot, 'prompt-format.js'), 'utf8');
 const composerSource = fs.readFileSync(path.join(extensionRoot, 'composer-text.js'), 'utf8');
 const sendTransactionSource = fs.readFileSync(path.join(extensionRoot, 'send-transaction.js'), 'utf8');
@@ -20,6 +21,7 @@ const runtimeResetSource = fs.readFileSync(path.join(extensionRoot, 'runtime-res
 const contentSource = fs.readFileSync(path.join(extensionRoot, 'content-script.js'), 'utf8');
 const hoverEditSource = fs.readFileSync(path.join(extensionRoot, 'hover-edit-script.js'), 'utf8');
 const conversationStateSource = fs.readFileSync(path.join(extensionRoot, 'conversation-state.js'), 'utf8');
+const monitorWatchdogSource = fs.readFileSync(path.join(extensionRoot, 'monitor-watchdog.js'), 'utf8');
 const installerSource = fs.readFileSync(path.join(extensionRoot, 'Install.ps1'), 'utf8');
 const updater124Source = fs.readFileSync(path.join(extensionRoot, 'Update-Installed-1.2.4.ps1'), 'utf8');
 
@@ -29,8 +31,8 @@ test('standalone extension adds only the local managed-update worker permissions
   assert.deepEqual([...manifest.permissions].sort(), ['alarms', 'scripting', 'storage', 'tabs'].sort());
   assert.deepEqual([...manifest.host_permissions].sort(), ['https://chatgpt.com/*', 'http://127.0.0.1/*'].sort());
   assert.deepEqual(manifest.content_scripts[0].matches, ['https://chatgpt.com/*']);
-  assert.deepEqual(manifest.content_scripts[0].js, ['runtime-reset.js', 'dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'send-transaction.js', 'config-editor-style.js', 'content-script.js', 'hover-edit-script.js', 'conversation-state.js']);
-  assert.equal(manifest.version, '1.2.38');
+  assert.deepEqual(manifest.content_scripts[0].js, ['runtime-reset.js', 'dom-compat.js', 'prompt-format.js', 'config.js', 'composer-text.js', 'send-transaction.js', 'config-editor-style.js', 'content-script.js', 'hover-edit-script.js', 'monitor-watchdog.js', 'conversation-state.js']);
+  assert.equal(manifest.version, '1.2.39');
   assert.deepEqual(manifest.web_accessible_resources[0].resources, ['config.json']);
   assert.deepEqual(manifest.web_accessible_resources[0].matches, ['https://chatgpt.com/*']);
 });
@@ -53,8 +55,28 @@ test('managed updater talks only to loopback, reloads itself only for a newer in
   assert.match(backgroundSource, /'config-editor-style\.js'/);
   assert.match(backgroundSource, /'composer-text\.js'/);
   assert.match(backgroundSource, /'send-transaction\.js'/);
+  assert.match(backgroundSource, /'monitor-watchdog\.js'/);
   assert.match(backgroundSource, /'conversation-state\.js'/);
+  assert.match(backgroundSource, /importScripts\('monitor-watchdog-background\.js'\)/);
   assert.doesNotMatch(backgroundSource, /github\.com|raw\.githubusercontent\.com|backend-api|XMLHttpRequest|WebSocket/);
+});
+
+test('Monitor watchdog is a copied independent engine and Simple no longer consumes Monitor authority', () => {
+  assert.doesNotThrow(() => new vm.Script(monitorBackgroundSource));
+  assert.doesNotThrow(() => new vm.Script(monitorWatchdogSource));
+  assert.match(monitorBackgroundSource, /quickContinueMonitorWatchdogStates/);
+  assert.match(monitorBackgroundSource, /quick-continue-monitor-watchdog:/);
+  assert.match(monitorBackgroundSource, /QUICK_CONTINUE_MONITOR_WATCHDOG_SET/);
+  assert.match(monitorBackgroundSource, /phase = 'stop-wait'/);
+  assert.match(monitorBackgroundSource, /phase = 'refresh-loading'/);
+  assert.match(monitorBackgroundSource, /phase = 'refresh-wait'/);
+  assert.match(monitorWatchdogSource, /data-chatgpt-notifier-primary-watchdog/);
+  assert.match(monitorWatchdogSource, /config\.monitorWatchdog/);
+  assert.match(monitorWatchdogSource, /QUICK_CONTINUE_MONITOR_WATCHDOG_STATUS/);
+  assert.doesNotMatch(conversationStateSource, /data-chatgpt-notifier-primary-watchdog/);
+  assert.doesNotMatch(conversationStateSource, /QUICK_CONTINUE_MONITOR_WATCHDOG_/);
+  assert.match(conversationStateSource, /QUICK_CONTINUE_SIMPLE_WATCHDOG_SET/);
+  assert.match(backgroundSource, /quickContinueSimpleWatchdogStates/);
 });
 
 test('current ChatGPT UI compatibility loads first and covers semantic composer and send controls', () => {
@@ -87,20 +109,22 @@ test('runtime reset disposes stale page runtimes before current scripts rebind t
     },
     __chatgptQuickContinueRuntime: { dispose: () => disposed.push('content') },
     __chatgptQuickContinueHoverEditRuntime: { dispose: () => disposed.push('hover') },
+    __chatgptQuickContinueMonitorWatchdogRuntime: { dispose: () => disposed.push('monitor') },
     __chatgptQuickContinueConversationStateRuntime: { dispose: () => disposed.push('conversation') }
   };
   context.globalThis = context;
   vm.runInNewContext(runtimeResetSource, context);
-  assert.deepEqual(disposed.sort(), ['content', 'conversation', 'hover']);
+  assert.deepEqual(disposed.sort(), ['content', 'conversation', 'hover', 'monitor']);
   assert.equal('__chatgptQuickContinueRuntime' in context, false);
   assert.equal('__chatgptQuickContinueHoverEditRuntime' in context, false);
+  assert.equal('__chatgptQuickContinueMonitorWatchdogRuntime' in context, false);
   assert.equal('__chatgptQuickContinueConversationStateRuntime' in context, false);
   context.__chatgptQuickContinueLifecycle.register({ dispose: () => disposed.push('lost-global-runtime') });
   context.document.dispatchEvent(new Event('chatgpt-quick-continue-runtime-reset'));
   assert.equal(disposed.at(-1), 'lost-global-runtime');
 });
 
-test('bundled JSON contains editable prompt templates, saved projects, and Simple fallback timing/status gates', () => {
+test('bundled JSON contains editable prompt templates, saved projects, and independent watchdog defaults', () => {
   assert.equal(bundledConfig.continueText, '[{time}] Continue until you finish or need something from me.');
   assert.equal(bundledConfig.projectText, '[{time}] Continue {project} from canonical GitHub state until you finish or need me.');
   assert.equal(bundledConfig.manualTimestampText, '[{time}] {message}');
@@ -114,6 +138,7 @@ test('bundled JSON contains editable prompt templates, saved projects, and Simpl
     respectStopStatusCodes: true,
     respectContinueStatusCodes: true
   });
+  assert.deepEqual(bundledConfig.monitorWatchdog, bundledConfig.simpleWatchdog);
   assert.ok(Array.isArray(bundledConfig.projects));
   assert.ok(bundledConfig.projects.includes('campaign desk'));
   assert.ok(bundledConfig.projects.includes('notifier extension'));
@@ -378,7 +403,7 @@ test('manual timestamp and Simple preferences retain their pre-send state across
 test('prompt and config APIs are versioned so reinjection cannot retain stale globals indefinitely', () => {
   assert.match(promptSource, /const RUNTIME_VERSION = 5/);
   assert.match(promptSource, /runtimeVersion: RUNTIME_VERSION/);
-  assert.match(configSource, /const RUNTIME_VERSION = 11/);
+  assert.match(configSource, /const RUNTIME_VERSION = 12/);
   assert.match(configSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
@@ -387,7 +412,7 @@ test('prompt and config APIs are versioned so reinjection cannot retain stale gl
   assert.match(hoverEditSource, /const RUNTIME_VERSION = 11/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
-  assert.match(conversationStateSource, /const RUNTIME_VERSION = 11/);
+  assert.match(conversationStateSource, /const RUNTIME_VERSION = 12/);
   assert.match(conversationStateSource, /__chatgptQuickContinueConversationStateRuntime/);
 });
 
@@ -469,6 +494,7 @@ test('config controller loads bundled JSON only from the extension, preserves mu
   assert.equal(initial.simpleWatchdog.respectStopStatusCodes, true);
   assert.equal(initial.simpleWatchdog.respectContinueStatusCodes, true);
   assert.equal(JSON.stringify(initial.simpleWatchdog), JSON.stringify(bundledConfig.simpleWatchdog));
+  assert.equal(JSON.stringify(initial.monitorWatchdog), JSON.stringify(bundledConfig.monitorWatchdog));
   assert.equal(fetchCalls.length, 1);
   assert.equal(fetchCalls[0].url, 'chrome-extension://quick-continue/config.json');
 
@@ -488,6 +514,7 @@ test('config controller loads bundled JSON only from the extension, preserves mu
   assert.equal(saved.simpleWatchdog.respectStopStatusCodes, true);
   assert.equal(saved.simpleWatchdog.respectContinueStatusCodes, true);
   assert.equal(JSON.stringify(saved.simpleWatchdog), JSON.stringify(bundledConfig.simpleWatchdog));
+  assert.equal(JSON.stringify(saved.monitorWatchdog), JSON.stringify(bundledConfig.monitorWatchdog));
   assert.deepEqual([...saved.projects], ['Campaign Desk', 'Time Tracker']);
   assert.equal(observed.continueText, '[{time}] Continue this work.');
   assert.equal(observed.manualTimestampText, '[{time}] {message}');
@@ -522,12 +549,16 @@ test('config controller loads bundled JSON only from the extension, preserves mu
   assert.equal(multiline.watchdog.respectContinueStatusCodes, undefined);
   assert.equal(multiline.simpleWatchdog.respectStopStatusCodes, false);
   assert.equal(multiline.simpleWatchdog.respectContinueStatusCodes, true);
+  assert.equal(multiline.monitorWatchdog.respectStopStatusCodes, false);
+  assert.equal(multiline.monitorWatchdog.respectContinueStatusCodes, true);
   assert.equal(storage.quickContinueConfig.continueText, multiline.continueText);
   assert.equal(JSON.parse(api.serialize(multiline)).continueText, multiline.continueText);
   assert.equal(JSON.parse(api.serialize(multiline)).manualTimestampText, multiline.manualTimestampText);
   assert.equal(JSON.parse(api.serialize(multiline)).watchdog.respectStopStatusCodes, undefined);
   assert.equal(JSON.parse(api.serialize(multiline)).simpleWatchdog.respectStopStatusCodes, false);
   assert.equal(JSON.parse(api.serialize(multiline)).simpleWatchdog.respectContinueStatusCodes, true);
+  assert.equal(JSON.parse(api.serialize(multiline)).monitorWatchdog.respectStopStatusCodes, false);
+  assert.equal(JSON.parse(api.serialize(multiline)).monitorWatchdog.respectContinueStatusCodes, true);
   assert.match(api.serialize(multiline), /Continue until you finish\.\\nUse GitHub status codes policy\./);
   assert.match(api.serialize(multiline), /\[\{time\}\]\\n\{message\}/);
 

@@ -7,6 +7,7 @@
   try { document.dispatchEvent(new Event(RESET_EVENT)); } catch {}
   const keys = [
     '__chatgptQuickContinueConversationStateRuntime',
+    '__chatgptQuickContinueMonitorWatchdogRuntime',
     '__chatgptQuickContinueHoverEditRuntime',
     '__chatgptQuickContinueRuntime',
     'ChatGPTQuickContinueConfig',

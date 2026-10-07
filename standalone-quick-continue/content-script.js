@@ -237,7 +237,7 @@
     if (disposed || !popover || popover.hidden || !toolbar) return;
     const toolbarRect = toolbar.getBoundingClientRect();
     let occupiedTop = toolbarRect.top;
-    for (const row of toolbar.querySelectorAll('[data-chatgpt-notifier-watchdog-status-owner], #chatgpt-quick-continue-simple-countdown')) {
+    for (const row of toolbar.querySelectorAll('[data-chatgpt-notifier-watchdog-status-owner], #chatgpt-quick-continue-simple-countdown, #chatgpt-quick-continue-monitor-countdown')) {
       try { resizeObserver?.observe(row); } catch {}
       if (row.hidden || getComputedStyle(row).display === 'none') continue;
       occupiedTop = Math.min(occupiedTop, row.getBoundingClientRect().top);

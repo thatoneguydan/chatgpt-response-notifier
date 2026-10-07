@@ -9,10 +9,19 @@ const menuButtonName = 'Quick Continue menu';
 
 async function openQuickContinueMenu(page) {
   const simpleButton = page.locator(simple);
-  const popover = page.locator(`${toolbar} > [role="group"][aria-label="Quick Continue menu popover"]`);
+  const menuButton = page.getByRole('button', { name: menuButtonName, exact: true });
   await expect(simpleButton).toHaveCount(1);
-  if (await popover.getAttribute('hidden') !== null) {
-    await page.getByRole('button', { name: menuButtonName, exact: true }).click();
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    if (await simpleButton.isVisible()) return;
+    await expect(menuButton).toBeVisible();
+    await menuButton.click();
+    try {
+      await expect(simpleButton).toBeVisible({ timeout: 1200 });
+      return;
+    } catch {
+      // SPA/toolbar reconciliation can replace the just-clicked toolbar.
+      // Retry against the current live control rather than toggling again immediately.
+    }
   }
   await expect(simpleButton).toBeVisible();
 }
@@ -58,6 +67,56 @@ test('Simple lives in the hamburger menu and starts its own timer despite draft,
   expect(chatgptTraffic.filter((entry) => entry.kind === 'blocked')).toEqual([]);
 });
 
+test('Monitor arms its independent watchdog without toggling hamburger Simple', async ({ fixturePage }) => {
+  const monitorControl = fixturePage.locator('[id^="chatgpt-notifier-control-v"]');
+  await expect(monitorControl).toHaveCount(1);
+
+  // The persistent fixture may enter this test paused from prior Monitor use.
+  // Drive it to enabled deterministically without asserting a particular
+  // persisted off-state label.
+  const initialLabel = String(await monitorControl.getAttribute('aria-label') || '');
+  if (!/Build automation: Pause/.test(initialLabel)) {
+    await monitorControl.click();
+  }
+  await expect(monitorControl).toHaveAttribute('aria-label', /Build automation: Pause/);
+
+  await expect.poll(() => evaluateInExtensionWorld(
+    fixturePage,
+    'ChatGPT Quick Continue',
+    `chrome.runtime.sendMessage({ type: 'QUICK_CONTINUE_MONITOR_WATCHDOG_GET', conversationId: 'playwright-browser-regression' })`
+  )).toMatchObject({ enabled: true, phase: 'countdown' });
+
+  const monitorCountdown = fixturePage.locator('#chatgpt-quick-continue-monitor-countdown');
+  await expect(monitorCountdown).toBeVisible();
+  await expect(monitorCountdown).toContainText('Monitor:');
+
+  await openQuickContinueMenu(fixturePage);
+  await expect(fixturePage.locator(simple)).toHaveAttribute('aria-pressed', 'false');
+  const simpleState = await evaluateInExtensionWorld(
+    fixturePage,
+    'ChatGPT Quick Continue',
+    `chrome.runtime.sendMessage({ type: 'QUICK_CONTINUE_SIMPLE_WATCHDOG_GET', conversationId: 'playwright-browser-regression' })`
+  );
+  expect(simpleState.enabled).toBe(false);
+
+  await monitorControl.click();
+  await expect(monitorControl).toHaveAttribute('aria-label', /Build automation: (Resume|Monitor)/);
+  await expect.poll(() => evaluateInExtensionWorld(
+    fixturePage,
+    'ChatGPT Quick Continue',
+    `chrome.runtime.sendMessage({ type: 'QUICK_CONTINUE_MONITOR_WATCHDOG_GET', conversationId: 'playwright-browser-regression' })`
+  )).toMatchObject({ enabled: false });
+  await expect(fixturePage.locator(simple)).toHaveAttribute('aria-pressed', 'false');
+
+  // Leave the shared fixture with the hamburger closed for the next route test.
+  // Monitor state changes may remount/reconcile toolbar UI, so key cleanup off
+  // the actual Simple visibility instead of assuming the prior menu state.
+  if (await fixturePage.locator(simple).isVisible()) {
+    await fixturePage.getByRole('button', { name: menuButtonName, exact: true }).click();
+  }
+  await expect(fixturePage.locator(simple)).toBeHidden();
+});
+
 test('Simple starts before a new chat has a saved conversation ID', async ({ fixturePage }) => {
   await fixturePage.evaluate(() => {
     history.pushState({}, '', '/');
@@ -100,6 +159,7 @@ test('repeated hot updates retire old closures even when their globals are lost'
     await evaluateInExtensionWorld(fixturePage, 'ChatGPT Quick Continue', `(() => {
       delete globalThis.__chatgptQuickContinueRuntime;
       delete globalThis.__chatgptQuickContinueHoverEditRuntime;
+      delete globalThis.__chatgptQuickContinueMonitorWatchdogRuntime;
       delete globalThis.__chatgptQuickContinueConversationStateRuntime;
       const stale = document.getElementById('chatgpt-quick-continue-toolbar').cloneNode(true);
       document.body.append(stale);
