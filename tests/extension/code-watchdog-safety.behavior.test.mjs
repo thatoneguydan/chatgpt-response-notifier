@@ -19,86 +19,24 @@ function loadEligibility() {
   return context.__eligibility;
 }
 
-test('toolbar keeps a known watchdog state when a same-revision overview temporarily omits it', () => {
+test('Monitor indicator freshness is keyed only to conversation and automation revision after legacy timer retirement', () => {
   const start = attachmentSource.indexOf('function automationOverviewIsFresh');
-  const end = attachmentSource.indexOf('function applyAutomationOverview', start);
+  const end = attachmentSource.indexOf('function publishPrimaryWatchdogAuthority', start);
   assert.ok(start >= 0 && end > start, 'automation overview freshness helper must exist');
   const context = vm.createContext({ String, Number, Math, globalThis: null });
   context.globalThis = context;
   vm.runInContext(`${attachmentSource.slice(start, end)}\nglobalThis.__fresh = automationOverviewIsFresh;`, context);
   const fresh = context.__fresh;
 
-  const stopped = {
+  const current = {
     activeConversationId: 'conversation-1',
     stateRevision: 4,
-    automationEnabled: true,
-    codeWatchdog: {
-      watchdogRevision: 7,
-      updatedAt: 200,
-      stopped: true,
-      stopReason: 'status:COMPLETE_APPLIED'
-    }
+    automationEnabled: true
   };
-  assert.equal(fresh({
-    activeConversationId: 'conversation-1',
-    stateRevision: 4,
-    automationEnabled: true,
-    codeWatchdog: null
-  }, stopped), false);
-
-  assert.equal(fresh({
-    activeConversationId: 'conversation-1',
-    stateRevision: 5,
-    automationEnabled: false,
-    codeWatchdog: null
-  }, stopped), true);
-
-  assert.equal(fresh({
-    activeConversationId: 'conversation-1',
-    stateRevision: 4,
-    automationEnabled: true,
-    codeWatchdog: {
-      watchdogRevision: 8,
-      updatedAt: 200,
-      stopped: false,
-      deadlineAt: 999999
-    }
-  }, stopped), true);
-
-  assert.equal(fresh({
-    activeConversationId: 'conversation-1',
-    stateRevision: 4,
-    automationEnabled: true,
-    codeWatchdog: {
-      watchdogRevision: 6,
-      updatedAt: 200,
-      stopped: false,
-      deadlineAt: 999999
-    }
-  }, stopped), false);
-
-  assert.equal(fresh({
-    activeConversationId: 'conversation-1',
-    stateRevision: 4,
-    automationEnabled: true,
-    codeWatchdog: {
-      updatedAt: 300,
-      stopped: false,
-      deadlineAt: 999999
-    }
-  }, stopped), false);
-
-  assert.equal(fresh({
-    activeConversationId: 'conversation-1',
-    stateRevision: 6,
-    automationEnabled: true,
-    codeWatchdog: {
-      watchdogRevision: 1,
-      updatedAt: 400,
-      stopped: false,
-      deadlineAt: 999999
-    }
-  }, stopped), true);
+  assert.equal(fresh({ activeConversationId: 'conversation-1', stateRevision: 4, automationEnabled: true }, current), true);
+  assert.equal(fresh({ activeConversationId: 'conversation-1', stateRevision: 3, automationEnabled: true }, current), false);
+  assert.equal(fresh({ activeConversationId: 'conversation-1', stateRevision: 5, automationEnabled: false }, current), true);
+  assert.equal(fresh({ activeConversationId: 'conversation-2', stateRevision: 1, automationEnabled: true }, current), true);
 });
 
 test('all watchdog state mutations share one per-conversation queue and records have logical revisions', () => {

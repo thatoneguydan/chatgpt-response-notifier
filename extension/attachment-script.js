@@ -2,9 +2,10 @@
 
 (() => {
   const QUICK_CONTINUE_TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
-  const ATTACHMENT_RUNTIME_VERSION = 14;
+  const ATTACHMENT_RUNTIME_VERSION = 15;
   const AUTOMATION_OWNER_ATTR = 'data-chatgpt-notifier-automation-owner';
   const AUTOMATION_UI_OWNER_ATTR = 'data-chatgpt-notifier-automation-ui-owner';
+  const PRIMARY_WATCHDOG_ATTR = 'data-chatgpt-notifier-primary-watchdog';
   const automationOwnerToken = (() => {
     try { return crypto.randomUUID(); } catch { return `${Date.now()}-${Math.random()}`; }
   })();
@@ -186,56 +187,23 @@
     const nextConversationId = String(next.activeConversationId || '');
     const currentConversationId = String(current.activeConversationId || '');
     if (nextConversationId !== currentConversationId) return true;
+    return Math.max(0, Number(next.stateRevision || 0)) >= Math.max(0, Number(current.stateRevision || 0));
+  }
 
-    const nextStateRevision = Math.max(0, Number(next.stateRevision || 0));
-    const currentStateRevision = Math.max(0, Number(current.stateRevision || 0));
-    if (nextStateRevision < currentStateRevision) return false;
-
-    const nextWatchdogRevision = Math.max(0, Number(next.codeWatchdog?.watchdogRevision || 0));
-    const currentWatchdogRevision = Math.max(0, Number(current.codeWatchdog?.watchdogRevision || 0));
-    const nextWatchdogUpdatedAt = Math.max(0, Number(next.codeWatchdog?.updatedAt || 0));
-    const currentWatchdogUpdatedAt = Math.max(0, Number(current.codeWatchdog?.updatedAt || 0));
-    if (
-      nextStateRevision === currentStateRevision
-      && currentWatchdogUpdatedAt > 0
-      && nextWatchdogUpdatedAt === 0
-      && current.automationEnabled === true
-      && next.automationEnabled === true
-    ) {
-      return false;
-    }
-    if (
-      nextStateRevision === currentStateRevision
-      && currentWatchdogRevision > 0
-      && nextWatchdogUpdatedAt > 0
-      && nextWatchdogRevision === 0
-    ) {
-      return false;
-    }
-    if (
-      nextStateRevision === currentStateRevision
-      && nextWatchdogRevision > 0
-      && currentWatchdogRevision > 0
-      && nextWatchdogRevision < currentWatchdogRevision
-    ) {
-      return false;
-    }
-    if (
-      nextStateRevision === currentStateRevision
-      && nextWatchdogRevision === 0
-      && currentWatchdogRevision === 0
-      && nextWatchdogUpdatedAt > 0
-      && currentWatchdogUpdatedAt > 0
-      && nextWatchdogUpdatedAt < currentWatchdogUpdatedAt
-    ) {
-      return false;
-    }
-    return true;
+  function publishPrimaryWatchdogAuthority(overview) {
+    if (!overview || !ownsAutomationUi()) return;
+    const command = {
+      conversationId: String(overview.activeConversationId || ''),
+      enabled: overview.automationEnabled === true && overview.pausedByUser !== true,
+      stateRevision: Math.max(0, Number(overview.stateRevision || 0))
+    };
+    try { document.documentElement?.setAttribute?.(PRIMARY_WATCHDOG_ATTR, JSON.stringify(command)); } catch {}
   }
 
   function applyAutomationOverview(next) {
     if (!next || !automationOverviewIsFresh(next)) return automationOverview;
     automationOverview = next;
+    publishPrimaryWatchdogAuthority(next);
     renderAutomationIndicator(next);
     return automationOverview;
   }
@@ -493,7 +461,10 @@
       try { window.removeEventListener('focus', handleWindowFocus, true); } catch {}
       try { document.getElementById(AUTOMATION_INDICATOR_ID)?.remove(); } catch {}
       try {
-        if (ownsAutomationUi()) document.documentElement?.removeAttribute?.(AUTOMATION_OWNER_ATTR);
+        if (ownsAutomationUi()) {
+          document.documentElement?.removeAttribute?.(PRIMARY_WATCHDOG_ATTR);
+          document.documentElement?.removeAttribute?.(AUTOMATION_OWNER_ATTR);
+        }
       } catch {}
     }
   });

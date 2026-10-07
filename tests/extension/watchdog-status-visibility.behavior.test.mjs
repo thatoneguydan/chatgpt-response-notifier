@@ -5,8 +5,11 @@ import test from 'node:test';
 const root = new URL('../../', import.meta.url);
 const owner = readFileSync(new URL('extension/quick-continue-status-owner-v6.js', root), 'utf8');
 
-test('terminal-status watchdogs disappear from the timer surface', () => {
-  assert.match(owner, /stopReason\.startsWith\('status:'\)/);
-  assert.match(owner, /if \(!watchdog\) return \{ text: ''/);
-  assert.match(owner, /if \(stopReason\.startsWith\('status:'\)\) return \{ text: ''/);
+test('retired notifier watchdog timer surfaces are removed instead of rendered', () => {
+  assert.match(owner, /removeLegacyWatchdogUi/);
+  assert.match(owner, /data-chatgpt-notifier-watchdog-status-owner/);
+  assert.match(owner, /chatgpt-notifier-countdown-v/);
+  assert.match(owner, /chatgpt-notifier-countdown-fallback-v/);
+  assert.match(owner, /node\.remove\(\)/);
+  assert.doesNotMatch(owner, /Next auto-continue|Sending auto-continue|Auto-continue blocked/);
 });

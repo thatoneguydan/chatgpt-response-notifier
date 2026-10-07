@@ -48,13 +48,12 @@ test('mutation-driven live readers use quiet debounces with hard ceilings', () =
   assert.ok(monitorObserve, 'monitor observer contract missing');
   assert.doesNotMatch(monitorObserve, /'style'|'class'/);
 
-  for (const source of [bridge, watchdog]) {
-    assert.match(source, /TERMINAL_DEBOUNCE_MS = 250/);
-    assert.match(source, /TERMINAL_MAX_INTERVAL_MS = 1500/);
-    assert.match(source, /function clearTerminalTimers/);
-    assert.match(source, /if \(terminalTimer !== null\) clearTimeout\(terminalTimer\)/);
-    assert.match(source, /terminalMaxTimer === null/);
-  }
+  assert.doesNotMatch(bridge, /TERMINAL_DEBOUNCE_MS|TERMINAL_MAX_INTERVAL_MS|latestAssistantSnapshot|clearTerminalTimers/);
+  assert.match(watchdog, /TERMINAL_DEBOUNCE_MS = 250/);
+  assert.match(watchdog, /TERMINAL_MAX_INTERVAL_MS = 1500/);
+  assert.match(watchdog, /function clearTerminalTimers/);
+  assert.match(watchdog, /if \(terminalTimer !== null\) clearTimeout\(terminalTimer\)/);
+  assert.match(watchdog, /terminalMaxTimer === null/);
 });
 
 test('toolbar countdown and composer text churn are filtered before expensive live observers', () => {

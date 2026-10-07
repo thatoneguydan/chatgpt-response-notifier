@@ -9,6 +9,8 @@ const SIMPLE_GET_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_GET';
 const SIMPLE_STATUS_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATUS';
 const SIMPLE_ACTION_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_ACTION';
 const SIMPLE_STATE_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATE';
+const SIMPLE_REFRESH_READY_POLL_MS = 1000;
+const SIMPLE_REFRESH_STALL_MS = 60_000;
 const STATUS_CODES = Object.freeze([
   'PLANNING_ACTIVE',
   'COMPLETE_APPLIED',
@@ -374,18 +376,51 @@ async function handleSimpleAlarm(tabId) {
   }
 
   if (state.phase === 'stop-wait') {
-    try { await chrome.tabs.reload(tabId); } catch {}
+    try {
+      await chrome.tabs.reload(tabId);
+      state.phase = 'refresh-loading';
+      state.reloadStartedAt = Date.now();
+      state.nextAt = Date.now() + SIMPLE_REFRESH_READY_POLL_MS;
+    } catch {
+      state.nextAt = Date.now() + SIMPLE_REFRESH_READY_POLL_MS;
+    }
+    await saveAndScheduleSimpleState(state, states);
+    return;
+  }
+
+  if (state.phase === 'refresh-loading') {
+    let tab = null;
+    try { tab = await chrome.tabs.get(tabId); } catch {}
+    if (!tab) {
+      await clearSimpleState(tabId, { reason: 'chat-unavailable' });
+      return;
+    }
+    const reloadStartedAt = Math.max(0, Number(state.reloadStartedAt || 0));
+    if (String(tab.status || '') !== 'complete') {
+      if (reloadStartedAt > 0 && Date.now() - reloadStartedAt >= SIMPLE_REFRESH_STALL_MS) {
+        try {
+          await chrome.tabs.reload(tabId);
+          state.reloadStartedAt = Date.now();
+        } catch {}
+      }
+      state.nextAt = Date.now() + SIMPLE_REFRESH_READY_POLL_MS;
+      await saveAndScheduleSimpleState(state, states);
+      return;
+    }
     state.phase = 'refresh-wait';
+    state.reloadStartedAt = 0;
     state.nextAt = Date.now() + (state.settings.refreshToContinueSeconds * 1000);
     await saveAndScheduleSimpleState(state, states);
     return;
   }
 
   if (state.phase === 'refresh-wait') {
+    let sendResult = null;
     try {
-      await chrome.tabs.sendMessage(tabId, { type: SIMPLE_ACTION_MESSAGE, action: 'send-continue' });
+      sendResult = await chrome.tabs.sendMessage(tabId, { type: SIMPLE_ACTION_MESSAGE, action: 'send-continue' });
     } catch {}
     state.attemptsUsed = Number(state.attemptsUsed || 0) + 1;
+    state.lastSendFailure = sendResult?.ok === true ? '' : String(sendResult?.reason || 'send-failed');
     if (state.attemptsUsed >= state.settings.attempts) {
       state.phase = 'exhausted';
       state.nextAt = 0;
@@ -394,6 +429,7 @@ async function handleSimpleAlarm(tabId) {
       return;
     }
     state.phase = 'countdown';
+    state.reloadStartedAt = 0;
     state.nextAt = Date.now() + (state.settings.timerMinutes * 60 * 1000);
     await saveAndScheduleSimpleState(state, states);
     return;

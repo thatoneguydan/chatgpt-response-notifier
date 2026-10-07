@@ -3,7 +3,8 @@
 (() => {
   if (globalThis.__chatgptNotifierWatchdogSoleContinuationAuthority) return;
 
-  const VERSION = 1;
+  const VERSION = 2;
+  const legacyWatchdogRetired = globalThis.__chatgptNotifierLegacyWatchdogRetired === true;
   const DB_NAME = 'chatgpt-response-notifier-monitor';
   const DB_VERSION = 1;
   const PROFILE_STORE = 'profile';
@@ -135,10 +136,11 @@
     };
   }
 
-  retireShortCadenceState().catch(() => {});
+  if (!legacyWatchdogRetired) retireShortCadenceState().catch(() => {});
 
   globalThis.__chatgptNotifierWatchdogSoleContinuationAuthority = Object.freeze({
     version: VERSION,
+    retired: legacyWatchdogRetired,
     retireShortCadenceState
   });
 })();

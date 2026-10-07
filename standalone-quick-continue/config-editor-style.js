@@ -34,7 +34,7 @@
 #chatgpt-quick-continue-toolbar[data-simple-watchdog-active="true"] [data-chatgpt-notifier-watchdog-status-owner] {
   display: none !important;
 }
-#chatgpt-quick-continue-toolbar [aria-label="Project Continue"]:has(div:not([hidden]) > textarea[aria-label="Quick Continue JSON"]) {
+#chatgpt-quick-continue-toolbar [aria-label="Quick Continue menu popover"]:has(div:not([hidden]) > textarea[aria-label="Quick Continue JSON"]) {
   width: min(780px, calc(100vw - 32px)) !important;
   min-width: min(780px, calc(100vw - 32px)) !important;
   max-width: calc(100vw - 32px) !important;
@@ -47,14 +47,14 @@
   caret-color: var(--text-primary, #000000) !important;
   color: var(--text-primary, #111111) !important;
 }
-#chatgpt-quick-continue-toolbar [aria-label="Project Continue"]:has(div:not([hidden]) > textarea[aria-label="Quick Continue JSON"]) [role="alert"] {
+#chatgpt-quick-continue-toolbar [aria-label="Quick Continue menu popover"]:has(div:not([hidden]) > textarea[aria-label="Quick Continue JSON"]) [role="alert"] {
   max-width: 100% !important;
 }
 `;
   (document.head || document.documentElement).append(style);
 
   globalThis.__chatgptQuickContinueConfigEditorStyle = Object.freeze({
-    version: 1,
+    version: 2,
     styleId: STYLE_ID
   });
 })();

@@ -205,18 +205,19 @@ test('monitored chats default to a 30-minute local code watchdog with a three-se
   assert.doesNotMatch(monitor, /\bfetch\s*\(/);
 });
 
-test('in-page auto-continue controls reset allowance and explicitly arm user-triggered timers', () => {
+test('in-page Monitor state delegates automatic continuation to the Simple watchdog', () => {
   const attachment = text('extension/attachment-script.js');
   const monitor = text('extension/monitor-background.js');
   const timer = text('extension/quick-continue-status-owner-v6.js');
   const bridge = text('extension/quick-continue-monitor-bridge.js');
+  const conversation = text('standalone-quick-continue/conversation-state.js');
 
   assert.match(attachment, /document\.createElement\('button'\)/);
-  assert.match(timer, /RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER/);
-  assert.match(timer, /STOP_CODE_WATCHDOG_TIMER_FOR_SENDER/);
-  assert.match(bridge, /ARM_CODE_WATCHDOG_FOR_SENDER/);
+  assert.match(attachment, /PRIMARY_WATCHDOG_ATTR = 'data-chatgpt-notifier-primary-watchdog'/);
+  assert.match(attachment, /publishPrimaryWatchdogAuthority/);
   assert.match(bridge, /Send timestamped Continue/);
   assert.match(bridge, /Send custom Project Continue/);
+  assert.doesNotMatch(bridge, /ARM_CODE_WATCHDOG_FOR_SENDER/);
   assert.doesNotMatch(attachment, /armAutomationForQuickContinueAction|tickAutomationStatus/);
   assert.match(attachment, /cursor: 'pointer'/);
   assert.match(attachment, /style\.opacity = '1'/);
@@ -225,18 +226,12 @@ test('in-page auto-continue controls reset allowance and explicitly arm user-tri
   assert.match(attachment, /border: '0'/);
   assert.doesNotMatch(attachment, /0 0 0 1px var\(--border-light/);
 
-  assert.match(monitor, /function codeWatchdogBudgetReset/);
-  assert.match(monitor, /timerMissing/);
-  assert.match(monitor, /sendCount: 0/);
-  assert.match(monitor, /deadlineAt: resetAt \+ codeWatchdogDelayMs\(\)/);
-  assert.match(monitor, /RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER/);
-  assert.match(monitor, /ARM_CODE_WATCHDOG_FOR_SENDER/);
-  assert.match(monitor, /armCodeWatchdogForTarget/);
-  assert.match(monitor, /operatorPromptArmedAt/);
-  assert.match(monitor, /lastAutomaticPromptKey: ''/);
-  assert.match(monitor, /resetSenderCodeWatchdogBudget/);
-  assert.match(monitor, /target-conversation-changed/);
-  assert.match(monitor, /automation-not-active/);
+  assert.match(monitor, /LEGACY_CODE_WATCHDOG_RETIRED/);
+  assert.match(monitor, /reason: 'legacy-watchdog-retired'/);
+  assert.match(conversation, /monitorWatchdogAuthority/);
+  assert.match(conversation, /restartPrimaryWatchdogFromTrustedSend/);
+  assert.match(conversation, /setSimpleEnabled\(true\)/);
+  assert.doesNotMatch(timer, /RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER|STOP_CODE_WATCHDOG_TIMER_FOR_SENDER|RUN_CODE_WATCHDOG_NOW_V3/);
 });
 
 test('manual pre-conversation Monitor is provisional and binds only after the next observed request', () => {
@@ -605,10 +600,11 @@ test('local JavaScript is syntactically valid', () => {
   }
 });
 
-test('notifier-owned Quick Continue light mirrors popup automation states without ChatGPT network traffic', () => {
+test('notifier-owned Quick Continue light mirrors Monitor state and publishes Simple authority without ChatGPT network traffic', () => {
   const attachment = text('extension/attachment-script.js');
   const monitor = text('extension/monitor-background.js');
   const timer = text('extension/quick-continue-status-owner-v6.js');
+  const conversation = text('standalone-quick-continue/conversation-state.js');
   assert.match(attachment, /chatgpt-quick-continue-toolbar/);
   assert.match(attachment, /chatgpt-notifier-automation-indicator/);
   assert.match(attachment, /GET_BUILD_AUTOMATION_OVERVIEW_FOR_SENDER/);
@@ -621,23 +617,18 @@ test('notifier-owned Quick Continue light mirrors popup automation states withou
   assert.match(attachment, /#22c55e/);
   assert.doesNotMatch(attachment, /#f59e0b/);
   assert.match(attachment, /#888888/);
-  assert.match(timer, /Next auto-continue/);
-  assert.match(timer, /Auto-continue blocked/);
-  assert.match(timer, /Retrying auto-continue/);
-  assert.match(timer, /connection/);
-  assert.doesNotMatch(attachment, /response to settle/);
-  assert.doesNotMatch(attachment, /generation to finish/);
-  assert.match(timer, /Auto-continues exhausted/);
-  assert.match(timer, /setInterval\(render, 1000\)/);
+  assert.match(attachment, /PRIMARY_WATCHDOG_ATTR/);
+  assert.match(attachment, /JSON\.stringify\(command\)/);
+  assert.match(conversation, /Primary auto-continue timer/);
+  assert.match(conversation, /Next auto-continue/);
+  assert.match(conversation, /Auto-continues exhausted/);
+  assert.match(conversation, /setInterval\(renderSimpleCountdown, 1000\)/);
   assert.match(attachment, /function automationOverviewIsFresh/);
-  assert.match(attachment, /nextWatchdogRevision < currentWatchdogRevision/);
-  assert.match(attachment, /nextWatchdogRevision === 0[\s\S]*currentWatchdogRevision === 0[\s\S]*nextWatchdogUpdatedAt < currentWatchdogUpdatedAt/);
-  assert.match(attachment, /currentWatchdogUpdatedAt > 0[\s\S]*nextWatchdogUpdatedAt === 0/);
-  assert.match(attachment, /current\.automationEnabled === true[\s\S]*next\.automationEnabled === true/);
+  assert.match(attachment, /stateRevision/);
   assert.match(attachment, /function applyAutomationOverview/);
   assert.match(attachment, /return applyAutomationOverview\(overview\)/);
-  assert.match(monitor, /codeWatchdogMaxSends: codeWatchdogMaxSends\(\)/);
-  assert.match(monitor, /codeWatchdogDelayMs: codeWatchdogDelayMs\(\)/);
+  assert.match(monitor, /legacyCodeWatchdogRetired: LEGACY_CODE_WATCHDOG_RETIRED/);
+  assert.doesNotMatch(timer, /Next auto-continue|Auto-continue blocked|Retrying auto-continue|setInterval/);
   assert.match(monitor, /function codeWatchdogOverviewSignature\(record\)/);
   assert.match(monitor, /const codeWatchdogMutationQueues = new Map\(\)/);
   assert.match(monitor, /function queueCodeWatchdogMutation\(conversationIdValue, operation\)/);
@@ -730,12 +721,12 @@ test('extension update hot-activates reload-safe watchdog page runtimes in alrea
   const attachment = text('extension/attachment-script.js');
   const monitor = text('extension/monitor-background.js');
 
-  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 14/);
+  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 15/);
   assert.match(attachment, /CHATGPT_NOTIFIER_ATTACHMENT_PING/);
   assert.match(attachment, /runtimeVersion: ATTACHMENT_RUNTIME_VERSION/);
   assert.match(attachment, /extensionVersion/);
 
-  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 14/);
+  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 15/);
   assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 12/);
   assert.match(monitor, /HOT_PAGE_STATUS_RUNTIME_VERSION = 15/);
   assert.match(monitor, /HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3/);
