@@ -35,6 +35,11 @@ function reportBootstrapFailure(status, error) {
   } catch {}
 }
 
+globalThis.__chatgptNotifierPrimaryWatchdogMode = Object.freeze({
+  version: 1,
+  simplePrimary: true
+});
+
 let importsReady = false;
 try {
   importScripts(
