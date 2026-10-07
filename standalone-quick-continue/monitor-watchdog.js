@@ -105,6 +105,7 @@
     if (!row) return;
     const active = monitorState?.enabled === true;
     const exhausted = monitorState?.exhausted === true || monitorState?.phase === 'exhausted';
+    const paused = monitorState?.paused === true || monitorState?.phase === 'paused';
     const remaining = Math.max(0, Number(monitorState?.attemptsRemaining || 0));
     const seconds = Math.max(0, Math.ceil((Number(monitorState?.nextAt || 0) - Date.now()) / 1000));
     const countdown = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
@@ -113,7 +114,8 @@
       : phase === 'refresh-loading' ? 'Waiting for refresh'
       : phase === 'refresh-wait' ? 'Continue in'
       : 'Next auto-continue';
-    const text = active && exhausted ? 'Monitor: auto-continues exhausted'
+    const text = exhausted ? 'Monitor: auto-continues exhausted'
+      : paused ? `Monitor: paused · ${remaining} auto-continues left`
       : active ? `Monitor: ${label} ${countdown} · ${remaining} auto-continues left`
       : '';
     if (row.textContent !== text) row.textContent = text;
@@ -323,7 +325,9 @@
     }
     if (token === lastMonitorAuthorityToken) return;
     lastMonitorAuthorityToken = token;
-    if (authority.enabled !== monitorEnabled) setMonitorEnabled(authority.enabled).catch(() => {});
+    // An actual Monitor toggle transition always applies, including OFF
+    // while manually paused (when the watchdog itself is not enabled).
+    setMonitorEnabled(authority.enabled).catch(() => {});
   }
 
   function monitorWatchdogControl() {
