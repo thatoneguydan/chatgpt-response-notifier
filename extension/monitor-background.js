@@ -19,7 +19,7 @@
   const CODE_WATCHDOG_RETRY_MS = 60_000;
   const DEFAULT_CODE_WATCHDOG_MAX_SENDS = 3;
   const CODE_WATCHDOG_AUTOMATIC_REQUEST_WINDOW_MS = 15_000;
-  const LEGACY_CODE_WATCHDOG_RETIRED = true;
+  const LEGACY_CODE_WATCHDOG_RETIRED = globalThis.__chatgptNotifierPrimaryWatchdogMode?.simplePrimary === true;
   globalThis.__chatgptNotifierLegacyWatchdogRetired = LEGACY_CODE_WATCHDOG_RETIRED;
   const HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 15;
   const HOT_PAGE_MONITOR_RUNTIME_VERSION = 12;
