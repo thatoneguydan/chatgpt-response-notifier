@@ -58,6 +58,43 @@ test('Simple lives in the hamburger menu and starts its own timer despite draft,
   expect(chatgptTraffic.filter((entry) => entry.kind === 'blocked')).toEqual([]);
 });
 
+test('Monitor arms its independent watchdog without toggling hamburger Simple', async ({ fixturePage }) => {
+  const monitorControl = fixturePage.locator('[id^="chatgpt-notifier-control-v"]');
+  await expect(monitorControl).toHaveCount(1);
+  await expect(monitorControl).toHaveAttribute('aria-label', /Build automation: Monitor/);
+
+  await monitorControl.click();
+  await expect(monitorControl).toHaveAttribute('aria-label', /Build automation: Pause/);
+
+  await expect.poll(() => evaluateInExtensionWorld(
+    fixturePage,
+    'ChatGPT Quick Continue',
+    `chrome.runtime.sendMessage({ type: 'QUICK_CONTINUE_MONITOR_WATCHDOG_GET', conversationId: 'playwright-browser-regression' })`
+  )).toMatchObject({ enabled: true, phase: 'countdown' });
+
+  const monitorCountdown = fixturePage.locator('#chatgpt-quick-continue-monitor-countdown');
+  await expect(monitorCountdown).toBeVisible();
+  await expect(monitorCountdown).toContainText('Monitor:');
+
+  await openQuickContinueMenu(fixturePage);
+  await expect(fixturePage.locator(simple)).toHaveAttribute('aria-pressed', 'false');
+  const simpleState = await evaluateInExtensionWorld(
+    fixturePage,
+    'ChatGPT Quick Continue',
+    `chrome.runtime.sendMessage({ type: 'QUICK_CONTINUE_SIMPLE_WATCHDOG_GET', conversationId: 'playwright-browser-regression' })`
+  );
+  expect(simpleState.enabled).toBe(false);
+
+  await monitorControl.click();
+  await expect(monitorControl).toHaveAttribute('aria-label', /Build automation: Monitor/);
+  await expect.poll(() => evaluateInExtensionWorld(
+    fixturePage,
+    'ChatGPT Quick Continue',
+    `chrome.runtime.sendMessage({ type: 'QUICK_CONTINUE_MONITOR_WATCHDOG_GET', conversationId: 'playwright-browser-regression' })`
+  )).toMatchObject({ enabled: false });
+  await expect(fixturePage.locator(simple)).toHaveAttribute('aria-pressed', 'false');
+});
+
 test('Simple starts before a new chat has a saved conversation ID', async ({ fixturePage }) => {
   await fixturePage.evaluate(() => {
     history.pushState({}, '', '/');
