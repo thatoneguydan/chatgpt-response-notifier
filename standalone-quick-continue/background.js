@@ -1,5 +1,7 @@
 'use strict';
 
+importScripts('monitor-watchdog-background.js');
+
 const UPDATE_ALARM = 'quick-continue-managed-update';
 const UPDATE_URL = 'http://127.0.0.1:38473/quick-continue/update';
 const SIMPLE_STATE_KEY = 'quickContinueSimpleWatchdogStates';
@@ -32,6 +34,7 @@ const CONTENT_FILES = [
   'config-editor-style.js',
   'content-script.js',
   'hover-edit-script.js',
+  'monitor-watchdog.js',
   'conversation-state.js'
 ];
 
