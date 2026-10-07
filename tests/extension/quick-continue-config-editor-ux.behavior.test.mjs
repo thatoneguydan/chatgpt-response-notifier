@@ -4,6 +4,7 @@ import test from 'node:test';
 
 const readText = (relative) => readFileSync(new URL(`../../${relative}`, import.meta.url), 'utf8');
 const styleSource = readText('standalone-quick-continue/config-editor-style.js');
+const contentSource = readText('standalone-quick-continue/content-script.js');
 const backgroundSource = readText('standalone-quick-continue/background.js');
 const conversationStateSource = readText('standalone-quick-continue/conversation-state.js');
 const monitorWatchdogSource = readText('standalone-quick-continue/monitor-watchdog.js');
@@ -44,6 +45,14 @@ test('Quick Continue ships the large config editor styling to new and already-op
   assert.match(releaseWorkflow, /'conversation-state\.js'/);
   assert.match(styleSource, /width:\s*min\(780px, calc\(100vw - 32px\)\)/);
   assert.match(styleSource, /height:\s*min\(560px, calc\(100vh - 180px\)\)/);
+});
+
+test('independent Monitor countdown uses the existing countdown layout without altering Simple ownership', () => {
+  assert.match(styleSource, /#chatgpt-quick-continue-simple-countdown,\s*#chatgpt-quick-continue-monitor-countdown/);
+  assert.match(styleSource, /#chatgpt-quick-continue-monitor-countdown\[hidden\]/);
+  assert.match(contentSource, /#chatgpt-quick-continue-simple-countdown, #chatgpt-quick-continue-monitor-countdown/);
+  assert.doesNotMatch(conversationStateSource, /chatgpt-quick-continue-monitor-countdown/);
+  assert.match(monitorWatchdogSource, /chatgpt-quick-continue-monitor-countdown/);
 });
 
 test('config editor caret uses high-contrast theme text instead of a fixed dark-on-dark color', () => {
