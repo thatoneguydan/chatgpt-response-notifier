@@ -41,6 +41,8 @@
   let simpleStatusInFlightFingerprint = '';
   let simpleConfig = null;
   let lastMonitorAuthorityToken = '';
+  let simpleRestoreReady = false;
+  let lastTrustedMonitorResetAt = 0;
   let unsubscribeConfig = null;
   let disposed = false;
   let scheduled = false;
@@ -401,7 +403,7 @@
   }
 
   function applyMonitorWatchdogAuthority() {
-    if (disposed) return;
+    if (disposed || !simpleRestoreReady) return;
     const authority = monitorWatchdogAuthority();
     if (!authority) return;
     const token = `${authority.conversationId}|${authority.enabled ? 1 : 0}|${authority.stateRevision}`;
@@ -412,6 +414,7 @@
 
   async function restoreSimpleForConversation(conversationId) {
     const generation = ++simpleRestoreGeneration;
+    simpleRestoreReady = false;
     let response = null;
     try { response = await chrome.runtime.sendMessage({ type: SIMPLE_GET_MESSAGE, conversationId }); } catch {}
     if (disposed || generation !== simpleRestoreGeneration || activeConversationId !== conversationId) return;
@@ -423,6 +426,7 @@
       if (signal) await applyTerminalSignal(signal);
     }
     if (disposed || generation !== simpleRestoreGeneration || activeConversationId !== conversationId) return;
+    simpleRestoreReady = true;
     applyMonitorWatchdogAuthority();
   }
 
@@ -506,6 +510,7 @@
       lastSimpleStatusFingerprint = '';
       simpleStatusInFlightFingerprint = '';
       lastMonitorAuthorityToken = '';
+      simpleRestoreReady = false;
       restoreForConversation(nextConversationId, previousConversationId).catch(() => {});
       // Always query the background on route assignment. Its GET path owns the
       // provisional -> real-conversation migration, while the current UI state
@@ -550,6 +555,52 @@
     persistUserChoiceSoon(event);
   }
 
+  function quickToolbarSendControl(node) {
+    let control = null;
+    try { control = node?.closest?.(`#${TOOLBAR_ID} button`); } catch {}
+    if (!control || control.disabled === true || control.getAttribute?.('aria-disabled') === 'true') return null;
+    const label = String(control.getAttribute?.('aria-label') || '').trim();
+    if (label === 'Send timestamped Continue' || label === 'Send custom Project Continue' || /^Continue\s+.+/.test(label)) return control;
+    return null;
+  }
+
+  function nativeSendControl(node) {
+    let button = null;
+    try { button = node?.closest?.('button'); } catch {}
+    if (!button || button.disabled === true || button.getAttribute?.('aria-disabled') === 'true') return null;
+    const testId = String(button.getAttribute?.('data-testid') || '').toLowerCase();
+    const aria = String(button.getAttribute?.('aria-label') || '').toLowerCase();
+    if (!(testId.includes('send-button') || /^send(?:\s|$)/.test(aria) || aria.includes('send message'))) return null;
+    return button;
+  }
+
+  function restartPrimaryWatchdogFromTrustedSend() {
+    if (disposed || !simpleEnabled || !simpleRestoreReady) return;
+    const authority = monitorWatchdogAuthority();
+    if (authority?.enabled !== true) return;
+    const now = Date.now();
+    if (now - lastTrustedMonitorResetAt < 250) return;
+    lastTrustedMonitorResetAt = now;
+    setSimpleEnabled(true).catch(() => {});
+  }
+
+  function handleTrustedSendClick(event) {
+    if (event?.isTrusted !== true) return;
+    if (!quickToolbarSendControl(event.target) && !nativeSendControl(event.target)) return;
+    restartPrimaryWatchdogFromTrustedSend();
+  }
+
+  function handleTrustedSendKeydown(event) {
+    if (event?.isTrusted !== true || event?.key !== 'Enter') return;
+    if (event.shiftKey || event.ctrlKey || event.altKey || event.metaKey || event.isComposing) return;
+    const target = event?.target;
+    let composer = null;
+    try { composer = target?.closest?.('#prompt-textarea, textarea[data-testid="prompt-textarea"], [contenteditable="true"][data-testid="prompt-textarea"], [contenteditable="true"][data-lexical-editor="true"]'); } catch {}
+    if (!composer) return;
+    restartPrimaryWatchdogFromTrustedSend();
+  }
+
+
   function handleStorageChanged(changes, areaName) {
     if (areaName !== 'local' || !activeConversationId) return;
     const key = storageKey(activeConversationId);
@@ -578,7 +629,9 @@
   observer = new MutationObserver(handleDocumentMutations);
   observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: [PRIMARY_WATCHDOG_ATTR] });
   document.addEventListener('click', persistUserChoiceSoon, true);
+  document.addEventListener('click', handleTrustedSendClick, true);
   document.addEventListener('keydown', handleClockKeydown, true);
+  document.addEventListener('keydown', handleTrustedSendKeydown, true);
   window.addEventListener('popstate', scheduleSync, true);
   window.addEventListener('hashchange', scheduleSync, true);
   window.addEventListener('message', handleNotifierTerminalMessage);
@@ -604,7 +657,9 @@
       try { simpleRow?.remove(); } catch {}
       try { observer?.disconnect(); } catch {}
       try { document.removeEventListener('click', persistUserChoiceSoon, true); } catch {}
+      try { document.removeEventListener('click', handleTrustedSendClick, true); } catch {}
       try { document.removeEventListener('keydown', handleClockKeydown, true); } catch {}
+      try { document.removeEventListener('keydown', handleTrustedSendKeydown, true); } catch {}
       try { window.removeEventListener('popstate', scheduleSync, true); } catch {}
       try { window.removeEventListener('hashchange', scheduleSync, true); } catch {}
       try { window.removeEventListener('message', handleNotifierTerminalMessage); } catch {}
