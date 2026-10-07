@@ -37,6 +37,7 @@
   let lastMonitorAuthorityToken = '';
   let lastMonitorControlCommandId = '';
   let monitorRestoreGeneration = 0;
+  let monitorUpdateVersion = 0;
   let monitorRequestGeneration = 0;
   let monitorRestoreReady = false;
   let lastTrustedMonitorResetAt = 0;
@@ -308,7 +309,9 @@
     if (disposed || !monitorRestoreReady) return;
     const authority = monitorWatchdogAuthority();
     if (!authority) return;
-    const token = `${authority.conversationId}|${authority.enabled ? 1 : 0}|${authority.stateRevision}`;
+    // Only an actual off/on transition is a command. Unrelated overview
+    // revisions must never rearm a stopped or manually paused watchdog.
+    const token = `${authority.conversationId}|${authority.enabled ? 1 : 0}`;
 
     // The first authority value seen after page load or SPA route entry is a
     // baseline, not a command. The watchdog's persisted state is authoritative
@@ -342,6 +345,8 @@
     const control = monitorWatchdogControl();
     if (!control || control.commandId === lastMonitorControlCommandId) return;
     lastMonitorControlCommandId = control.commandId;
+    // Commands are one-shot; do not replay an old click after SPA navigation.
+    try { document.documentElement?.removeAttribute?.(PRIMARY_WATCHDOG_CONTROL_ATTR); } catch {}
 
     let config = monitorConfig;
     if (!config) {
@@ -365,14 +370,17 @@
 
   async function restoreMonitorForConversation(conversationId) {
     const generation = ++monitorRestoreGeneration;
+    const updateVersion = monitorUpdateVersion;
     monitorRestoreReady = false;
     let response = null;
     try {
       response = await chrome.runtime.sendMessage({ type: MONITOR_GET_MESSAGE, conversationId });
     } catch {}
     if (disposed || generation !== monitorRestoreGeneration || activeConversationId !== conversationId) return;
-    renderMonitorState(response);
-    if (response?.enabled === true) {
+    // The background can push a newer state while GET is in flight.
+    // Never let the slower GET overwrite that notification.
+    if (updateVersion === monitorUpdateVersion) renderMonitorState(response);
+    if (monitorEnabled) {
       let signal = null;
       try { signal = await queryNotifierTerminalSignal(); } catch {}
       if (disposed || generation !== monitorRestoreGeneration || activeConversationId !== conversationId) return;
@@ -440,8 +448,8 @@
       return false;
     }
     if (message?.type === MONITOR_STATE_MESSAGE) {
-      monitorRestoreGeneration += 1;
       if (!message.state?.conversationId || message.state.conversationId === conversationIdFromUrl()) {
+        monitorUpdateVersion += 1;
         renderMonitorState(message.state);
       }
       sendResponse?.({ ok: true });
@@ -473,6 +481,7 @@
       monitorStatusInFlightFingerprint = '';
       lastMonitorAuthorityToken = '';
       lastMonitorControlCommandId = '';
+      try { document.documentElement?.removeAttribute?.(PRIMARY_WATCHDOG_CONTROL_ATTR); } catch {}
       monitorRestoreReady = false;
       restoreMonitorForConversation(nextConversationId).catch(() => {});
     } else {
