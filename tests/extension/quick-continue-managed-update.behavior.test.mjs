@@ -87,12 +87,15 @@ test('notifier helper checks Quick Continue independently before its own replace
   assert.match(app, /await CheckForPublicUpdateAsync\(null\)/);
 });
 
-test('release workflow publishes a hashed standalone runtime package and update manifest', () => {
+test('release workflow publishes a hashed standalone runtime package with both independent watchdog engines', () => {
   assert.match(quickWorkflow, /ChatGPT-Quick-Continue-\$version\.zip/);
   assert.match(quickWorkflow, /Get-FileHash -LiteralPath \$zip -Algorithm SHA256/);
   assert.match(quickWorkflow, /quick-continue-v\$version/);
   assert.match(quickWorkflow, /standalone-quick-continue\\update/);
   assert.match(quickWorkflow, /sourceCommit = \$sourceCommit/);
+  assert.match(quickWorkflow, /'monitor-watchdog-background\.js'/);
+  assert.match(quickWorkflow, /'monitor-watchdog\.js'/);
+  assert.match(quickWorkflow, /'conversation-state\.js'/);
 });
 
 test('release feeds use independent serialized queues and rebase feed-only commits onto current main', () => {
