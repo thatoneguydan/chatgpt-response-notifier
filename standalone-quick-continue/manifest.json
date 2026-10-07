@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "ChatGPT Quick Continue",
-  "version": "1.2.37",
+  "version": "1.2.38",
   "description": "Adds timestamped Continue controls, editable prompt JSON, and the settings-driven primary auto-continue watchdog for ChatGPT.",
   "minimum_chrome_version": "116",
   "permissions": [
