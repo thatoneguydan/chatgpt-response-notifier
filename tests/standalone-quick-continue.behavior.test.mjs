@@ -254,9 +254,11 @@ test('shared send transaction selects live authority and proves submission accep
   assert.equal(decoyClicks, 0);
 });
 
-test('project picker is non-modal, exposes Edit, and never auto-focuses', () => {
-  assert.match(contentSource, /textContent = 'Edit'/);
-  assert.match(contentSource, /aria-label', 'Edit Quick Continue JSON'/);
+test('project picker stays non-modal while JSON editing moves to the hamburger menu', () => {
+  assert.match(contentSource, /menuButton\.textContent = '☰'/);
+  assert.match(contentSource, /menuButton\.setAttribute\('aria-label', 'Quick Continue menu'\)/);
+  assert.match(contentSource, /editButton\.textContent = 'Edit JSON'/);
+  assert.match(contentSource, /editButton\.setAttribute\('aria-label', 'Edit Quick Continue JSON'\)/);
   assert.match(contentSource, /placeholder = 'Other project…'/);
   assert.match(contentSource, /aria-label', 'Quick Continue JSON'/);
   assert.doesNotMatch(contentSource, /\.focus\(/);
@@ -265,11 +267,11 @@ test('project picker is non-modal, exposes Edit, and never auto-focuses', () => 
   assert.doesNotMatch(contentSource, /\.title\s*=/);
 });
 
-test('inline pencil controls are removed while Project Edit remains the JSON editor entry point', () => {
+test('inline pencil controls remain removed and the hamburger Edit JSON action owns the editor entry point', () => {
   assert.doesNotMatch(hoverEditSource, /data-quick-continue-pencil|pencil\.textContent|createPencilButton|enhanceToolbarButtons|restoreToolbarButtons/);
   assert.doesNotMatch(hoverEditSource, /Edit Project text|Edit Continue text/);
   assert.doesNotMatch(contentSource, /data-quick-continue-pencil|pencil\.textContent|createPencilButton/);
-  assert.match(contentSource, /editButton\.textContent = 'Edit'/);
+  assert.match(contentSource, /editButton\.textContent = 'Edit JSON'/);
   assert.match(contentSource, /editButton\.setAttribute\('aria-label', 'Edit Quick Continue JSON'\)/);
   assert.match(contentSource, /openConfigEditor\(\)/);
   assert.match(hoverEditSource, /!clockToggle\?\.isConnected/);
@@ -375,11 +377,11 @@ test('prompt and config APIs are versioned so reinjection cannot retain stale gl
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
   assert.match(configSource, /chrome\.storage\.onChanged\.removeListener\(handleStorageChanged\)/);
-  assert.match(contentSource, /const RUNTIME_VERSION = 11/);
+  assert.match(contentSource, /const RUNTIME_VERSION = 12/);
   assert.match(hoverEditSource, /const RUNTIME_VERSION = 11/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
-  assert.match(conversationStateSource, /const RUNTIME_VERSION = 9/);
+  assert.match(conversationStateSource, /const RUNTIME_VERSION = 10/);
   assert.match(conversationStateSource, /__chatgptQuickContinueConversationStateRuntime/);
 });
 
@@ -571,10 +573,11 @@ test('1.2.4 updater pins the repaired runtime set without overwriting live confi
   assert.match(updater124Source, /Get-FileHash -Algorithm SHA256/);
 });
 
-test('Project menu stays available for config editing when send controls are unavailable', () => {
+test('hamburger menu stays available for config editing when send controls are unavailable', () => {
   assert.match(contentSource, /const sendButtons = \[\]/);
   assert.match(contentSource, /sendButtons\.push\(continueButton\)/);
   assert.doesNotMatch(contentSource, /sendButtons\.push\(projectButton\)/);
+  assert.match(contentSource, /menuButton\.setAttribute\('aria-label', 'Quick Continue menu'\)/);
   assert.match(contentSource, /function canSendProject\(\)/);
 });
 
@@ -611,7 +614,7 @@ test('toolbar self-heals missing core controls and recovers from transient compo
 });
 
 test('standalone runtime hot-replaces stale generations, restores a detached toolbar, and ignores notifier-only churn', () => {
-  assert.match(contentSource, /const RUNTIME_VERSION = 11/);
+  assert.match(contentSource, /const RUNTIME_VERSION = 12/);
   assert.match(contentSource, /const previousRuntime = globalThis\.__chatgptQuickContinueRuntime/);
   assert.match(contentSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.doesNotMatch(contentSource, /__chatgptQuickContinueInstalled/);
@@ -634,10 +637,10 @@ test('project popover opens above when it fits, flips below near the top, and ch
   assert.match(contentSource, /if \(upwardTop >= margin\) return 'above'/);
   assert.match(contentSource, /if \(downwardBottom <= viewport - margin\) return 'below'/);
   assert.match(contentSource, /spaceBelow > spaceAbove \? 'below' : 'above'/);
-  assert.match(contentSource, /projectPopover\.style\.top = 'calc\(100% \+ 6px\)'/);
-  assert.match(contentSource, /projectPopover\.style\.bottom = 'auto'/);
-  assert.match(contentSource, /projectPopover\.style\.top = 'auto'/);
+  assert.match(contentSource, /popover\.style\.top = 'calc\(100% \+ 6px\)'/);
+  assert.match(contentSource, /popover\.style\.bottom = 'auto'/);
+  assert.match(contentSource, /popover\.style\.top = 'auto'/);
   assert.match(contentSource, /Math\.ceil\(toolbarRect\.top - occupiedTop\) \+ 6/);
-  assert.match(contentSource, /root\.style\.visibility = 'visible';\s+positionProjectPopover\(\);/);
-  assert.match(contentSource, /setEditorMode\(true\);\s+positionProjectPopover\(\);/);
+  assert.match(contentSource, /root\.style\.visibility = 'visible';\s+positionProjectPopover\(\);\s+positionMenuPopover\(\);/);
+  assert.match(contentSource, /setEditorMode\(true\);\s+positionMenuPopover\(\);/);
 });
