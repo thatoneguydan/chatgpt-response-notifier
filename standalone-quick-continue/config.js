@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 10;
+  const RUNTIME_VERSION = 11;
   const previousRuntime = globalThis.ChatGPTQuickContinueConfig;
   if (Number(previousRuntime?.runtimeVersion || 0) === RUNTIME_VERSION) return;
   try { previousRuntime?.dispose?.(); } catch {}
@@ -30,8 +30,6 @@
     INCOMPLETE_HANDOFF: false
   });
   const DEFAULT_WATCHDOG = Object.freeze({
-    timerMinutes: 30,
-    attempts: 3,
     stopOnStatus: DEFAULT_STOP_ON_STATUS
   });
   const DEFAULT_SIMPLE_WATCHDOG = Object.freeze({
@@ -80,14 +78,6 @@
   function normalizeWatchdog(value) {
     const raw = value == null ? {} : value;
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('"watchdog" must be an object.');
-    const timerMinutes = raw.timerMinutes == null ? DEFAULT_WATCHDOG.timerMinutes : Number(raw.timerMinutes);
-    if (!Number.isFinite(timerMinutes) || timerMinutes < 0.1 || timerMinutes > 1440) {
-      throw new Error('"watchdog.timerMinutes" must be between 0.1 and 1440.');
-    }
-    const attemptsRaw = raw.attempts == null ? DEFAULT_WATCHDOG.attempts : Number(raw.attempts);
-    if (!Number.isInteger(attemptsRaw) || attemptsRaw < 0 || attemptsRaw > 20) {
-      throw new Error('"watchdog.attempts" must be an integer between 0 and 20.');
-    }
     const stopRaw = raw.stopOnStatus == null ? {} : raw.stopOnStatus;
     if (!stopRaw || typeof stopRaw !== 'object' || Array.isArray(stopRaw)) {
       throw new Error('"watchdog.stopOnStatus" must be an object.');
@@ -103,8 +93,6 @@
         : DEFAULT_STOP_ON_STATUS[code];
     }
     return Object.freeze({
-      timerMinutes: Math.round(timerMinutes * 1000) / 1000,
-      attempts: attemptsRaw,
       stopOnStatus: Object.freeze(stopOnStatus)
     });
   }
@@ -113,11 +101,15 @@
     const raw = value == null ? {} : value;
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('"simpleWatchdog" must be an object.');
     const legacy = legacyWatchdog && typeof legacyWatchdog === 'object' && !Array.isArray(legacyWatchdog) ? legacyWatchdog : {};
-    const timerMinutes = raw.timerMinutes == null ? DEFAULT_SIMPLE_WATCHDOG.timerMinutes : Number(raw.timerMinutes);
+    const timerMinutes = raw.timerMinutes == null
+      ? (legacy.timerMinutes == null ? DEFAULT_SIMPLE_WATCHDOG.timerMinutes : Number(legacy.timerMinutes))
+      : Number(raw.timerMinutes);
     if (!Number.isFinite(timerMinutes) || timerMinutes < 0.1 || timerMinutes > 1440) {
       throw new Error('"simpleWatchdog.timerMinutes" must be between 0.1 and 1440.');
     }
-    const attempts = raw.attempts == null ? DEFAULT_SIMPLE_WATCHDOG.attempts : Number(raw.attempts);
+    const attempts = raw.attempts == null
+      ? (legacy.attempts == null ? DEFAULT_SIMPLE_WATCHDOG.attempts : Number(legacy.attempts))
+      : Number(raw.attempts);
     if (!Number.isInteger(attempts) || attempts < 0 || attempts > 20) {
       throw new Error('"simpleWatchdog.attempts" must be an integer between 0 and 20.');
     }
@@ -184,8 +176,6 @@
       projectText: value.projectText,
       manualTimestampText: value.manualTimestampText,
       watchdog: {
-        timerMinutes: value.watchdog.timerMinutes,
-        attempts: value.watchdog.attempts,
         stopOnStatus: { ...value.watchdog.stopOnStatus }
       },
       simpleWatchdog: {
