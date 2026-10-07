@@ -99,7 +99,11 @@ test('Monitor arms its independent watchdog without toggling hamburger Simple', 
   await expect(fixturePage.locator(simple)).toHaveAttribute('aria-pressed', 'false');
 
   // Leave the shared fixture with the hamburger closed for the next route test.
-  await fixturePage.getByRole('button', { name: menuButtonName, exact: true }).click();
+  // Monitor state changes may remount/reconcile toolbar UI, so key cleanup off
+  // the actual Simple visibility instead of assuming the prior menu state.
+  if (await fixturePage.locator(simple).isVisible()) {
+    await fixturePage.getByRole('button', { name: menuButtonName, exact: true }).click();
+  }
   await expect(fixturePage.locator(simple)).toBeHidden();
 });
 
