@@ -18,8 +18,13 @@ if (!extensionPath || !fs.existsSync(path.join(extensionPath, 'manifest.json')))
   let browser;
   try {
     const config = JSON.parse(fs.readFileSync(path.join(extensionPath, 'config.json'), 'utf8'));
-    if (config?.watchdog?.timerMinutes !== 30 || config?.watchdog?.attempts !== 3) {
-      throw new Error('watchdog-json-defaults-missing');
+    if (
+      config?.simpleWatchdog?.timerMinutes !== 30
+      || config?.simpleWatchdog?.attempts !== 3
+      || config?.simpleWatchdog?.stopToRefreshSeconds !== 30
+      || config?.simpleWatchdog?.refreshToContinueSeconds !== 30
+    ) {
+      throw new Error('simple-watchdog-json-defaults-missing');
     }
     const requiredStopCodes = [
       'PLANNING_ACTIVE',
@@ -126,7 +131,7 @@ if (!extensionPath || !fs.existsSync(path.join(extensionPath, 'manifest.json')))
     await page.evaluate(() => {
       const toolbar = document.getElementById('chatgpt-quick-continue-toolbar');
       const popover = document.createElement('div');
-      popover.setAttribute('aria-label', 'Project Continue');
+      popover.setAttribute('aria-label', 'Quick Continue menu popover');
       const editor = document.createElement('div');
       const textarea = document.createElement('textarea');
       textarea.setAttribute('aria-label', 'Quick Continue JSON');
@@ -138,7 +143,7 @@ if (!extensionPath || !fs.existsSync(path.join(extensionPath, 'manifest.json')))
     await page.addScriptTag({ path: path.join(extensionPath, 'config-editor-style.js') });
     const editorStyle = await page.evaluate(() => {
       const textarea = document.querySelector('textarea[aria-label="Quick Continue JSON"]');
-      const popover = document.querySelector('[aria-label="Project Continue"]');
+      const popover = document.querySelector('[aria-label="Quick Continue menu popover"]');
       const textareaStyle = getComputedStyle(textarea);
       const popoverStyle = getComputedStyle(popover);
       const rect = textarea.getBoundingClientRect();
