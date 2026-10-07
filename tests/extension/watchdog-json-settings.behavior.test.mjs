@@ -41,9 +41,9 @@ function loadPolicy() {
   return context.ChatGPTNotifierContinuationPolicy;
 }
 
-test('bundled Quick Continue JSON keeps classification under watchdog and moves both respect gates under Simple', () => {
-  assert.equal(bundled.watchdog.timerMinutes, 30);
-  assert.equal(bundled.watchdog.attempts, 3);
+test('bundled Quick Continue JSON keeps only classification under watchdog and all timing under Simple', () => {
+  assert.equal(bundled.watchdog.timerMinutes, undefined);
+  assert.equal(bundled.watchdog.attempts, undefined);
   assert.equal(bundled.watchdog.respectStopStatusCodes, undefined);
   assert.equal(bundled.watchdog.respectContinueStatusCodes, undefined);
   assert.deepEqual(bundled.watchdog.stopOnStatus, {
@@ -58,8 +58,10 @@ test('bundled Quick Continue JSON keeps classification under watchdog and moves 
   });
   assert.equal(bundled.simpleWatchdog.respectStopStatusCodes, true);
   assert.equal(bundled.simpleWatchdog.respectContinueStatusCodes, true);
-  assert.match(configSource, /"watchdog\.timerMinutes" must be between 0\.1 and 1440/);
-  assert.match(configSource, /"watchdog\.attempts" must be an integer between 0 and 20/);
+  assert.doesNotMatch(configSource, /"watchdog\.timerMinutes" must be between 0\.1 and 1440/);
+  assert.doesNotMatch(configSource, /"watchdog\.attempts" must be an integer between 0 and 20/);
+  assert.match(configSource, /legacy\.timerMinutes/);
+  assert.match(configSource, /legacy\.attempts/);
   assert.match(configSource, /"simpleWatchdog\.respectStopStatusCodes" must be true or false/);
   assert.match(configSource, /"simpleWatchdog\.respectContinueStatusCodes" must be true or false/);
   assert.match(configSource, /Unknown GitHub status code in watchdog\.stopOnStatus/);
@@ -129,18 +131,20 @@ test('Quick Continue migrates legacy watchdog gate values into Simple and serial
   assert.doesNotMatch(simpleBackgroundSource, /normalizeStopOnStatus|state\.stopOnStatus/);
 });
 
-test('Quick Continue still publishes normalized normal-watchdog settings before arming a fresh smart watchdog', () => {
+test('Quick Continue publishes only the shared status table and never arms the retired notifier watchdog', () => {
   assert.match(contentSource, /toolbar\.dataset\.watchdogSettings = JSON\.stringify\(config\.watchdog\)/);
   assert.match(contentSource, /publishWatchdogConfig\(currentConfig\)/);
-  const syncAt = bridgeSource.indexOf('await syncWatchdogSettings(true)');
-  const armAt = bridgeSource.indexOf("type: 'ARM_CODE_WATCHDOG_FOR_SENDER'");
-  assert.ok(syncAt >= 0 && armAt > syncAt, 'settings must be synchronized before the fresh-turn arm');
+  assert.match(bridgeSource, /syncStatusPolicySettings/);
   assert.match(bridgeSource, /type: 'SET_CODE_WATCHDOG_SETTINGS_FOR_SENDER'/);
+  assert.doesNotMatch(bridgeSource, /ARM_CODE_WATCHDOG_FOR_SENDER|RUN_CODE_WATCHDOG_NOW_V3/);
+  assert.doesNotMatch(configSource, /timerMinutes: value\.watchdog\.timerMinutes/);
+  assert.doesNotMatch(configSource, /attempts: value\.watchdog\.attempts/);
 });
 
-test('canonical monitor owner persists settings in existing IndexedDB and uses them for deadlines, caps, and overview', () => {
+test('legacy monitor timing implementation remains testable while production marks it retired', () => {
   assert.equal(notifierManifest.permissions.includes('storage'), false, 'notifier must not add a storage permission for these settings');
   assert.match(monitorSource, /WATCHDOG_SETTINGS_KEY = 'code-watchdog-settings'/);
+  assert.match(monitorSource, /LEGACY_CODE_WATCHDOG_RETIRED = globalThis\.__chatgptNotifierPrimaryWatchdogMode\?\.simplePrimary === true/);
   assert.match(monitorSource, /async function persistCodeWatchdogSettings/);
   assert.match(monitorSource, /async function restoreCodeWatchdogSettings/);
   assert.match(monitorSource, /codeWatchdogSettingsReady\.then\(\(\) => handleCodeWatchdogAlarm/);
@@ -156,7 +160,7 @@ test('canonical monitor owner persists settings in existing IndexedDB and uses t
 });
 
 test('JSON editor is materially larger and uses a dark explicit caret', () => {
-  assert.match(contentSource, /projectPopover\.style\.minWidth = editing \? '540px'/);
+  assert.match(contentSource, /menuPopover\.style\.minWidth = editing \? '540px'/);
   assert.match(contentSource, /width: '520px'/);
   assert.match(contentSource, /height: '360px'/);
   assert.match(contentSource, /caretColor: '#111827'/);
