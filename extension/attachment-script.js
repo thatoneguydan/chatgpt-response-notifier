@@ -195,7 +195,8 @@
     const command = {
       conversationId: String(overview.activeConversationId || ''),
       enabled: overview.automationEnabled === true && overview.pausedByUser !== true,
-      stateRevision: Math.max(0, Number(overview.stateRevision || 0))
+      stateRevision: Math.max(0, Number(overview.stateRevision || 0)),
+      promptKey: String(overview.run?.promptKey || '')
     };
     try { document.documentElement?.setAttribute?.(PRIMARY_WATCHDOG_ATTR, JSON.stringify(command)); } catch {}
   }
