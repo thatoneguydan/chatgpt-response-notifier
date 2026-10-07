@@ -26,6 +26,7 @@ function loadManagedUpdatePolicy(runningVersion = '1.2.26') {
     setTimeout: () => 1,
     clearTimeout: () => {},
     fetch: async () => ({ ok: false }),
+    importScripts: () => {},
     chrome: {
       alarms: {
         create: () => {},
