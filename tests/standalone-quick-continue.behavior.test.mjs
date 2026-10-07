@@ -403,7 +403,7 @@ test('manual timestamp and Simple preferences retain their pre-send state across
 test('prompt and config APIs are versioned so reinjection cannot retain stale globals indefinitely', () => {
   assert.match(promptSource, /const RUNTIME_VERSION = 5/);
   assert.match(promptSource, /runtimeVersion: RUNTIME_VERSION/);
-  assert.match(configSource, /const RUNTIME_VERSION = 11/);
+  assert.match(configSource, /const RUNTIME_VERSION = 12/);
   assert.match(configSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(configSource, /runtimeVersion: RUNTIME_VERSION/);
   assert.match(configSource, /chrome\.storage\.onChanged\.addListener\(handleStorageChanged\)/);
@@ -412,7 +412,7 @@ test('prompt and config APIs are versioned so reinjection cannot retain stale gl
   assert.match(hoverEditSource, /const RUNTIME_VERSION = 11/);
   assert.match(hoverEditSource, /previousRuntime\?\.dispose\?\.\(\)/);
   assert.match(hoverEditSource, /__chatgptQuickContinueHoverEditRuntime/);
-  assert.match(conversationStateSource, /const RUNTIME_VERSION = 11/);
+  assert.match(conversationStateSource, /const RUNTIME_VERSION = 12/);
   assert.match(conversationStateSource, /__chatgptQuickContinueConversationStateRuntime/);
 });
 
