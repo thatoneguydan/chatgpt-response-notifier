@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 10;
+  const RUNTIME_VERSION = 11;
   const STORAGE_PREFIX = 'quick-continue:manual-timestamp:';
   const CLOCK_SELECTOR = '[aria-label="Current local time"]';
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
@@ -616,7 +616,8 @@
     if (disposed) return;
     const root = document.getElementById(TOOLBAR_ID);
     const menuItems = root?.querySelector?.(`#${SIMPLE_MENU_ITEMS_ID}`) || null;
-    if (!simpleButton?.isConnected || simpleButton?.parentElement !== menuItems) scheduleSync();
+    const routeChanged = conversationIdFromUrl() !== activeConversationId;
+    if (routeChanged || !simpleButton?.isConnected || simpleButton?.parentElement !== menuItems) scheduleSync();
     if (Array.from(records || []).some((record) => record.type === 'attributes' && record.attributeName === PRIMARY_WATCHDOG_ATTR)) {
       applyMonitorWatchdogAuthority();
     }
