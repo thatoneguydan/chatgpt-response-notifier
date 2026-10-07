@@ -33,6 +33,7 @@ jobs:
           foreach ($script in @(
             '.\standalone-quick-continue\dom-compat.js',
             '.\standalone-quick-continue\background.js',
+            '.\standalone-quick-continue\monitor-watchdog-background.js',
             '.\standalone-quick-continue\prompt-format.js',
             '.\standalone-quick-continue\config.js',
             '.\standalone-quick-continue\composer-text.js',
@@ -41,6 +42,7 @@ jobs:
             '.\standalone-quick-continue\config-editor-style.js',
             '.\standalone-quick-continue\content-script.js',
             '.\standalone-quick-continue\hover-edit-script.js',
+            '.\standalone-quick-continue\monitor-watchdog.js',
             '.\standalone-quick-continue\conversation-state.js'
           )) {
             node --check $script
@@ -84,6 +86,7 @@ jobs:
               'manifest.json',
               'dom-compat.js',
               'background.js',
+              'monitor-watchdog-background.js',
               'prompt-format.js',
               'config.js',
               'config.json',
@@ -93,6 +96,7 @@ jobs:
               'config-editor-style.js',
               'content-script.js',
               'hover-edit-script.js',
+              'monitor-watchdog.js',
               'conversation-state.js',
               'README.md'
             )
