@@ -8,8 +8,13 @@ const countdown = '#chatgpt-quick-continue-simple-countdown';
 const menuButtonName = 'Quick Continue menu';
 
 async function openQuickContinueMenu(page) {
-  await page.getByRole('button', { name: menuButtonName, exact: true }).click();
-  await expect(page.locator(simple)).toBeVisible();
+  const simpleButton = page.locator(simple);
+  const popover = page.locator(`${toolbar} > [role="group"][aria-label="Quick Continue menu popover"]`);
+  await expect(simpleButton).toHaveCount(1);
+  if (await popover.getAttribute('hidden') !== null) {
+    await page.getByRole('button', { name: menuButtonName, exact: true }).click();
+  }
+  await expect(simpleButton).toBeVisible();
 }
 const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, 'standalone-quick-continue/manifest.json'), 'utf8'));
 const runtimeFiles = manifest.content_scripts[0].js;
@@ -61,7 +66,8 @@ test('Simple starts before a new chat has a saved conversation ID', async ({ fix
   await expect.poll(() => evaluateInExtensionWorld(
     fixturePage,
     'ChatGPT Quick Continue',
-    'globalThis.__chatgptQuickContinueConversationStateRuntime?.activeConversationId ?? null'
+    'globalThis.__chatgptQuickContinueConversationStateRuntime?.activeConversationId ?? null',
+    'https://chatgpt.com/'
   )).toBe('');
   await expect(fixturePage.locator(simple)).toBeHidden();
   await openQuickContinueMenu(fixturePage);
