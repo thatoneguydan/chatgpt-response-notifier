@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 3;
+  const RUNTIME_VERSION = 4;
   const AUTOMATION_UI_SELECTOR = '[data-chatgpt-notifier-automation-ui-owner]';
   const previousRuntime = globalThis.__chatgptNotifierAutomationRouteRefreshRuntime;
   if (Number(previousRuntime?.version || 0) === RUNTIME_VERSION) return;
@@ -76,6 +76,7 @@
   globalThis.__chatgptNotifierAutomationRouteRefreshRuntime = Object.freeze({
     version: RUNTIME_VERSION,
     get activeConversationId() { return activeConversationId; },
+    scheduleSync,
     dispose() {
       try { window.removeEventListener('popstate', scheduleSync, true); } catch {}
       try { window.removeEventListener('hashchange', scheduleSync, true); } catch {}
