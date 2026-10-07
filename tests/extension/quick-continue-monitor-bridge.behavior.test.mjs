@@ -85,7 +85,7 @@ test('trusted monitored sends reset the Simple primary timer without affecting p
   assert.match(conversation, /event\?\.isTrusted !== true/);
   assert.match(conversation, /Send timestamped Continue/);
   assert.match(conversation, /Send custom Project Continue/);
-  assert.match(conversation, /data-testid\*="send-button"/);
+  assert.match(conversation, /testId\.includes\('send-button'\)/);
   assert.match(conversation, /event\?\.key !== 'Enter'/);
 });
 
