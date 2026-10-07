@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 11;
+  const RUNTIME_VERSION = 12;
   const previousRuntime = globalThis.ChatGPTQuickContinueConfig;
   if (Number(previousRuntime?.runtimeVersion || 0) === RUNTIME_VERSION) return;
   try { previousRuntime?.dispose?.(); } catch {}
@@ -33,6 +33,14 @@
     stopOnStatus: DEFAULT_STOP_ON_STATUS
   });
   const DEFAULT_SIMPLE_WATCHDOG = Object.freeze({
+    timerMinutes: 30,
+    attempts: 3,
+    stopToRefreshSeconds: 30,
+    refreshToContinueSeconds: 30,
+    respectStopStatusCodes: true,
+    respectContinueStatusCodes: true
+  });
+  const DEFAULT_MONITOR_WATCHDOG = Object.freeze({
     timerMinutes: 30,
     attempts: 3,
     stopToRefreshSeconds: 30,
@@ -146,6 +154,55 @@
       respectContinueStatusCodes
     });
   }
+  function normalizeMonitorWatchdog(value, seedSimpleWatchdog = null) {
+    const raw = value == null ? {} : value;
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('"monitorWatchdog" must be an object.');
+    const seed = seedSimpleWatchdog && typeof seedSimpleWatchdog === 'object' && !Array.isArray(seedSimpleWatchdog) ? seedSimpleWatchdog : {};
+    const timerMinutes = raw.timerMinutes == null
+      ? (seed.timerMinutes == null ? DEFAULT_MONITOR_WATCHDOG.timerMinutes : Number(seed.timerMinutes))
+      : Number(raw.timerMinutes);
+    if (!Number.isFinite(timerMinutes) || timerMinutes < 0.1 || timerMinutes > 1440) {
+      throw new Error('"monitorWatchdog.timerMinutes" must be between 0.1 and 1440.');
+    }
+    const attempts = raw.attempts == null
+      ? (seed.attempts == null ? DEFAULT_MONITOR_WATCHDOG.attempts : Number(seed.attempts))
+      : Number(raw.attempts);
+    if (!Number.isInteger(attempts) || attempts < 0 || attempts > 20) {
+      throw new Error('"monitorWatchdog.attempts" must be an integer between 0 and 20.');
+    }
+    const stopToRefreshSeconds = raw.stopToRefreshSeconds == null
+      ? DEFAULT_MONITOR_WATCHDOG.stopToRefreshSeconds
+      : Number(raw.stopToRefreshSeconds);
+    if (!Number.isFinite(stopToRefreshSeconds) || stopToRefreshSeconds < 0 || stopToRefreshSeconds > 3600) {
+      throw new Error('"monitorWatchdog.stopToRefreshSeconds" must be between 0 and 3600.');
+    }
+    const refreshToContinueSeconds = raw.refreshToContinueSeconds == null
+      ? DEFAULT_MONITOR_WATCHDOG.refreshToContinueSeconds
+      : Number(raw.refreshToContinueSeconds);
+    if (!Number.isFinite(refreshToContinueSeconds) || refreshToContinueSeconds < 0 || refreshToContinueSeconds > 3600) {
+      throw new Error('"monitorWatchdog.refreshToContinueSeconds" must be between 0 and 3600.');
+    }
+    const respectStopStatusCodes = raw.respectStopStatusCodes == null
+      ? (typeof seed.respectStopStatusCodes === 'boolean' ? seed.respectStopStatusCodes : DEFAULT_MONITOR_WATCHDOG.respectStopStatusCodes)
+      : raw.respectStopStatusCodes;
+    if (typeof respectStopStatusCodes !== 'boolean') {
+      throw new Error('"monitorWatchdog.respectStopStatusCodes" must be true or false.');
+    }
+    const respectContinueStatusCodes = raw.respectContinueStatusCodes == null
+      ? (typeof seed.respectContinueStatusCodes === 'boolean' ? seed.respectContinueStatusCodes : DEFAULT_MONITOR_WATCHDOG.respectContinueStatusCodes)
+      : raw.respectContinueStatusCodes;
+    if (typeof respectContinueStatusCodes !== 'boolean') {
+      throw new Error('"monitorWatchdog.respectContinueStatusCodes" must be true or false.');
+    }
+    return Object.freeze({
+      timerMinutes: Math.round(timerMinutes * 1000) / 1000,
+      attempts,
+      stopToRefreshSeconds: Math.round(stopToRefreshSeconds * 1000) / 1000,
+      refreshToContinueSeconds: Math.round(refreshToContinueSeconds * 1000) / 1000,
+      respectStopStatusCodes,
+      respectContinueStatusCodes
+    });
+  }
 
   function normalizeConfig(value) {
     if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('Config must be a JSON object.');
@@ -160,12 +217,14 @@
     if (!manualTimestampText.includes('{message}')) throw new Error('"manualTimestampText" must include {message}.');
     const watchdog = normalizeWatchdog(value.watchdog);
     const simpleWatchdog = normalizeSimpleWatchdog(value.simpleWatchdog, value.watchdog);
+    const monitorWatchdog = normalizeMonitorWatchdog(value.monitorWatchdog, simpleWatchdog);
     return Object.freeze({
       continueText,
       projectText,
       manualTimestampText,
       watchdog,
       simpleWatchdog,
+      monitorWatchdog,
       projects: Object.freeze(normalizeProjectList(value.projects))
     });
   }
@@ -185,6 +244,14 @@
         refreshToContinueSeconds: value.simpleWatchdog.refreshToContinueSeconds,
         respectStopStatusCodes: value.simpleWatchdog.respectStopStatusCodes,
         respectContinueStatusCodes: value.simpleWatchdog.respectContinueStatusCodes
+      },
+      monitorWatchdog: {
+        timerMinutes: value.monitorWatchdog.timerMinutes,
+        attempts: value.monitorWatchdog.attempts,
+        stopToRefreshSeconds: value.monitorWatchdog.stopToRefreshSeconds,
+        refreshToContinueSeconds: value.monitorWatchdog.refreshToContinueSeconds,
+        respectStopStatusCodes: value.monitorWatchdog.respectStopStatusCodes,
+        respectContinueStatusCodes: value.monitorWatchdog.respectContinueStatusCodes
       },
       projects: [...value.projects]
     };
@@ -268,6 +335,7 @@
     normalizeConfig,
     normalizeWatchdog,
     normalizeSimpleWatchdog,
+    normalizeMonitorWatchdog,
     statusCodes: STATUS_CODES,
     dispose() {
       try { chrome.storage.onChanged.removeListener(handleStorageChanged); } catch {}
