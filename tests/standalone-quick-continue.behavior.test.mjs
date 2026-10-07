@@ -109,20 +109,22 @@ test('runtime reset disposes stale page runtimes before current scripts rebind t
     },
     __chatgptQuickContinueRuntime: { dispose: () => disposed.push('content') },
     __chatgptQuickContinueHoverEditRuntime: { dispose: () => disposed.push('hover') },
+    __chatgptQuickContinueMonitorWatchdogRuntime: { dispose: () => disposed.push('monitor') },
     __chatgptQuickContinueConversationStateRuntime: { dispose: () => disposed.push('conversation') }
   };
   context.globalThis = context;
   vm.runInNewContext(runtimeResetSource, context);
-  assert.deepEqual(disposed.sort(), ['content', 'conversation', 'hover']);
+  assert.deepEqual(disposed.sort(), ['content', 'conversation', 'hover', 'monitor']);
   assert.equal('__chatgptQuickContinueRuntime' in context, false);
   assert.equal('__chatgptQuickContinueHoverEditRuntime' in context, false);
+  assert.equal('__chatgptQuickContinueMonitorWatchdogRuntime' in context, false);
   assert.equal('__chatgptQuickContinueConversationStateRuntime' in context, false);
   context.__chatgptQuickContinueLifecycle.register({ dispose: () => disposed.push('lost-global-runtime') });
   context.document.dispatchEvent(new Event('chatgpt-quick-continue-runtime-reset'));
   assert.equal(disposed.at(-1), 'lost-global-runtime');
 });
 
-test('bundled JSON contains editable prompt templates, saved projects, and Simple fallback timing/status gates', () => {
+test('bundled JSON contains editable prompt templates, saved projects, and independent watchdog defaults', () => {
   assert.equal(bundledConfig.continueText, '[{time}] Continue until you finish or need something from me.');
   assert.equal(bundledConfig.projectText, '[{time}] Continue {project} from canonical GitHub state until you finish or need me.');
   assert.equal(bundledConfig.manualTimestampText, '[{time}] {message}');
