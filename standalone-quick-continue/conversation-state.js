@@ -1,11 +1,13 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 9;
+  const RUNTIME_VERSION = 10;
   const STORAGE_PREFIX = 'quick-continue:manual-timestamp:';
   const CLOCK_SELECTOR = '[aria-label="Current local time"]';
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
   const SIMPLE_BUTTON_ID = 'chatgpt-quick-continue-simple-watchdog';
+  const SIMPLE_MENU_ITEMS_ID = 'chatgpt-quick-continue-menu-items';
+  const PRIMARY_WATCHDOG_ATTR = 'data-chatgpt-notifier-primary-watchdog';
   const SIMPLE_ACTION_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_ACTION';
   const SIMPLE_STATE_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATE';
   const SIMPLE_SET_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_SET';
@@ -38,6 +40,7 @@
   let lastSimpleStatusFingerprint = '';
   let simpleStatusInFlightFingerprint = '';
   let simpleConfig = null;
+  let lastMonitorAuthorityToken = '';
   let unsubscribeConfig = null;
   let disposed = false;
   let scheduled = false;
@@ -170,7 +173,7 @@
     const seconds = Math.max(0, Math.ceil((Number(simpleState?.nextAt || 0) - Date.now()) / 1000));
     const countdown = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, '0')}`;
     const phase = simpleState?.phase;
-    const label = phase === 'stop-wait' ? 'Refresh in' : phase === 'refresh-wait' ? 'Continue in' : 'Next auto-continue';
+    const label = phase === 'stop-wait' ? 'Refresh in' : phase === 'refresh-loading' ? 'Waiting for refresh' : phase === 'refresh-wait' ? 'Continue in' : 'Next auto-continue';
     const text = active && exhausted ? 'Auto-continues exhausted'
       : active ? `${label} ${countdown} · ${remaining} auto-continues left`
       : '';
@@ -346,9 +349,10 @@
   function ensureSimpleButton() {
     if (disposed) return;
     const root = document.getElementById(TOOLBAR_ID);
-    if (!root) {
+    const menuItems = root?.querySelector?.(`#${SIMPLE_MENU_ITEMS_ID}`) || null;
+    if (!root || !menuItems) {
       simpleButton = null;
-      simpleRow = null;
+      simpleRow = root?.querySelector?.('#chatgpt-quick-continue-simple-countdown') || null;
       return;
     }
     simpleRow = root.querySelector('#chatgpt-quick-continue-simple-countdown');
@@ -357,30 +361,53 @@
       simpleRow.id = 'chatgpt-quick-continue-simple-countdown';
       simpleRow.hidden = true;
       simpleRow.setAttribute('role', 'group');
-      simpleRow.setAttribute('aria-label', 'Simple auto-continue timer');
+      simpleRow.setAttribute('aria-label', 'Primary auto-continue timer');
       root.append(simpleRow);
     }
     const existing = root.querySelector(`#${SIMPLE_BUTTON_ID}`);
     if (existing) {
       simpleButton = existing;
-      const project = root.querySelector('button[aria-label="Project Continue"]');
-      if (project && simpleButton.nextElementSibling !== project) root.insertBefore(simpleButton, project);
+      if (simpleButton.parentElement !== menuItems) menuItems.prepend(simpleButton);
       renderSimpleState(simpleState);
       return;
     }
     const button = document.createElement('button');
     button.id = SIMPLE_BUTTON_ID;
     button.type = 'button';
-    button.textContent = 'Simple';
-    button.setAttribute('aria-label', 'Toggle simple fallback watchdog');
+    button.textContent = 'Simple watchdog';
+    button.setAttribute('aria-label', 'Toggle Simple watchdog');
     button.setAttribute('aria-pressed', String(simpleEnabled));
     styleSimpleButton(button);
+    Object.assign(button.style, { width: '100%', textAlign: 'left' });
     button.addEventListener('click', handleSimpleButtonClick);
-    const project = root.querySelector('button[aria-label="Project Continue"]');
-    if (project) root.insertBefore(button, project);
-    else root.append(button);
+    menuItems.prepend(button);
     simpleButton = button;
     renderSimpleState(simpleState);
+  }
+
+  function monitorWatchdogAuthority() {
+    let raw = '';
+    try { raw = String(document.documentElement?.getAttribute?.(PRIMARY_WATCHDOG_ATTR) || ''); } catch {}
+    if (!raw) return null;
+    let value = null;
+    try { value = JSON.parse(raw); } catch { return null; }
+    const conversationId = String(value?.conversationId || '');
+    if (conversationId !== conversationIdFromUrl()) return null;
+    return {
+      conversationId,
+      enabled: value?.enabled === true,
+      stateRevision: Math.max(0, Number(value?.stateRevision || 0))
+    };
+  }
+
+  function applyMonitorWatchdogAuthority() {
+    if (disposed) return;
+    const authority = monitorWatchdogAuthority();
+    if (!authority) return;
+    const token = `${authority.conversationId}|${authority.enabled ? 1 : 0}|${authority.stateRevision}`;
+    if (token === lastMonitorAuthorityToken) return;
+    lastMonitorAuthorityToken = token;
+    if (authority.enabled !== simpleEnabled) setSimpleEnabled(authority.enabled).catch(() => {});
   }
 
   async function restoreSimpleForConversation(conversationId) {
@@ -395,6 +422,8 @@
       if (disposed || generation !== simpleRestoreGeneration || activeConversationId !== conversationId) return;
       if (signal) await applyTerminalSignal(signal);
     }
+    if (disposed || generation !== simpleRestoreGeneration || activeConversationId !== conversationId) return;
+    applyMonitorWatchdogAuthority();
   }
 
   function composerElement() {
@@ -476,6 +505,7 @@
       activeConversationId = nextConversationId;
       lastSimpleStatusFingerprint = '';
       simpleStatusInFlightFingerprint = '';
+      lastMonitorAuthorityToken = '';
       restoreForConversation(nextConversationId, previousConversationId).catch(() => {});
       // Always query the background on route assignment. Its GET path owns the
       // provisional -> real-conversation migration, while the current UI state
@@ -531,12 +561,14 @@
     applyDesiredState();
   }
 
-  function handleDocumentMutations() {
+  function handleDocumentMutations(records) {
     if (disposed) return;
-    // Route changes are also covered by Navigation/popstate; this observer now
-    // only repairs a detached/remounted toolbar. Terminal GitHub status parsing
-    // stays exclusively in the notifier's rendered-terminal authority.
-    if (!simpleButton?.isConnected || document.getElementById(TOOLBAR_ID) !== simpleButton?.parentElement) scheduleSync();
+    const root = document.getElementById(TOOLBAR_ID);
+    const menuItems = root?.querySelector?.(`#${SIMPLE_MENU_ITEMS_ID}`) || null;
+    if (!simpleButton?.isConnected || simpleButton?.parentElement !== menuItems) scheduleSync();
+    if (Array.from(records || []).some((record) => record.type === 'attributes' && record.attributeName === PRIMARY_WATCHDOG_ATTR)) {
+      applyMonitorWatchdogAuthority();
+    }
   }
 
   try {
@@ -544,7 +576,7 @@
     configApi?.load?.().then((config) => { if (!disposed) simpleConfig = config; }).catch(() => {});
   } catch {}
   observer = new MutationObserver(handleDocumentMutations);
-  observer.observe(document.documentElement, { childList: true, subtree: true });
+  observer.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: [PRIMARY_WATCHDOG_ATTR] });
   document.addEventListener('click', persistUserChoiceSoon, true);
   document.addEventListener('keydown', handleClockKeydown, true);
   window.addEventListener('popstate', scheduleSync, true);
