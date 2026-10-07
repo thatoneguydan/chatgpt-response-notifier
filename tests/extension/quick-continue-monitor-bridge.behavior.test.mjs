@@ -6,192 +6,109 @@ import test from 'node:test';
 const root = new URL('../../', import.meta.url);
 const readText = (relative) => readFileSync(new URL(relative, root), 'utf8');
 
-test('Quick Continue monitoring bridge is shipped through the hot-tab bootstrap path', () => {
+test('Quick Continue primary-watchdog bridge is shipped through the hot-tab bootstrap path', () => {
   const manifest = JSON.parse(readText('extension/manifest.json'));
   const version = readText('VERSION.txt').trim();
   const bootstrap = readText('extension/diagnostics-bootstrap.js');
   const background = readText('extension/quick-continue-monitor-bridge-background.js');
   const bridge = readText('extension/quick-continue-monitor-bridge.js');
   const statusOwner = readText('extension/quick-continue-status-owner-v6.js');
-  const pageAuthority = readText('extension/watchdog-page-authority-v3.js');
   const backgroundAuthority = readText('extension/watchdog-authority-v3-background.js');
 
   assert.equal(manifest.version, version);
-  assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-monitor-bridge.js')));
-  assert.ok(!manifest.content_scripts.some((entry) => Array.isArray(entry.js) && entry.js.includes('quick-continue-status-fallback.js')));
-  assert.ok(!manifest.content_scripts.some((entry) => entry.js?.includes('quick-continue-status-stabilizer.js')));
   const statusEntry = manifest.content_scripts.find((entry) => entry.js?.includes('quick-continue-status-owner-v6.js'));
   assert.equal(statusEntry?.run_at, 'document_start');
-  const watchdogEntry = manifest.content_scripts.find((entry) => Array.isArray(entry.js) && entry.js.includes('watchdog-page-authority-v3.js'));
-  assert.ok(watchdogEntry);
-  assert.equal(watchdogEntry.run_at, 'document_start');
   assert.match(bootstrap, /importScripts\('quick-continue-monitor-bridge-background\.js'\)/);
-  assert.match(bootstrap, /importScripts\('watchdog-authority-v3-background\.js'\)/);
   assert.match(background, /BRIDGE_FILE = 'quick-continue-monitor-bridge\.js'/);
   assert.match(background, /STATUS_FILE = 'quick-continue-status-owner-v6\.js'/);
-  assert.match(background, /BRIDGE_RUNTIME_VERSION = 6/);
-  assert.match(background, /STATUS_RUNTIME_VERSION = 8/);
+  assert.match(background, /BRIDGE_RUNTIME_VERSION = 7/);
+  assert.match(background, /STATUS_RUNTIME_VERSION = 9/);
+  assert.match(statusOwner, /RUNTIME_VERSION = 9/);
+  assert.match(backgroundAuthority, /STATUS_RUNTIME_VERSION = 9/);
+
   const bridgeRuntimeVersion = Number(bridge.match(/const RUNTIME_VERSION = (\d+)/)?.[1] || 0);
   const requiredBridgeRuntimeVersion = Number(background.match(/const BRIDGE_RUNTIME_VERSION = (\d+)/)?.[1] || 0);
-  assert.ok(bridgeRuntimeVersion > 0);
-  assert.equal(requiredBridgeRuntimeVersion, bridgeRuntimeVersion, 'hot-tab bootstrap must require the exact current Quick Continue bridge generation');
-  assert.match(background, /runtimeCurrent\(tabId, 'CHATGPT_NOTIFIER_QUICK_STATUS_PING', STATUS_RUNTIME_VERSION\)/);
-  assert.match(background, /files:\s*\[BRIDGE_FILE\]/);
-  assert.match(background, /files:\s*\[STATUS_FILE\]/);
-  assert.match(background, /ensureExistingTabs/);
-  assert.match(background, /chrome\.tabs\.onUpdated\.addListener/);
-  assert.match(background, /CHATGPT_NOTIFIER_QUICK_BRIDGE_PING/);
-  assert.match(background, /CHATGPT_NOTIFIER_QUICK_STATUS_PING/);
-  assert.match(statusOwner, /RUNTIME_VERSION = 8/);
-  assert.match(backgroundAuthority, /STATUS_RUNTIME_VERSION = 8/);
-
+  assert.equal(requiredBridgeRuntimeVersion, bridgeRuntimeVersion);
   assert.doesNotThrow(() => new vm.Script(background));
   assert.doesNotThrow(() => new vm.Script(bridge));
   assert.doesNotThrow(() => new vm.Script(statusOwner));
-  assert.doesNotThrow(() => new vm.Script(pageAuthority));
-  assert.doesNotThrow(() => new vm.Script(backgroundAuthority));
 });
 
-test('Continue and Project actions enable monitoring before arming the fresh user turn', () => {
+test('Continue and Project actions enable Monitor but never arm the retired notifier watchdog', () => {
   const bridge = readText('extension/quick-continue-monitor-bridge.js');
 
   assert.match(bridge, /Send timestamped Continue/);
   assert.match(bridge, /Send custom Project Continue/);
-  assert.match(bridge, /\^Continue\\s\+\.\+/);
   assert.match(bridge, /type:\s*'SET_BUILD_AUTOMATION_STATE_FOR_SENDER'/);
   assert.match(bridge, /enabled:\s*true/);
-  assert.match(bridge, /type:\s*'ARM_CODE_WATCHDOG_FOR_SENDER'/);
-  assert.match(bridge, /source:\s*`quick-\$\{action\}-fresh-turn`/);
-
-  const enableIndex = bridge.indexOf('const enabledPromise = enableAutomationForQuickAction()');
-  const freshTurnIndex = bridge.indexOf('const newUserKey = await waitForNewUserTurn(previousUserKey)');
-  const armIndex = bridge.indexOf("type: 'ARM_CODE_WATCHDOG_FOR_SENDER'", freshTurnIndex);
-  assert.ok(enableIndex >= 0 && freshTurnIndex > enableIndex && armIndex > freshTurnIndex);
+  assert.doesNotMatch(bridge, /ARM_CODE_WATCHDOG_FOR_SENDER/);
+  assert.doesNotMatch(bridge, /RUN_CODE_WATCHDOG_NOW_V3/);
+  assert.doesNotMatch(bridge, /PARK_CODE_WATCHDOG_FOR_TERMINAL_STATUS_FOR_SENDER/);
+  assert.doesNotMatch(bridge, /latestAssistantSnapshot|statusCode|assistantKey/);
 });
 
-test('trusted manual and Quick Continue sends explicitly reset the fresh-turn 30-minute watchdog', () => {
-  const pageAuthority = readText('extension/watchdog-page-authority-v3.js');
+test('production bootstrap selects Simple as the only automatic watchdog scheduler', () => {
+  const background = readText('extension/background.js');
+  const monitor = readText('extension/monitor-background.js');
+  const soleAuthority = readText('extension/watchdog-sole-continuation-authority-background.js');
 
-  assert.match(pageAuthority, /event\?\.isTrusted !== true/);
-  assert.match(pageAuthority, /handleTrustedClick/);
-  assert.match(pageAuthority, /handleTrustedKeydown/);
-  assert.match(pageAuthority, /handleTrustedSubmit/);
-  assert.doesNotMatch(pageAuthority, /quick-toolbar-fresh-turn-v3/);
-  assert.match(pageAuthority, /trusted-send-click-v3/);
-  assert.match(pageAuthority, /trusted-enter-submit-v3/);
-  assert.match(pageAuthority, /type:\s*'ARM_CODE_WATCHDOG_FOR_SENDER'/);
-  assert.match(pageAuthority, /const newUserKey = await waitForNewUserTurn\(previousUserKey\)/);
-  assert.match(pageAuthority, /overview\?\.automationEnabled !== true/);
-  assert.doesNotMatch(pageAuthority, /SET_BUILD_AUTOMATION_STATE_FOR_SENDER/);
+  assert.match(background, /__chatgptNotifierPrimaryWatchdogMode = Object\.freeze\(\{[\s\S]*simplePrimary: true/);
+  assert.match(monitor, /LEGACY_CODE_WATCHDOG_RETIRED = globalThis\.__chatgptNotifierPrimaryWatchdogMode\?\.simplePrimary === true/);
+  assert.match(monitor, /if \(LEGACY_CODE_WATCHDOG_RETIRED\) \{[\s\S]*clearCodeWatchdog\(conversationId\)/);
+  assert.match(monitor, /reason: 'legacy-watchdog-retired'/);
+  assert.match(soleAuthority, /legacyWatchdogRetired = globalThis\.__chatgptNotifierLegacyWatchdogRetired === true/);
+  assert.match(soleAuthority, /if \(!legacyWatchdogRetired\) retireShortCadenceState/);
 });
 
-test('Quick Continue bridge suppresses the legacy click-time arm before the fresh turn exists', () => {
-  const bridge = readText('extension/quick-continue-monitor-bridge.js');
+test('Monitor publishes its state to Quick Continue and Simple consumes that state after restore', () => {
+  const attachment = readText('extension/attachment-script.js');
+  const conversation = readText('standalone-quick-continue/conversation-state.js');
 
-  assert.match(bridge, /window\.addEventListener\('click', handleQuickAction, \{ capture: true/);
-  assert.doesNotMatch(bridge, /document\.addEventListener\('click', handleQuickAction/);
-  assert.doesNotMatch(bridge, /LEGACY_MASKED_ARIA_LABEL|MutationObserver.*toolbar|style\.display/);
+  assert.match(attachment, /PRIMARY_WATCHDOG_ATTR = 'data-chatgpt-notifier-primary-watchdog'/);
+  assert.match(attachment, /publishPrimaryWatchdogAuthority/);
+  assert.match(attachment, /enabled: overview\.automationEnabled === true && overview\.pausedByUser !== true/);
+  assert.match(attachment, /setAttribute\?\.\(PRIMARY_WATCHDOG_ATTR, JSON\.stringify\(command\)\)/);
+
+  assert.match(conversation, /PRIMARY_WATCHDOG_ATTR = 'data-chatgpt-notifier-primary-watchdog'/);
+  assert.match(conversation, /function monitorWatchdogAuthority\(\)/);
+  assert.match(conversation, /if \(disposed \|\| !simpleRestoreReady\) return/);
+  assert.match(conversation, /if \(authority\.enabled !== simpleEnabled\) setSimpleEnabled\(authority\.enabled\)/);
+  assert.match(conversation, /simpleRestoreReady = true;[\s\S]*applyMonitorWatchdogAuthority\(\)/);
 });
 
-test('definitive rendered statuses have both legacy and v3 authoritative stop routes', () => {
-  const bridge = readText('extension/quick-continue-monitor-bridge.js');
-  const pageAuthority = readText('extension/watchdog-page-authority-v3.js');
-  const backgroundAuthority = readText('extension/watchdog-authority-v3-background.js');
+test('trusted monitored sends reset the Simple primary timer without affecting programmatic auto-continues', () => {
+  const conversation = readText('standalone-quick-continue/conversation-state.js');
 
-  for (const code of ['PLANNING_ACTIVE', 'COMPLETE_APPLIED', 'COMPLETE_NO_CHANGES', 'BLOCKED_HUMAN']) {
-    assert.ok(bridge.includes(`'${code}'`));
-    assert.ok(pageAuthority.includes(`'${code}'`));
-  }
-  assert.match(bridge, /type:\s*'PARK_CODE_WATCHDOG_FOR_TERMINAL_STATUS_FOR_SENDER'/);
-  assert.match(pageAuthority, /type:\s*'FORCE_PARK_CODE_WATCHDOG_TERMINAL_V3'/);
-  assert.match(backgroundAuthority, /monitor\.parkCodeWatchdogForTerminalStatus/);
-  assert.match(backgroundAuthority, /terminal-stop-not-persisted/);
+  assert.match(conversation, /function restartPrimaryWatchdogFromTrustedSend\(\)/);
+  assert.match(conversation, /authority\?\.enabled !== true/);
+  assert.match(conversation, /setSimpleEnabled\(true\)/);
+  assert.match(conversation, /event\?\.isTrusted !== true/);
+  assert.match(conversation, /Send timestamped Continue/);
+  assert.match(conversation, /Send custom Project Continue/);
+  assert.match(conversation, /data-testid\*="send-button"/);
+  assert.match(conversation, /event\?\.key !== 'Enter'/);
 });
 
-test('Quick Continue bridge leaves draft typing quiet but still parks on a changed assistant terminal', async () => {
-  let observerCallback;
-  let scans = 0;
-  let statusCode = '';
-  let timerId = 0;
-  const timers = new Map();
-  const messages = [];
-  const composer = {};
-  const assistant = {};
-  const context = vm.createContext({
-    AbortController, URL, location: { href: 'https://chatgpt.com/c/bridge-performance', pathname: '/c/bridge-performance' },
-    document: { documentElement: {}, getElementById: () => null, querySelectorAll: () => [], addEventListener() {} },
-    window: { addEventListener() {} },
-    MutationObserver: class {
-      constructor(callback) { observerCallback = callback; }
-      observe() {}
-      disconnect() {}
-    },
-    setTimeout(callback) { const id = ++timerId; timers.set(id, callback); return id; },
-    clearTimeout(id) { timers.delete(id); },
-    ChatGPTNotifierOwnedDomMutationFilter: { isComposerTextMutation: (record) => record.target === composer },
-    __chatgptNotifierStatusDom: { latestAssistantSnapshot() {
-      scans += 1;
-      return { statusCode, conversationId: 'bridge-performance', promptKey: 'fresh-prompt' };
-    } },
-    chrome: { runtime: {
-      onMessage: { addListener() {}, removeListener() {} },
-      async sendMessage(message) { messages.push(message); return { ok: true }; }
-    } }
-  });
-  vm.runInContext(readText('extension/quick-continue-monitor-bridge.js'), context);
-  const settle = async () => {
-    while (timers.size) {
-      const callback = timers.values().next().value;
-      callback();
-      await Promise.resolve();
-    }
-    await Promise.resolve();
-  };
-  await settle();
-  assert.equal(scans, 1);
-  for (let index = 0; index < 40; index += 1) observerCallback([{ type: 'childList', target: composer }]);
-  await settle();
-  assert.equal(scans, 1, 'draft edits must not clone/read submitted assistant content');
-  statusCode = 'COMPLETE_APPLIED';
-  observerCallback([{ type: 'characterData', target: composer }, { type: 'characterData', target: assistant }]);
-  await settle();
-  assert.equal(scans, 2, 'a real assistant change must still be inspected');
-  assert.equal(messages.length, 1);
-  assert.equal(messages[0].type, 'PARK_CODE_WATCHDOG_FOR_TERMINAL_STATUS_FOR_SENDER');
-  assert.equal(messages[0].statusCode, 'COMPLETE_APPLIED');
-});
-
-test('status presentation has one durable DOM owner and quarantines stale pre-v8 timer surfaces', () => {
+test('the retired notifier watchdog timer surface removes stale nodes and has no send authority', () => {
   const owner = readText('extension/quick-continue-status-owner-v6.js');
 
-  assert.match(owner, /RUNTIME_VERSION = 8/);
-  assert.match(owner, /STATUS_OWNER_ATTR = 'data-chatgpt-notifier-watchdog-status-owner'/);
-  assert.match(owner, /UI_OWNER_ATTR = 'data-chatgpt-notifier-watchdog-ui-owner'/);
-  assert.match(owner, /STATUS_ID = `chatgpt-notifier-watchdog-status-v8-\$\{ownerToken\}`/);
-  assert.match(owner, /function ownsUi\(\)/);
-  assert.match(owner, /function claimUi\(\)/);
-  assert.match(owner, /function relinquishUi\(\)/);
-  assert.match(owner, /removeSupersededOwnedRows/);
-  assert.match(owner, /\[id\^="chatgpt-notifier-countdown-v"\]/);
-  assert.match(owner, /\[id\^="chatgpt-notifier-countdown-fallback-v"\]/);
-  assert.match(owner, /display: none !important/);
-  assert.match(owner, /width: calc\(100% \+ 2px\)/);
-  assert.match(owner, /color: #111/);
-  assert.match(owner, /text-align: right/);
-  assert.match(owner, /overflow-wrap: anywhere/);
-  assert.match(owner, /Stop current auto-continue timer/);
-  assert.match(owner, /STOP_CODE_WATCHDOG_TIMER_FOR_SENDER/);
-  assert.match(owner, /stopReason\.startsWith\('status:'\)/);
-  assert.match(owner, /manualOnly/);
-  assert.match(owner, /waitingForRequestStart === true/);
-  assert.match(owner, /highestStateRevision/);
-  assert.match(owner, /highestWatchdogRevision/);
-  assert.match(owner, /overview\.codeWatchdog && !candidate\.codeWatchdog/);
-  assert.match(owner, /RUN_CODE_WATCHDOG_NOW_V3/);
-  assert.match(owner, /Sending auto-continue…/);
-  assert.doesNotMatch(owner, /Auto-continue due/);
-  assert.match(owner, /if \(!ownsUi\(\)\) \{\s*relinquishUi\(\);/);
-  assert.doesNotMatch(owner, /MutationObserver/);
+  assert.match(owner, /RUNTIME_VERSION = 9/);
+  assert.match(owner, /legacyWatchdogRetired: true/);
+  assert.match(owner, /removeLegacyWatchdogUi/);
+  assert.match(owner, /data-chatgpt-notifier-watchdog-status-owner/);
+  assert.match(owner, /chatgpt-notifier-countdown-v/);
+  assert.doesNotMatch(owner, /RUN_CODE_WATCHDOG_NOW_V3/);
+  assert.doesNotMatch(owner, /STOP_CODE_WATCHDOG_TIMER_FOR_SENDER/);
+  assert.doesNotMatch(owner, /RESET_CODE_WATCHDOG_BUDGET_FOR_SENDER/);
+  assert.doesNotMatch(owner, /setInterval/);
   assert.doesNotMatch(owner, /fetch\(/);
   assert.doesNotMatch(owner, /XMLHttpRequest/);
+});
+
+test('bridge only synchronizes local policy state and does not add ChatGPT network traffic', () => {
+  const bridge = readText('extension/quick-continue-monitor-bridge.js');
+
+  assert.match(bridge, /SET_CODE_WATCHDOG_SETTINGS_FOR_SENDER/);
+  assert.match(bridge, /data-watchdog-settings/);
+  assert.doesNotMatch(bridge, /backend-api|XMLHttpRequest|WebSocket|fetch\(/);
 });
