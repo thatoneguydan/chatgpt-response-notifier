@@ -721,12 +721,12 @@ test('extension update hot-activates reload-safe watchdog page runtimes in alrea
   const attachment = text('extension/attachment-script.js');
   const monitor = text('extension/monitor-background.js');
 
-  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 14/);
+  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 15/);
   assert.match(attachment, /CHATGPT_NOTIFIER_ATTACHMENT_PING/);
   assert.match(attachment, /runtimeVersion: ATTACHMENT_RUNTIME_VERSION/);
   assert.match(attachment, /extensionVersion/);
 
-  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 14/);
+  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 15/);
   assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 12/);
   assert.match(monitor, /HOT_PAGE_STATUS_RUNTIME_VERSION = 15/);
   assert.match(monitor, /HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3/);
