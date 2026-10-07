@@ -9,6 +9,7 @@ const SIMPLE_GET_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_GET';
 const SIMPLE_STATUS_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATUS';
 const SIMPLE_ACTION_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_ACTION';
 const SIMPLE_STATE_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATE';
+const ROUTE_CHANGED_MESSAGE = 'QUICK_CONTINUE_ROUTE_CHANGED';
 const SIMPLE_REFRESH_READY_POLL_MS = 1000;
 const SIMPLE_REFRESH_STALL_MS = 60_000;
 const STATUS_CODES = Object.freeze([
@@ -468,6 +469,18 @@ chrome.alarms.onAlarm.addListener((alarm) => {
   const tabId = Number.parseInt(String(alarm.name).slice(SIMPLE_ALARM_PREFIX.length), 10);
   if (!Number.isInteger(tabId)) return;
   queueSimpleWork(() => handleSimpleAlarm(tabId)).catch(() => {});
+});
+
+chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  if (!Number.isInteger(tabId) || typeof changeInfo?.url !== 'string') return;
+  if (!/^https:\/\/chatgpt\.com\//i.test(changeInfo.url)) return;
+  try {
+    const delivery = chrome.tabs.sendMessage(tabId, {
+      type: ROUTE_CHANGED_MESSAGE,
+      url: changeInfo.url
+    });
+    if (delivery && typeof delivery.catch === 'function') delivery.catch(() => {});
+  } catch {}
 });
 
 chrome.tabs.onRemoved.addListener((tabId) => {

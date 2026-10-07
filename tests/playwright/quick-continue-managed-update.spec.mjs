@@ -50,7 +50,8 @@ function loadManagedUpdatePolicy(runningVersion = '1.2.26') {
         get: async () => null,
         reload: async () => {},
         sendMessage: async () => ({ ok: true }),
-        onRemoved: { addListener: () => {} }
+        onRemoved: { addListener: () => {} },
+        onUpdated: { addListener: () => {} }
       },
       scripting: { executeScript: async () => {} }
     }

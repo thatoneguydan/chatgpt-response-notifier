@@ -178,7 +178,7 @@ const fixtureHtml = String.raw`<!doctype html>
 </body>
 </html>`;
 
-async function discoverExtensionWorlds(page) {
+async function discoverExtensionWorlds(page, expectedHrefPrefix = fixtureUrl) {
   const session = await page.context().newCDPSession(page);
   const contexts = new Map();
   session.on('Runtime.executionContextCreated', ({ context }) => {
@@ -244,7 +244,7 @@ async function discoverExtensionWorlds(page) {
     for (const extensionName of ['ChatGPT Quick Continue', 'ChatGPT Response Notifier']) {
       const matches = candidates.filter((candidate) =>
         candidate.extensionName === extensionName
-        && candidate.href.startsWith('https://chatgpt.com/c/playwright-browser-regression')
+        && candidate.href.startsWith(expectedHrefPrefix)
         && candidate.hasComposer
       );
       if (matches.length === 1) selected.set(extensionName, matches[0]);
@@ -261,7 +261,7 @@ async function discoverExtensionWorlds(page) {
   for (const extensionName of ['ChatGPT Quick Continue', 'ChatGPT Response Notifier']) {
     const matches = diagnostics.filter((candidate) =>
       candidate.extensionName === extensionName
-      && candidate.href.startsWith('https://chatgpt.com/c/playwright-browser-regression')
+      && candidate.href.startsWith(expectedHrefPrefix)
       && candidate.hasComposer
     );
     if (matches.length !== 1) {
@@ -278,8 +278,8 @@ async function discoverExtensionWorlds(page) {
   };
 }
 
-export async function evaluateInExtensionWorld(page, extensionName, expression) {
-  const { session, names } = await discoverExtensionWorlds(page);
+export async function evaluateInExtensionWorld(page, extensionName, expression, expectedHrefPrefix = fixtureUrl) {
+  const { session, names } = await discoverExtensionWorlds(page, expectedHrefPrefix);
   try {
     const contextId = names.get(extensionName);
     if (!contextId) throw new Error(`Extension world not found: ${extensionName}`);

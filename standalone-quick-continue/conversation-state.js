@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 10;
+  const RUNTIME_VERSION = 11;
   const STORAGE_PREFIX = 'quick-continue:manual-timestamp:';
   const CLOCK_SELECTOR = '[aria-label="Current local time"]';
   const TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
@@ -10,6 +10,7 @@
   const PRIMARY_WATCHDOG_ATTR = 'data-chatgpt-notifier-primary-watchdog';
   const SIMPLE_ACTION_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_ACTION';
   const SIMPLE_STATE_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATE';
+  const ROUTE_CHANGED_MESSAGE = 'QUICK_CONTINUE_ROUTE_CHANGED';
   const SIMPLE_SET_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_SET';
   const SIMPLE_GET_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_GET';
   const SIMPLE_STATUS_MESSAGE = 'QUICK_CONTINUE_SIMPLE_WATCHDOG_STATUS';
@@ -480,6 +481,11 @@
 
   function handleRuntimeMessage(message, _sender, sendResponse) {
     if (disposed) return false;
+    if (message?.type === ROUTE_CHANGED_MESSAGE) {
+      scheduleSync();
+      sendResponse?.({ ok: true });
+      return false;
+    }
     if (message?.type === SIMPLE_STATE_MESSAGE) {
       simpleRestoreGeneration += 1;
       if (!message.state?.conversationId || message.state.conversationId === conversationIdFromUrl()) renderSimpleState(message.state);
@@ -616,7 +622,8 @@
     if (disposed) return;
     const root = document.getElementById(TOOLBAR_ID);
     const menuItems = root?.querySelector?.(`#${SIMPLE_MENU_ITEMS_ID}`) || null;
-    if (!simpleButton?.isConnected || simpleButton?.parentElement !== menuItems) scheduleSync();
+    const routeChanged = conversationIdFromUrl() !== activeConversationId;
+    if (routeChanged || !simpleButton?.isConnected || simpleButton?.parentElement !== menuItems) scheduleSync();
     if (Array.from(records || []).some((record) => record.type === 'attributes' && record.attributeName === PRIMARY_WATCHDOG_ATTR)) {
       applyMonitorWatchdogAuthority();
     }
