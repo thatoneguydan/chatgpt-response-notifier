@@ -195,7 +195,7 @@
     watchdogPauseButton.disabled = !monitoring;
     watchdogResetButton.disabled = !monitoring;
 
-    const shouldResume = paused || !running;
+    const shouldResume = paused || !running || state?.exhausted === true;
     watchdogPauseButton.textContent = shouldResume ? '▶' : 'Ⅱ';
     watchdogPauseButton.setAttribute('aria-label', shouldResume ? 'Resume Monitor watchdog' : 'Pause Monitor watchdog');
     watchdogResetButton.textContent = '↻';
@@ -212,7 +212,7 @@
       event.preventDefault();
       event.stopPropagation();
       const state = monitorWatchdogState();
-      const shouldResume = state?.paused === true || state?.phase === 'paused' || state?.enabled !== true;
+      const shouldResume = state?.paused === true || state?.phase === 'paused' || state?.enabled !== true || state?.exhausted === true;
       publishMonitorWatchdogControl(shouldResume ? 'resume' : 'pause');
     });
 
