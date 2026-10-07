@@ -964,7 +964,6 @@
       return null;
     }
     const run = await updateRun(clean, sender);
-    const runStarted = Number(run?.createdAt || 0) > 0 && Number(run?.createdAt || 0) === Number(run?.updatedAt || 0);
     let watchdogChanged = false;
     if (LEGACY_CODE_WATCHDOG_RETIRED) {
       const existing = await readCodeWatchdog(clean.conversationId);
@@ -980,7 +979,7 @@
       watchdogChanged = watchdogSignature !== previousWatchdogSignature;
       if (watchdogChanged) codeWatchdogOverviewSignatures.set(clean.conversationId, watchdogSignature);
     }
-    if ((enrollmentChanged || watchdogChanged || runStarted) && senderTarget) publishAutomationOverview(senderTarget).catch(() => {});
+    if ((enrollmentChanged || watchdogChanged) && senderTarget) publishAutomationOverview(senderTarget).catch(() => {});
     return run;
   }
 
