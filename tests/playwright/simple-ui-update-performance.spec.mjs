@@ -5,6 +5,12 @@ import { test, expect, repoRoot, evaluateInExtensionWorld, extensionWorker } fro
 const toolbar = '#chatgpt-quick-continue-toolbar';
 const simple = '#chatgpt-quick-continue-simple-watchdog';
 const countdown = '#chatgpt-quick-continue-simple-countdown';
+const menuButtonName = 'Quick Continue menu';
+
+async function openQuickContinueMenu(page) {
+  await page.getByRole('button', { name: menuButtonName, exact: true }).click();
+  await expect(page.locator(simple)).toBeVisible();
+}
 const manifest = JSON.parse(fs.readFileSync(path.join(repoRoot, 'standalone-quick-continue/manifest.json'), 'utf8'));
 const runtimeFiles = manifest.content_scripts[0].js;
 
@@ -17,15 +23,18 @@ async function hotReplace(context) {
   }, runtimeFiles);
 }
 
-test('Simple is centered and starts its own timer despite draft, terminal footer and inactive smart monitoring', async ({ fixturePage, chatgptTraffic }) => {
+test('Simple lives in the hamburger menu and starts its own timer despite draft, terminal footer and inactive smart monitoring', async ({ fixturePage, chatgptTraffic }) => {
   await fixturePage.locator('#prompt-textarea').fill('An existing draft must not prevent starting the timer.');
+  await expect(fixturePage.locator(simple)).toBeHidden();
   const buttons = await Promise.all([
     fixturePage.getByRole('button', { name: 'Send timestamped Continue', exact: true }).boundingBox(),
-    fixturePage.locator(simple).boundingBox(),
-    fixturePage.getByRole('button', { name: 'Project Continue', exact: true }).boundingBox()
+    fixturePage.getByRole('button', { name: 'Project Continue', exact: true }).boundingBox(),
+    fixturePage.getByRole('button', { name: menuButtonName, exact: true }).boundingBox()
   ]);
+  expect(buttons.every(Boolean)).toBe(true);
   expect(buttons[0].x).toBeLessThan(buttons[1].x);
   expect(buttons[1].x).toBeLessThan(buttons[2].x);
+  await openQuickContinueMenu(fixturePage);
   const clickedAt = Date.now();
   await fixturePage.locator(simple).click();
   await expect(fixturePage.locator(simple)).toHaveAttribute('aria-pressed', 'true');
@@ -49,18 +58,19 @@ test('Simple starts before a new chat has a saved conversation ID', async ({ fix
     history.pushState({}, '', '/');
     window.__fixture.remountComposer();
   });
-  await expect(fixturePage.locator(simple)).toBeVisible();
+  await expect(fixturePage.locator(simple)).toBeHidden();
+  await openQuickContinueMenu(fixturePage);
   await fixturePage.locator(simple).click();
   await expect(fixturePage.locator(simple)).toHaveAttribute('aria-pressed', 'true');
   await expect(fixturePage.locator(countdown)).toBeVisible();
 });
 
-test('JSON editor clears the visible Simple timer row and fits the viewport', async ({ fixturePage }) => {
+test('JSON editor shares the hamburger popover with Simple and fits the viewport', async ({ fixturePage }) => {
+  await openQuickContinueMenu(fixturePage);
   await fixturePage.locator(simple).click();
   await expect(fixturePage.locator(countdown)).toBeVisible();
-  await fixturePage.getByRole('button', { name: 'Project Continue', exact: true }).click();
   await fixturePage.getByRole('button', { name: 'Edit Quick Continue JSON', exact: true }).click();
-  const frame = fixturePage.locator(`${toolbar} > [role="group"][aria-label="Project Continue"]`);
+  const frame = fixturePage.locator(`${toolbar} > [role="group"][aria-label="Quick Continue menu popover"]`);
   await expect(fixturePage.getByRole('textbox', { name: 'Quick Continue JSON', exact: true })).toBeVisible();
   await expect.poll(async () => {
     const [popover, row] = await Promise.all([frame.boundingBox(), fixturePage.locator(countdown).boundingBox()]);
