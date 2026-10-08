@@ -2,15 +2,17 @@
 
 (() => {
   const QUICK_CONTINUE_TOOLBAR_ID = 'chatgpt-quick-continue-toolbar';
-  const ATTACHMENT_RUNTIME_VERSION = 15;
+  const ATTACHMENT_RUNTIME_VERSION = 17;
   const AUTOMATION_OWNER_ATTR = 'data-chatgpt-notifier-automation-owner';
   const AUTOMATION_UI_OWNER_ATTR = 'data-chatgpt-notifier-automation-ui-owner';
   const PRIMARY_WATCHDOG_ATTR = 'data-chatgpt-notifier-primary-watchdog';
+  const PRIMARY_WATCHDOG_CONTROL_ATTR = 'data-chatgpt-notifier-primary-watchdog-control';
+  const MONITOR_WATCHDOG_STATE_ATTR = 'data-chatgpt-quick-continue-monitor-watchdog-state';
   const automationOwnerToken = (() => {
     try { return crypto.randomUUID(); } catch { return `${Date.now()}-${Math.random()}`; }
   })();
   const AUTOMATION_INDICATOR_ID = `chatgpt-notifier-control-v${ATTACHMENT_RUNTIME_VERSION}-${automationOwnerToken}`;
-  const AUTOMATION_RUNTIME_STYLE_ID = 'chatgpt-notifier-automation-runtime-style-v13';
+  const AUTOMATION_RUNTIME_STYLE_ID = 'chatgpt-notifier-automation-runtime-style-v14';
   const LEGACY_AUTOMATION_INDICATOR_ID = 'chatgpt-notifier-automation-indicator';
 
   let extensionVersion = '';
@@ -69,6 +71,8 @@
 
   let automationIndicator = null;
   let automationDot = null;
+  let watchdogPauseButton = null;
+  let watchdogResetButton = null;
   let automationBusy = false;
   let automationOverview = null;
   let automationIndicatorObserver = null;
@@ -121,6 +125,112 @@
         try { node.remove(); } catch {}
       }
     }
+  }
+
+  function monitorWatchdogState() {
+    let raw = '';
+    try { raw = String(document.documentElement?.getAttribute?.(MONITOR_WATCHDOG_STATE_ATTR) || ''); } catch {}
+    if (!raw) return null;
+    try {
+      const state = JSON.parse(raw);
+      if (!state || typeof state !== 'object') return null;
+      if (String(state.conversationId || '') !== String(automationOverview?.activeConversationId || '')) return null;
+      return state;
+    } catch {
+      return null;
+    }
+  }
+
+  function publishMonitorWatchdogControl(action) {
+    const conversationId = String(automationOverview?.activeConversationId || '');
+    if (!conversationId || automationOverview?.automationEnabled !== true) return false;
+    const command = {
+      conversationId,
+      action: String(action || ''),
+      commandId: (() => { try { return crypto.randomUUID(); } catch { return `${Date.now()}-${Math.random()}`; } })()
+    };
+    try {
+      document.documentElement?.setAttribute?.(PRIMARY_WATCHDOG_CONTROL_ATTR, JSON.stringify(command));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function watchdogButtonBase(button) {
+    Object.assign(button.style, {
+      minWidth: '24px',
+      height: '24px',
+      padding: '0 5px',
+      border: '0',
+      borderRadius: '5px',
+      background: 'transparent',
+      color: 'inherit',
+      display: 'inline-flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      fontSize: '12px',
+      lineHeight: '1',
+      cursor: 'pointer'
+    });
+    button.addEventListener('mouseenter', () => {
+      if (!button.disabled) button.style.background = 'var(--main-surface-tertiary, rgba(127,127,127,.14))';
+    });
+    button.addEventListener('mouseleave', () => { button.style.background = 'transparent'; });
+  }
+
+  function renderWatchdogControls() {
+    if (!watchdogPauseButton || !watchdogResetButton) return;
+    const monitoring = automationOverview?.automationEnabled === true && automationOverview?.pausedByUser !== true;
+    const state = monitorWatchdogState();
+    const paused = state?.paused === true || state?.phase === 'paused';
+    const running = state?.enabled === true;
+
+    watchdogPauseButton.hidden = !monitoring;
+    watchdogResetButton.hidden = !monitoring;
+    // The buttons have inline flex styling, which can override the UA
+    // [hidden] rule. Set display explicitly when monitoring is disabled.
+    watchdogPauseButton.style.display = monitoring ? 'inline-flex' : 'none';
+    watchdogResetButton.style.display = monitoring ? 'inline-flex' : 'none';
+    watchdogPauseButton.disabled = !monitoring;
+    watchdogResetButton.disabled = !monitoring;
+
+    const shouldResume = paused || !running || state?.exhausted === true;
+    watchdogPauseButton.textContent = shouldResume ? '▶' : 'Ⅱ';
+    watchdogPauseButton.setAttribute('aria-label', shouldResume ? 'Resume Monitor watchdog' : 'Pause Monitor watchdog');
+    watchdogResetButton.textContent = '↻';
+    watchdogResetButton.setAttribute('aria-label', 'Reset Monitor watchdog');
+  }
+
+  function buildWatchdogControls() {
+    const pause = document.createElement('button');
+    pause.type = 'button';
+    pause.id = `chatgpt-notifier-monitor-watchdog-pause-v${ATTACHMENT_RUNTIME_VERSION}-${automationOwnerToken}`;
+    pause.setAttribute(AUTOMATION_UI_OWNER_ATTR, automationOwnerToken);
+    watchdogButtonBase(pause);
+    pause.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const state = monitorWatchdogState();
+      const shouldResume = state?.paused === true || state?.phase === 'paused' || state?.enabled !== true || state?.exhausted === true;
+      publishMonitorWatchdogControl(shouldResume ? 'resume' : 'pause');
+    });
+
+    const reset = document.createElement('button');
+    reset.type = 'button';
+    reset.id = `chatgpt-notifier-monitor-watchdog-reset-v${ATTACHMENT_RUNTIME_VERSION}-${automationOwnerToken}`;
+    reset.setAttribute(AUTOMATION_UI_OWNER_ATTR, automationOwnerToken);
+    watchdogButtonBase(reset);
+    reset.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      publishMonitorWatchdogControl('reset');
+    });
+
+    watchdogPauseButton = pause;
+    watchdogResetButton = reset;
+    renderWatchdogControls();
+    return { pause, reset };
   }
 
   function recoveryPauseReason(overview) {
@@ -205,6 +315,7 @@
     automationOverview = next;
     publishPrimaryWatchdogAuthority(next);
     renderAutomationIndicator(next);
+    renderWatchdogControls();
     return automationOverview;
   }
 
@@ -224,11 +335,13 @@
     automationIndicator.dataset.state = mode.key;
     if (mode.disabled) {
       automationDot.style.visibility = 'hidden';
+      renderWatchdogControls();
       return;
     }
     automationDot.style.visibility = 'visible';
     automationDot.style.background = mode.color;
     automationDot.style.boxShadow = 'none';
+    renderWatchdogControls();
   }
 
   function buildAutomationIndicator() {
@@ -292,6 +405,16 @@
     if (existing && existing.parentElement === toolbar) {
       automationIndicator = existing;
       automationDot = existing.firstElementChild;
+      watchdogPauseButton = toolbar.querySelector('[id^="chatgpt-notifier-monitor-watchdog-pause-v"]');
+      watchdogResetButton = toolbar.querySelector('[id^="chatgpt-notifier-monitor-watchdog-reset-v"]');
+      if (!watchdogPauseButton || !watchdogResetButton) {
+        watchdogPauseButton?.remove();
+        watchdogResetButton?.remove();
+        const controls = buildWatchdogControls();
+        existing.insertAdjacentElement('afterend', controls.pause);
+        controls.pause.insertAdjacentElement('afterend', controls.reset);
+      }
+      renderWatchdogControls();
       return existing;
     }
 
@@ -304,7 +427,10 @@
     if (!continueButton) return null;
 
     const indicator = buildAutomationIndicator();
+    const controls = buildWatchdogControls();
     continueButton.insertAdjacentElement('beforebegin', indicator);
+    indicator.insertAdjacentElement('afterend', controls.pause);
+    controls.pause.insertAdjacentElement('afterend', controls.reset);
     return indicator;
   }
 
@@ -323,8 +449,9 @@
     if (automationBusy) return automationOverview;
     const indicator = ensureAutomationIndicator();
     if (!indicator || document.visibilityState === 'hidden') return automationOverview;
+    const requestedPath = location.pathname;
     const overview = await readAutomationOverview();
-    if (!overview) return automationOverview;
+    if (!overview || location.pathname !== requestedPath) return automationOverview;
     return applyAutomationOverview(overview);
   }
 
@@ -398,6 +525,23 @@
     }
   }
 
+  function refreshForRoute() {
+    if (!ownsAutomationUi()) return;
+    automationOverview = null;
+    automationIndicator = null;
+    automationDot = null;
+    watchdogPauseButton = null;
+    watchdogResetButton = null;
+    maintainAutomationIndicator();
+    for (const delay of [50, 250, 1000]) {
+      setTimeout(() => {
+        if (!ownsAutomationUi()) return;
+        maintainAutomationIndicator();
+        refreshAutomationIndicator().catch(() => {});
+      }, delay);
+    }
+  }
+
   function maintainAutomationIndicator() {
     if (!ownsAutomationUi()) return;
     const previousIndicator = automationIndicator;
@@ -441,17 +585,33 @@
   try { chrome.runtime.onMessage.addListener(handleAutomationStateMessage); } catch {}
   document.addEventListener('visibilitychange', handleVisibilityChange, true);
   window.addEventListener('focus', handleWindowFocus, true);
-  automationIndicatorObserver = new MutationObserver(() => {
+  let observedPathname = location.pathname;
+  automationIndicatorObserver = new MutationObserver((records) => {
     if (!ownsAutomationUi()) return;
+    // Reuse this existing observer to catch ChatGPT's pushState-only route
+    // remounts; no extra observer, polling, or per-keystroke URL parsing.
+    if (location.pathname !== observedPathname) {
+      observedPathname = location.pathname;
+      try { globalThis.__chatgptNotifierAutomationRouteRefreshRuntime?.scheduleSync?.(); } catch {}
+    }
     if (!document.getElementById(AUTOMATION_RUNTIME_STYLE_ID)) ensureAutomationRuntimeStyle();
+    if (Array.from(records || []).some((record) => record.type === 'attributes' && record.attributeName === MONITOR_WATCHDOG_STATE_ATTR)) {
+      renderWatchdogControls();
+    }
     maintainAutomationIndicator();
   });
-  automationIndicatorObserver.observe(document.documentElement, { childList: true, subtree: true });
+  automationIndicatorObserver.observe(document.documentElement, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: [MONITOR_WATCHDOG_STATE_ATTR]
+  });
   setTimeout(() => { maintainAutomationIndicator(); }, 100);
 
   globalThis.__chatgptNotifierAttachmentRuntime = Object.freeze({
     version: ATTACHMENT_RUNTIME_VERSION,
     extensionVersion,
+    refreshForRoute,
     dispose() {
       try { if (heartbeatTimerId !== null) clearInterval(heartbeatTimerId); } catch {}
       try { if (heartbeatInitialTimerId !== null) clearTimeout(heartbeatInitialTimerId); } catch {}
@@ -460,6 +620,8 @@
       try { document.removeEventListener('visibilitychange', handleVisibilityChange, true); } catch {}
       try { window.removeEventListener('focus', handleWindowFocus, true); } catch {}
       try { document.getElementById(AUTOMATION_INDICATOR_ID)?.remove(); } catch {}
+      try { watchdogPauseButton?.remove(); } catch {}
+      try { watchdogResetButton?.remove(); } catch {}
       try {
         if (ownsAutomationUi()) {
           document.documentElement?.removeAttribute?.(PRIMARY_WATCHDOG_ATTR);

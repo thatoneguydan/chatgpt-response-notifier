@@ -1,7 +1,7 @@
 'use strict';
 
 (() => {
-  const RUNTIME_VERSION = 2;
+  const RUNTIME_VERSION = 4;
   const AUTOMATION_UI_SELECTOR = '[data-chatgpt-notifier-automation-ui-owner]';
   const previousRuntime = globalThis.__chatgptNotifierAutomationRouteRefreshRuntime;
   if (Number(previousRuntime?.version || 0) === RUNTIME_VERSION) return;
@@ -31,6 +31,10 @@
     }
   }
 
+  function refreshAutomationUi() {
+    try { globalThis.__chatgptNotifierAttachmentRuntime?.refreshForRoute?.(); } catch {}
+  }
+
   function syncRoute() {
     scheduled = false;
     const nextConversationId = conversationIdFromUrl();
@@ -38,15 +42,23 @@
     const previousConversationId = activeConversationId;
     activeConversationId = nextConversationId;
 
-    // A brand-new chat starts without a conversation id. After the first send,
-    // ChatGPT assigns /c/<id> while the background migrates the provisional
-    // automation state. Keep the already-rendered toggle untouched during that
-    // handoff so an "on" toggle cannot flash/revert before migration finishes.
-    if (!previousConversationId && nextConversationId) return;
+    const hadAutomationUi = (() => {
+      try { return Boolean(document.querySelector(AUTOMATION_UI_SELECTOR)); } catch { return false; }
+    })();
 
-    // Normal chat-to-chat navigation must still discard the prior chat's UI so
-    // attachment-script performs a fresh sender-scoped overview read.
+    // A brand-new chat starts without a conversation id. After the first send,
+    // ChatGPT assigns /c/<id> while the already-rendered controls are still
+    // present. Preserve that exact handoff. Coming from the homepage has no
+    // automation UI, so it must take the normal refresh path instead.
+    if (!previousConversationId && nextConversationId && hadAutomationUi) {
+      refreshAutomationUi();
+      return;
+    }
+
+    // Chat-to-chat and homepage-to-chat navigation must discard the prior
+    // route's controls and force a fresh sender-scoped overview read.
     invalidateAutomationUi();
+    refreshAutomationUi();
   }
 
   function scheduleSync() {
@@ -64,6 +76,7 @@
   globalThis.__chatgptNotifierAutomationRouteRefreshRuntime = Object.freeze({
     version: RUNTIME_VERSION,
     get activeConversationId() { return activeConversationId; },
+    scheduleSync,
     dispose() {
       try { window.removeEventListener('popstate', scheduleSync, true); } catch {}
       try { window.removeEventListener('hashchange', scheduleSync, true); } catch {}

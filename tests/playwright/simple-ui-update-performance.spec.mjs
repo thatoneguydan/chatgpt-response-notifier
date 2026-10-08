@@ -111,9 +111,9 @@ test('Monitor arms its independent watchdog without toggling hamburger Simple', 
   // Leave the shared fixture with the hamburger closed for the next route test.
   // Monitor state changes may remount/reconcile toolbar UI, so key cleanup off
   // the actual Simple visibility instead of assuming the prior menu state.
-  if (await fixturePage.locator(simple).isVisible()) {
-    await fixturePage.getByRole('button', { name: menuButtonName, exact: true }).click();
-  }
+  // A route/UI reconciliation can close and immediately rebuild the menu.
+  // Dismiss from outside rather than toggling a potentially replaced button.
+  await fixturePage.locator('#app').click({ position: { x: 12, y: 12 } });
   await expect(fixturePage.locator(simple)).toBeHidden();
 });
 

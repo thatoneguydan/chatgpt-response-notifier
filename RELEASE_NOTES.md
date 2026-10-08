@@ -1,4 +1,10 @@
-# ChatGPT Response Notifier 0.9.103
+# ChatGPT Response Notifier 0.9.104
+
+- Repairs same-document chat navigation and restores the Monitor toggle and controls after returning to a chat from the ChatGPT homepage.
+- Adds independent Monitor watchdog pause/resume and reset controls beside the Monitor indicator. A disabled or exhausted watchdog can be resumed without disabling Monitor itself.
+- Pairs with Quick Continue 1.2.40, which preserves manually paused and stopped watchdog state through reload without mistakenly rearming on unrelated Monitor revisions.
+
+## Previous: 0.9.103
 
 - Release validation now tracks the paired Quick Continue 1.2.37 manifest version, preventing a stale 1.2.36 test expectation from blocking publication after the watchdog refactor.
 - Makes Quick Continue's Simple watchdog the sole production automatic-continuation scheduler behind Monitor; the legacy notifier watchdog scheduler and timer surface are retired in production while historical implementation remains directly testable.

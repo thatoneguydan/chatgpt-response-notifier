@@ -6,6 +6,7 @@
   const MONITOR_SET_MESSAGE = 'QUICK_CONTINUE_MONITOR_WATCHDOG_SET';
   const MONITOR_GET_MESSAGE = 'QUICK_CONTINUE_MONITOR_WATCHDOG_GET';
   const MONITOR_STATUS_MESSAGE = 'QUICK_CONTINUE_MONITOR_WATCHDOG_STATUS';
+  const MONITOR_CONTROL_MESSAGE = 'QUICK_CONTINUE_MONITOR_WATCHDOG_CONTROL';
   const MONITOR_ACTION_MESSAGE = 'QUICK_CONTINUE_MONITOR_WATCHDOG_ACTION';
   const MONITOR_STATE_MESSAGE = 'QUICK_CONTINUE_MONITOR_WATCHDOG_STATE';
   const MONITOR_REFRESH_READY_POLL_MS = 1000;
@@ -96,6 +97,8 @@ function publicMonitorState(state, extras = {}) {
     attemptsRemaining: Math.max(0, Number(state.settings?.attempts || 0) - Number(state.attemptsUsed || 0)),
     nextAt: Number(state.nextAt || 0),
     exhausted: state.exhausted === true || state.phase === 'exhausted',
+    paused: state.paused === true || state.phase === 'paused',
+    pauseReason: String(state.pauseReason || ''),
     lastStatusCode: String(state.lastStatusCode || ''),
     lastStatusFingerprint: String(state.lastStatusFingerprint || ''),
     ...extras
@@ -175,7 +178,7 @@ async function getMonitorWatchdog(sender, message) {
   if (!Number.isInteger(tabId)) return { enabled: false };
   const states = await readMonitorStates();
   const state = states[stateKey(tabId)];
-  if (!state?.enabled) return { enabled: false };
+  if (!state) return { enabled: false };
   const conversationId = String(message?.conversationId || '').trim();
   if (!state.conversationId && conversationId && conversationIdFromUrl(sender?.tab?.url) === conversationId) {
     state.conversationId = conversationId;
@@ -266,6 +269,110 @@ async function applyMonitorStatus(sender, message) {
     statusCode,
     sent: sendResult?.ok === true
   });
+}
+
+async function controlMonitorWatchdog(sender, message) {
+  const tabId = sender?.tab?.id;
+  if (!Number.isInteger(tabId)) return { enabled: false, reason: 'No ChatGPT tab identity.' };
+  const conversationId = String(message?.conversationId || '').trim();
+  if (!conversationId || conversationIdFromUrl(sender?.tab?.url) !== conversationId) {
+    return { enabled: false, reason: 'Chat changed before Monitor watchdog control could apply.' };
+  }
+
+  const action = String(message?.action || '').trim();
+  if (!['pause', 'resume', 'reset'].includes(action)) {
+    return { enabled: false, reason: 'Unknown Monitor watchdog control.' };
+  }
+
+  const states = await readMonitorStates();
+  let state = states[stateKey(tabId)] || null;
+  if (state && state.conversationId !== conversationId) {
+    delete states[stateKey(tabId)];
+    state = null;
+  }
+
+  if (action === 'pause') {
+    if (!state?.enabled) return publicMonitorState(state, { reason: state ? 'already-paused' : 'watchdog-not-running' });
+    state.paused = true;
+    state.pauseReason = 'manual';
+    state.pausedPhase = String(state.phase || 'countdown');
+    state.pausedRemainingMs = Math.max(250, Number(state.nextAt || 0) - Date.now());
+    state.enabled = false;
+    state.phase = 'paused';
+    state.nextAt = 0;
+    states[stateKey(tabId)] = state;
+    await writeMonitorStates(states);
+    try { await chrome.alarms.clear(monitorAlarmName(tabId)); } catch {}
+    await notifyMonitorState(tabId, state);
+    return publicMonitorState(state);
+  }
+
+  if (action === 'resume' && state?.paused === true) {
+    const fallbackMs = Math.max(250, Number(state.settings?.timerMinutes || 30) * 60 * 1000);
+    state.enabled = true;
+    state.paused = false;
+    state.pauseReason = '';
+    state.phase = String(state.pausedPhase || 'countdown');
+    state.nextAt = Date.now() + Math.max(250, Number(state.pausedRemainingMs || fallbackMs));
+    state.pausedPhase = '';
+    state.pausedRemainingMs = 0;
+    return saveAndScheduleMonitorState(state, states);
+  }
+
+  const settings = normalizeMonitorSettings(state?.settings || message?.settings);
+  if (!settings) return { enabled: false, reason: 'Monitor watchdog JSON is invalid.' };
+  if (settings.attempts === 0) return { enabled: false, reason: 'Monitor watchdog attempts are set to 0.' };
+
+  if (action === 'resume' && !state) {
+    return setMonitorWatchdog(sender, {
+      ...message,
+      enabled: true,
+      conversationId,
+      startedAt: Date.now(),
+      settings
+    });
+  }
+
+  if (!state) {
+    return setMonitorWatchdog(sender, {
+      ...message,
+      enabled: true,
+      conversationId,
+      startedAt: Date.now(),
+      settings
+    });
+  }
+
+  const fullDelayMs = settings.timerMinutes * 60 * 1000;
+  const keepManualPause = state.paused === true && state.pauseReason === 'manual';
+  state.settings = settings;
+  state.attemptsUsed = 0;
+  state.exhausted = false;
+  state.lastSendFailure = '';
+  state.reloadStartedAt = 0;
+  if (keepManualPause) {
+    state.enabled = false;
+    state.phase = 'paused';
+    state.paused = true;
+    state.pauseReason = 'manual';
+    state.pausedPhase = 'countdown';
+    state.pausedRemainingMs = fullDelayMs;
+    state.nextAt = 0;
+    states[stateKey(tabId)] = state;
+    await writeMonitorStates(states);
+    try { await chrome.alarms.clear(monitorAlarmName(tabId)); } catch {}
+    await notifyMonitorState(tabId, state);
+    return publicMonitorState(state);
+  }
+
+  state.enabled = true;
+  state.paused = false;
+  state.pauseReason = '';
+  state.phase = 'countdown';
+  state.pausedPhase = '';
+  state.pausedRemainingMs = 0;
+  state.nextAt = Date.now() + fullDelayMs;
+  return saveAndScheduleMonitorState(state, states);
 }
 
 async function handleMonitorAlarm(tabId) {
@@ -365,12 +472,14 @@ async function restoreMonitorAlarms() {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-  if (![MONITOR_SET_MESSAGE, MONITOR_GET_MESSAGE, MONITOR_STATUS_MESSAGE].includes(message?.type)) return false;
+  if (![MONITOR_SET_MESSAGE, MONITOR_GET_MESSAGE, MONITOR_STATUS_MESSAGE, MONITOR_CONTROL_MESSAGE].includes(message?.type)) return false;
   const work = message.type === MONITOR_SET_MESSAGE
     ? () => setMonitorWatchdog(sender, message)
     : message.type === MONITOR_GET_MESSAGE
       ? () => getMonitorWatchdog(sender, message)
-      : () => applyMonitorStatus(sender, message);
+      : message.type === MONITOR_CONTROL_MESSAGE
+        ? () => controlMonitorWatchdog(sender, message)
+        : () => applyMonitorStatus(sender, message);
   queueMonitorWork(work)
     .then((result) => sendResponse(result))
     .catch(() => sendResponse({ enabled: false, reason: 'Monitor watchdog background failure.' }));

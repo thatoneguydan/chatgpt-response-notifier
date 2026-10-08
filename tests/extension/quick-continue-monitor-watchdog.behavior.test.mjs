@@ -13,6 +13,8 @@ const ALARM_PREFIX = 'quick-continue-monitor-watchdog:';
 const SET = 'QUICK_CONTINUE_MONITOR_WATCHDOG_SET';
 const GET = 'QUICK_CONTINUE_MONITOR_WATCHDOG_GET';
 const ACTION = 'QUICK_CONTINUE_MONITOR_WATCHDOG_ACTION';
+const CONTROL = 'QUICK_CONTINUE_MONITOR_WATCHDOG_CONTROL';
+const STATUS = 'QUICK_CONTINUE_MONITOR_WATCHDOG_STATUS';
 
 const tick = () => new Promise((resolve) => setTimeout(resolve, 0));
 
@@ -195,4 +197,103 @@ test('Monitor and Simple configuration objects can diverge without normalization
   assert.equal(simple.attempts, 3);
   assert.equal(monitor.timerMinutes, 12);
   assert.equal(monitor.attempts, 5);
+});
+
+test('Monitor pause persists through GET and resumes the remaining countdown without resetting attempts', async () => {
+  const harness = createHarness();
+  const settings = { ...config.monitorWatchdog, timerMinutes: 30, attempts: 3 };
+  await harness.send({ type: SET, enabled: true, conversationId: 'monitor-mode-test', settings });
+  harness.state().attemptsUsed = 1;
+  harness.state().nextAt = Date.now() + 90_000;
+
+  const paused = await harness.send({
+    type: CONTROL, action: 'pause', conversationId: 'monitor-mode-test'
+  });
+  assert.equal(paused.enabled, false);
+  assert.equal(paused.paused, true);
+  assert.equal(paused.pauseReason, 'manual');
+  assert.equal(paused.attemptsRemaining, 2);
+  assert.equal(paused.phase, 'paused');
+  assert.equal(harness.alarms.has(`${ALARM_PREFIX}${harness.tab.id}`), false);
+
+  const restored = await harness.send({ type: GET, conversationId: 'monitor-mode-test' });
+  assert.equal(restored.paused, true);
+  assert.equal(restored.enabled, false);
+
+  const resumed = await harness.send({
+    type: CONTROL, action: 'resume', conversationId: 'monitor-mode-test'
+  });
+  assert.equal(resumed.enabled, true);
+  assert.equal(resumed.paused, false);
+  assert.equal(resumed.phase, 'countdown');
+  assert.equal(resumed.attemptsRemaining, 2);
+  assert.ok(resumed.nextAt > Date.now() + 80_000);
+  assert.ok(resumed.nextAt < Date.now() + 100_000);
+  assert.equal(harness.alarms.has(`${ALARM_PREFIX}${harness.tab.id}`), true);
+});
+
+test('Monitor reset while manually paused resets the budget but does not silently unpause', async () => {
+  const harness = createHarness();
+  const settings = { ...config.monitorWatchdog, timerMinutes: 20, attempts: 4 };
+  await harness.send({ type: SET, enabled: true, conversationId: 'monitor-mode-test', settings });
+  harness.state().attemptsUsed = 3;
+  await harness.send({ type: CONTROL, action: 'pause', conversationId: 'monitor-mode-test' });
+
+  const reset = await harness.send({
+    type: CONTROL, action: 'reset', conversationId: 'monitor-mode-test'
+  });
+  assert.equal(reset.enabled, false);
+  assert.equal(reset.paused, true);
+  assert.equal(reset.phase, 'paused');
+  assert.equal(reset.attemptsRemaining, 4);
+  assert.equal(harness.alarms.size, 0);
+
+  const resumed = await harness.send({
+    type: CONTROL, action: 'resume', conversationId: 'monitor-mode-test'
+  });
+  assert.equal(resumed.enabled, true);
+  assert.equal(resumed.phase, 'countdown');
+  assert.equal(resumed.attemptsRemaining, 4);
+  assert.ok(resumed.nextAt > Date.now() + (19 * 60_000));
+});
+
+test('Monitor can resume from exhaustion and a respected stop remains stopped after reload', async () => {
+  const harness = createHarness();
+  const settings = { ...config.monitorWatchdog, timerMinutes: 15, attempts: 2 };
+  await harness.send({ type: SET, enabled: true, conversationId: 'monitor-mode-test', settings });
+  Object.assign(harness.state(), { attemptsUsed: 2, phase: 'exhausted', nextAt: 0, exhausted: true });
+  const resumed = await harness.send({
+    type: CONTROL, action: 'resume', conversationId: 'monitor-mode-test'
+  });
+  assert.equal(resumed.enabled, true);
+  assert.equal(resumed.exhausted, false);
+  assert.equal(resumed.phase, 'countdown');
+  assert.equal(resumed.attemptsRemaining, 2);
+
+  const stopped = await harness.send({
+    type: STATUS,
+    conversationId: 'monitor-mode-test',
+    statusCode: 'COMPLETE_APPLIED',
+    statusClass: 'stop',
+    fingerprint: 'stop-status-one',
+    settings
+  });
+  assert.equal(stopped.enabled, false);
+  assert.equal(stopped.statusAction, 'stop');
+  assert.equal(harness.state(), null);
+  const restored = await harness.send({ type: GET, conversationId: 'monitor-mode-test' });
+  assert.equal(restored.enabled, false);
+  assert.equal(harness.alarms.has(`${ALARM_PREFIX}${harness.tab.id}`), false);
+});
+
+test('Monitor authority is edge-triggered and one-shot controls are cleared after consumption', () => {
+  const content = readText('standalone-quick-continue/monitor-watchdog.js');
+  assert.match(content, /const token = `\$\{authority\.conversationId\}\|\$\{authority\.enabled \? 1 : 0\}`/);
+  assert.match(content, /lastMonitorControlCommandId = control\.commandId;[\s\S]*?removeAttribute\?\.\(PRIMARY_WATCHDOG_CONTROL_ATTR\)/);
+  assert.match(content, /if \(updateVersion === monitorUpdateVersion\) renderMonitorState\(response\)/);
+  const route = readText('extension/automation-route-refresh.js');
+  const attachment = readText('extension/attachment-script.js');
+  assert.match(route, /scheduleSync,/);
+  assert.match(attachment, /__chatgptNotifierAutomationRouteRefreshRuntime\?\.scheduleSync/);
+  assert.match(attachment, /watchdogPauseButton\.style\.display = monitoring \? 'inline-flex' : 'none'/);
 });
