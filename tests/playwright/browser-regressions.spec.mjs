@@ -100,6 +100,36 @@ test('keeps one stable Quick Continue toolbar across composer remounts and SPA n
   await expectTrafficInert(chatgptTraffic);
 });
 
+test('restores Monitor controls when returning from homepage through pushState-only navigation', async ({ fixturePage, chatgptTraffic }) => {
+  await expect(fixturePage.locator(toolbarSelector)).toBeVisible();
+
+  await fixturePage.evaluate(() => {
+    history.pushState({}, '', '/');
+    window.__fixture.remountComposer();
+  });
+  await expect.poll(
+    () => evaluateInExtensionWorld(fixturePage, 'ChatGPT Response Notifier',
+      'globalThis.__chatgptNotifierAutomationRouteRefreshRuntime?.activeConversationId ?? null'),
+    { timeout: 5_000 }
+  ).toBe('');
+
+  await fixturePage.evaluate(() => {
+    history.pushState({}, '', '/c/playwright-returned-from-homepage');
+    window.__fixture.remountComposer();
+  });
+  await expect.poll(
+    () => evaluateInExtensionWorld(fixturePage, 'ChatGPT Response Notifier',
+      'globalThis.__chatgptNotifierAutomationRouteRefreshRuntime?.activeConversationId ?? null'),
+    { timeout: 5_000 }
+  ).toBe('playwright-returned-from-homepage');
+
+  await expect(fixturePage.locator(toolbarSelector)).toBeVisible();
+  await expect(fixturePage.locator('[id^="chatgpt-notifier-control-v"]')).toHaveCount(1);
+  await expect(fixturePage.locator('[id^="chatgpt-notifier-monitor-watchdog-pause-v"]')).toHaveCount(1);
+  await expect(fixturePage.locator('[id^="chatgpt-notifier-monitor-watchdog-reset-v"]')).toHaveCount(1);
+  await expectTrafficInert(chatgptTraffic);
+});
+
 test('Quick Continue exact Continue transaction reaches one browser form submit', async ({ fixturePage, chatgptTraffic }) => {
   const result = await evaluateInExtensionWorld(fixturePage, 'ChatGPT Quick Continue', `(async () => {
     const composer = document.querySelector('#prompt-textarea');
