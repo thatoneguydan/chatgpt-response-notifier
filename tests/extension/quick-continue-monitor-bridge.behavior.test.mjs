@@ -78,7 +78,8 @@ test('Monitor publishes its state to the independent Monitor runtime, never to S
 
   assert.match(monitorRuntime, /PRIMARY_WATCHDOG_ATTR = 'data-chatgpt-notifier-primary-watchdog'/);
   assert.match(monitorRuntime, /function monitorWatchdogAuthority\(\)/);
-  assert.match(monitorRuntime, /if \(authority\.enabled !== monitorEnabled\) setMonitorEnabled\(authority\.enabled\)/);
+  assert.match(monitorRuntime, /const token = `\$\{authority\.conversationId\}\|\$\{authority\.enabled \? 1 : 0\}`/);
+  assert.match(monitorRuntime, /setMonitorEnabled\(authority\.enabled\)/);
   assert.match(monitorRuntime, /QUICK_CONTINUE_MONITOR_WATCHDOG_SET/);
   assert.match(monitorRuntime, /config\?\.monitorWatchdog/);
 
