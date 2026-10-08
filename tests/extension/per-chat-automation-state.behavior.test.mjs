@@ -19,7 +19,8 @@ test('automation enrollment is durable and keyed independently by conversation',
 
 test('first new-chat route assignment preserves provisional automation UI while normal chat navigation refreshes it', () => {
   assert.doesNotThrow(() => new vm.Script(routeRefreshSource));
-  assert.match(routeRefreshSource, /const RUNTIME_VERSION = 2;/);
+  const routeRefreshVersion = Number(routeRefreshSource.match(/const RUNTIME_VERSION = (\d+);/)?.[1]);
+  assert.ok(routeRefreshVersion >= 4, 'SPA reconciliation requires the current route refresh runtime');
   assert.match(routeRefreshSource, /AUTOMATION_UI_SELECTOR = '\[data-chatgpt-notifier-automation-ui-owner\]'/);
   assert.match(routeRefreshSource, /const previousConversationId = activeConversationId;/);
   assert.match(routeRefreshSource, /if \(!previousConversationId && nextConversationId\) return;/);
