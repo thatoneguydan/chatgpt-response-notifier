@@ -8,7 +8,7 @@ When the notifier helper is installed, Quick Continue also uses that already-run
 
 ## Controls
 
-- **Monitor** is the small notifier-owned state indicator beside the Quick Continue controls. Turning Monitor on enables the independent Monitor watchdog; Pause turns that Monitor watchdog off.
+- **Monitor** is the small notifier-owned state indicator beside the Quick Continue controls. Turning Monitor on enables its independent watchdog. The adjacent watchdog **Pause/Resume** and **Reset** buttons change only the Monitor watchdog; they do not turn off the green Monitor indicator or affect Simple.
 - **Continue** immediately sends the configured Continue template.
 - **Project** opens the non-modal project picker.
 - **☰** opens the Quick Continue menu. It currently contains **Simple watchdog** and **Edit JSON**.
@@ -22,7 +22,7 @@ Manual timestamp mode is remembered independently for each ChatGPT conversation.
 
 ## Independent Monitor and Simple watchdogs
 
-Quick Continue 1.2.39 forks the current Simple implementation into a separate Monitor implementation. At the fork point they intentionally use the same proven state machine and recovery sequence, but they no longer share runtime ownership.
+Quick Continue 1.2.39 forked the current Simple implementation into a separate Monitor implementation. At the fork point they intentionally use the same proven state machine and recovery sequence, but they no longer share runtime ownership.
 
 **Monitor** has its own storage key, Chrome alarm namespace, message types, state, retry budget, countdown surface, and `monitorWatchdog` configuration. Monitor on/off state is passed from ChatGPT Response Notifier to this Monitor runtime without ChatGPT API polling. Trusted manual sends and trusted Quick Continue/Project sends reset the Monitor countdown while Monitor is enabled. Programmatic automatic Continue sends do not reset their own finite retry allowance.
 
