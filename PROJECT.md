@@ -2,11 +2,11 @@
 
 Canonical source: **thatoneguydan/chatgpt-response-notifier**.
 
-Current shipped/runtime line at this checkpoint:
+Current shipped/runtime line at the 2026-10-07 closeout (releases finalized 2026-10-08 UTC):
 
-- **ChatGPT Response Notifier 0.9.102**
-- **ChatGPT Quick Continue 1.2.36**
-- Canonical `main` after Quick Continue 1.2.36 feed publication: `1817ddb68f03a1e68e377b5947460d9ac7ac4662`
+- **ChatGPT Response Notifier 0.9.105** — published, installed on Glass, and verified as the running helper.
+- **ChatGPT Quick Continue 1.2.40** — published, installed on Glass, and helper-verified.
+- Canonical `main` after Notifier 0.9.105 feed publication: `ee64cc551ac574bcc68e33aadc9f479a4e684d31`. Recheck current `main` before future work.
 
 Always reconcile current GitHub `main`, releases, and installed Glass evidence before making a newer status claim.
 
@@ -17,7 +17,20 @@ Always reconcile current GitHub `main`, releases, and installed Glass evidence b
 - [Independent failure review](docs/INDEPENDENT-FAILURE-REVIEW-2026-09-16.md) — historical investigation and acceptance matrix that drove the reliability work.
 - DevelopmentInfrastructure [#443](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/443), [#442](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/442), and [#453](https://github.com/thatoneguydan/DevelopmentInfrastructure/issues/453) are **completed historical owners**, not active blockers.
 
-## Current checkpoint — 2026-10-01
+## Current checkpoint — 2026-10-07 (completed 2026-10-08 UTC)
+
+The latest user-requested Monitor/Simple split, refresh recovery, manual watchdog controls, and homepage-to-chat navigation repairs are **released and installed**, not awaiting user acceptance or installation.
+
+- **PR #285:** Quick Continue Monitor watchdog is its own engine, seeded from Simple behavior but independently configurable and persistent. The hamburger-menu Simple watchdog remains separate.
+- **PR #286:** Monitor watchdog maintains running/paused/stopped/exhausted state through page refresh; green Monitor does not restart an idle/stopped countdown merely on reload or an unrelated revision. Manual Pause/Resume and Reset sit beside Monitor; the toolbar remounts after ChatGPT SPA homepage-to-chat navigation. This ships in Quick Continue 1.2.40 and Notifier runtime.
+- **PRs #287–#289:** Notifier hot-page attachment version matches runtime 17, and source/SPA handoff contracts reflect current behavior. The initial 0.9.104 release and an earlier 0.9.105 release run failed stale source assertions; corrected PR-head source validation, Playwright and CWS package checks passed before **the successful 0.9.105 release**. Do not mistake these historical failed runs for current failures.
+- **Quick Continue 1.2.40:** release tag `quick-continue-v1.2.40` targets `ebf4e31639911437b5bd792607394ef83903dfa2`; `standalone-quick-continue/update/manifest.json` carries that source and ZIP SHA-256 `b742074b6490746f3864386d931d1e4c22043201a7b657b6447f23753bd63bff`. [Release workflow](https://github.com/thatoneguydan/chatgpt-response-notifier/actions/runs/37706266525) confirmed Glass local-helper installed version 1.2.40.
+- **Notifier 0.9.105:** release tag `v0.9.105` targets `3320017c25fd2a1054d7e1bba12c41f2c0d2da81`; `update/manifest.json` carries that source and ZIP SHA-256 `874908730f0859032924472edc089f99cc92a5bd8a631017940788bb53fa369b`. [Release workflow](https://github.com/thatoneguydan/chatgpt-response-notifier/actions/runs/37708785481) confirmed the installed and running Glass helper both at 0.9.105 on the second check.
+- Both extension installation flows are independent. Release and installation are complete; optional future real-page interaction or operator observations should inform a **new regression**, not block this completed work. One older open PR #284 is historical route-remount work superseded by the merged #285–#286 path; do not infer unfinished work from it without checking its actual diff.
+
+The older October 1 snapshot below remains useful history, but the current release versions and Monitor ownership are as stated above. The `monitorWatchdog` settings/state and `simpleWatchdog` settings/state are independent; `watchdog.stopOnStatus` continues to provide the shared stop/continue classification.
+
+## Historical checkpoint — 2026-10-01
 
 The active extension repair line requested through October 1 is complete in canonical source and deployed on Glass.
 
@@ -25,7 +38,7 @@ Notifier **0.9.102** preserves the accepted 0.9.101 new-chat state-transfer and 
 
 Quick Continue **1.2.36** removes the duplicate Simple terminal-footer parser and duplicate status classification logic introduced in 1.2.35. Simple now consumes only the notifier authority's sanitized terminal identity, status code, and `stop`/`continue` class, then applies its own two respect switches. A read-only canonical-terminal query baselines a footer already visible when Simple is enabled or restored. Quick Continue 1.2.36 was built, published, installed, and verified on Glass successfully.
 
-Current JSON ownership is:
+JSON ownership at that historical checkpoint was:
 
 ```json
 "watchdog": {
