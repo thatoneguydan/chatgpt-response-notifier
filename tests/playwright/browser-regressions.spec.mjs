@@ -109,7 +109,7 @@ test('restores Monitor controls when returning from homepage through pushState-o
   });
   await expect.poll(
     () => evaluateInExtensionWorld(fixturePage, 'ChatGPT Response Notifier',
-      'globalThis.__chatgptNotifierAutomationRouteRefreshRuntime?.activeConversationId ?? null'),
+      'globalThis.__chatgptNotifierAutomationRouteRefreshRuntime?.activeConversationId ?? null', 'https://chatgpt.com/'),
     { timeout: 5_000 }
   ).toBe('');
 
@@ -119,7 +119,7 @@ test('restores Monitor controls when returning from homepage through pushState-o
   });
   await expect.poll(
     () => evaluateInExtensionWorld(fixturePage, 'ChatGPT Response Notifier',
-      'globalThis.__chatgptNotifierAutomationRouteRefreshRuntime?.activeConversationId ?? null'),
+      'globalThis.__chatgptNotifierAutomationRouteRefreshRuntime?.activeConversationId ?? null', 'https://chatgpt.com/'),
     { timeout: 5_000 }
   ).toBe('playwright-returned-from-homepage');
 
