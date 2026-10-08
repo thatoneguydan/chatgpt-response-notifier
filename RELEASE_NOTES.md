@@ -2,6 +2,7 @@
 
 - Updates the hot-page attachment runtime gate to version 17, matching the Monitor watchdog pause/reset UI shipped in 0.9.104. Existing ChatGPT tabs can acquire the new controls without requiring a reload.
 - Updates source contracts for SPA navigation freshness and runtime synchronization, preventing obsolete source assertions from blocking validated behavior.
+- Verifies that a newly assigned conversation ID preserves an existing Monitor UI, while homepage-to-chat navigation invalidates and refreshes stale controls.
 
 # ChatGPT Response Notifier 0.9.104
 
