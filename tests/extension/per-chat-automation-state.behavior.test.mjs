@@ -23,7 +23,9 @@ test('first new-chat route assignment preserves provisional automation UI while 
   assert.ok(routeRefreshVersion >= 4, 'SPA reconciliation requires the current route refresh runtime');
   assert.match(routeRefreshSource, /AUTOMATION_UI_SELECTOR = '\[data-chatgpt-notifier-automation-ui-owner\]'/);
   assert.match(routeRefreshSource, /const previousConversationId = activeConversationId;/);
-  assert.match(routeRefreshSource, /if \(!previousConversationId && nextConversationId\) return;/);
+  assert.match(routeRefreshSource, /if \(!previousConversationId && nextConversationId && hadAutomationUi\)/);
+  assert.match(routeRefreshSource, /if \(!previousConversationId && nextConversationId && hadAutomationUi\) \{\s*refreshAutomationUi\(\);\s*return;/);
+  assert.match(routeRefreshSource, /invalidateAutomationUi\(\);\s*refreshAutomationUi\(\);/);
   assert.match(routeRefreshSource, /invalidateAutomationUi\(\);/);
   assert.match(routeRefreshSource, /navigatesuccess/);
   assert.doesNotMatch(routeRefreshSource, /new MutationObserver/);
