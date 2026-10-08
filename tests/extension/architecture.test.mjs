@@ -644,7 +644,7 @@ test('notifier-owned Quick Continue light mirrors Monitor state and publishes Si
   assert.doesNotMatch(attachment, /automationBusy \? '\\.62'/);
   assert.doesNotMatch(attachment, /AUTOMATION_REFRESH_MS/);
   assert.doesNotMatch(attachment, /setInterval\(maintainAutomationIndicator/);
-  assert.match(attachment, /if \(!overview\) return automationOverview/);
+  assert.match(attachment, /if \(!next \|\| !automationOverviewIsFresh\(next\)\) return automationOverview;/);
   assert.match(attachment, /visibility = 'hidden'/);
   assert.match(attachment, /boxShadow = 'none'/);
   assert.match(attachment, /new MutationObserver/);
@@ -724,12 +724,14 @@ test('extension update hot-activates reload-safe watchdog page runtimes in alrea
   const attachment = text('extension/attachment-script.js');
   const monitor = text('extension/monitor-background.js');
 
-  assert.match(attachment, /ATTACHMENT_RUNTIME_VERSION = 15/);
+  const attachmentRuntimeVersion = Number(attachment.match(/ATTACHMENT_RUNTIME_VERSION = (\d+)/)?.[1]);
+  assert.ok(attachmentRuntimeVersion >= 17, 'Monitor controls require the current attachment runtime');
   assert.match(attachment, /CHATGPT_NOTIFIER_ATTACHMENT_PING/);
   assert.match(attachment, /runtimeVersion: ATTACHMENT_RUNTIME_VERSION/);
   assert.match(attachment, /extensionVersion/);
 
-  assert.match(monitor, /HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = 15/);
+  const hotAttachmentVersion = Number(monitor.match(/HOT_PAGE_ATTACHMENT_RUNTIME_VERSION = (\d+)/)?.[1]);
+  assert.equal(hotAttachmentVersion, attachmentRuntimeVersion, 'hot-page updates must refresh to the current attachment runtime');
   assert.match(monitor, /HOT_PAGE_MONITOR_RUNTIME_VERSION = 12/);
   assert.match(monitor, /HOT_PAGE_STATUS_RUNTIME_VERSION = 15/);
   assert.match(monitor, /HOT_PAGE_BOUNDED_RECOVERY_RUNTIME_VERSION = 3/);
