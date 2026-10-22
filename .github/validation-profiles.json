@@ -5,7 +5,7 @@
   "implementation": {
     "repository": "thatoneguydan/DevelopmentInfrastructure",
     "path": "Shared/Validation/validation-reuse.mjs",
-    "sha256": "17e4a525d2d0e5ff5d279c35df6842b24cd79248b9368f11713a2114d2fbedf0"
+    "sha256": "0eb37b20a43c43c75a846e22fb33a398e9562fc6827c63f2a12edce352eae104"
   },
   "profiles": {
     "playwright-extension-regressions-browser-regressions": {
@@ -38,18 +38,21 @@
     "validate-validate": {
       "workflow": "validate.yml",
       "steps": [
-        "Validate extension architecture and source"
+        "Validate extension architecture and source",
+        "Build helper, installer, and exact candidate bundle",
+        "Prove isolated Setup, legacy-root preservation, stable-root replacement, and localhost helper handshake",
+        "Upload exact candidate for live acceptance"
       ],
       "tools": [
         "powershell",
         "dotnet"
       ],
-      "buildSteps": 0,
+      "buildSteps": 1,
       "alwaysCurrent": [
         "Exact-source helper/installer/candidate packaging and isolated install proof"
       ],
       "artifacts": [],
-      "deliversPackage": false,
+      "deliversPackage": true,
       "job": "validate",
       "documentation": [
         "AGENTS.md",
