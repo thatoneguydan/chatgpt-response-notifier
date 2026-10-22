@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { digest, documented, fingerprint, documentationOnly, trusted, select } from './validation-reuse.mjs';
+import { digest, documented, fingerprint, documentationOnly, trusted, select, validCheckout } from './validation-reuse.mjs';
 
 const repository = 'thatoneguydan/example';
 const entry = (path, c = 'a') => ({ path, mode: '100644', sha: c.repeat(40) });
@@ -18,6 +18,21 @@ const job = () => ({ id: 101, name: 'source', status: 'completed', conclusion: '
 const options = overrides => ({ repository, canonicalRef: 'main', profile, input, receipt, now, currentRun: 99,
   runs: [run()], treeAt: async () => tree, jobsAt: async () => [job()],
   artifactsAt: async () => [{ name: 'frames', expired: false }], ...overrides });
+
+test('recorded PR merge checkout is valid even when payload merge metadata is null or stale', () => {
+  const merge = '2'.repeat(40), head = '3'.repeat(40);
+  for (const metadata of [null, '4'.repeat(40)]) {
+    assert.equal(validCheckout(merge, { pull_request: { head: { sha: head }, merge_commit_sha: metadata } }, merge), true);
+  }
+});
+test('explicit PR head and canonical push checkouts retain exact event identity', () => {
+  assert.equal(validCheckout('3'.repeat(40), { pull_request: { head: { sha: '3'.repeat(40) } } }, '2'.repeat(40)), true);
+  assert.equal(validCheckout('2'.repeat(40), {}, '2'.repeat(40)), true);
+});
+test('unrelated checkout or malformed recorded identity refuses', () => {
+  assert.equal(validCheckout('4'.repeat(40), { pull_request: { head: { sha: '3'.repeat(40) }, merge_commit_sha: '4'.repeat(40) } }, '2'.repeat(40)), false);
+  assert.equal(validCheckout('bad', {}, 'bad'), false);
+});
 
 test('accepted candidate proof is reused after a merge with identical complete inputs', async () => {
   const r = await select(options()); assert.equal(r.execute, false); assert.equal(r.job, 101); assert.equal(r.attempt, 1);

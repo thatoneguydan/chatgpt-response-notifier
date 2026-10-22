@@ -6,6 +6,9 @@ import { pathToFileURL } from 'node:url';
 
 const sha = /^[a-f0-9]{40}$/;
 export const digest = value => createHash('sha256').update(JSON.stringify(value)).digest('hex');
+export function validCheckout(source, event, workflowSha) {
+  return sha.test(source || '') && [workflowSha, event.pull_request?.head?.sha].some(s => sha.test(s || '') && s === source);
+}
 export function documented(path, patterns = []) {
   return patterns.some(p => p.endsWith('/**') ? path.startsWith(p.slice(0, -2)) : path === p);
 }
@@ -95,9 +98,9 @@ async function main() {
   if (!profile.steps?.length || !profile.workflow || !profile.job) throw Error('Incomplete source proof declaration');
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH, 'utf8'));
   const source = git('rev-parse', 'HEAD').trim();
-  const expected = event.pull_request?.head?.sha || process.env.GITHUB_SHA;
-  // A merge checkout is accepted only if it is the event's recorded merge commit.
-  if (source !== expected && source !== event.pull_request?.merge_commit_sha) throw Error('Unexpected checkout identity');
+  // GitHub records a synthetic PR merge in GITHUB_SHA; the payload's optional
+  // merge_commit_sha can be stale/null while that synthetic merge is generated.
+  if (!validCheckout(source, event, process.env.GITHUB_SHA)) throw Error('Unexpected checkout identity');
   const input = fingerprint(localTree(source), profile);
   const observed = environment(profile.tools || []);
   for (const path of profile.environmentFiles || []) {

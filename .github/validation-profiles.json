@@ -5,7 +5,7 @@
   "implementation": {
     "repository": "thatoneguydan/DevelopmentInfrastructure",
     "path": "Shared/Validation/validation-reuse.mjs",
-    "sha256": "a4c462bb16a9bf70b99f0a2a22e36edde9c34b705531e1acdf4fee36554f89f9"
+    "sha256": "17e4a525d2d0e5ff5d279c35df6842b24cd79248b9368f11713a2114d2fbedf0"
   },
   "profiles": {
     "playwright-extension-regressions-browser-regressions": {
