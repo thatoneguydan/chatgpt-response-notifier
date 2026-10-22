@@ -13,9 +13,18 @@ export function documented(path, patterns = []) {
   return patterns.some(p => p.endsWith('/**') ? path.startsWith(p.slice(0, -2)) : path === p);
 }
 export function fingerprint(entries, profile) {
-  const inputs = entries.filter(e => !documented(e.path, profile.documentation));
+  const machinery = new Set(['.github/scripts/validation-reuse.mjs', '.github/scripts/validation-reuse.test.mjs',
+    '.github/validation-profiles.json', 'Shared/Validation/validation-reuse.mjs',
+    'Shared/Validation/validation-reuse.test.mjs', 'Shared/Validation/projects.json']);
+  const inputs = entries.filter(e => !documented(e.path, profile.documentation) && !machinery.has(e.path));
   if (!inputs.length || inputs.some(e => !sha.test(e.sha) || !e.path || !e.mode)) throw Error('Incomplete committed inputs');
-  return digest(inputs.map(e => `${e.mode} ${e.sha} ${e.path}`).sort());
+  // The current selector/fixtures are always checked separately. The complete
+  // effective profile and application/test/workflow bytes bind application proof.
+  return digest({ inputs: inputs.map(e => `${e.mode} ${e.sha} ${e.path}`).sort(), profile });
+}
+export function legacyFingerprint(entries, profile) {
+  return digest(entries.filter(e => !documented(e.path, profile.documentation))
+    .map(e => `${e.mode} ${e.sha} ${e.path}`).sort());
 }
 export function documentationOnly(paths, profile) {
   return paths.length > 0 && paths.every(p => documented(p, profile.documentation));
@@ -31,11 +40,11 @@ export function trusted(run, repository, canonicalRef) {
 // The first matching attempt decides refusal. A later green skip can only be
 // traversed to a real execution; failed, pending or inaccessible checks cannot.
 export async function select({ runs, profile, repository, canonicalRef, input, receipt,
-  currentRun, treeAt, jobsAt, artifactsAt, now = Date.now() }) {
+  currentRun, treeAt, jobsAt, artifactsAt, legacyReceiptFor, now = Date.now() }) {
   for (const run of runs) {
     if (String(run.id) === String(currentRun) || !trusted(run, repository, canonicalRef)) continue;
-    let prior;
-    try { prior = fingerprint(await treeAt(run.head_sha), profile); } catch { continue; }
+    let prior, entries;
+    try { entries = await treeAt(run.head_sha); prior = fingerprint(entries, profile); } catch { continue; }
     if (prior !== input) continue;
     if (run.status !== 'completed') return { execute: true, reason: 'Latest matching attempt is pending.' };
     const jobs = await jobsAt(run);
@@ -43,7 +52,9 @@ export async function select({ runs, profile, repository, canonicalRef, input, r
     if (!job || job.status !== 'completed' || job.conclusion !== 'success') {
       return { execute: true, reason: 'Latest matching source job failed, skipped or is missing.' };
     }
-    if (!job.steps?.some(s => s.name === receipt && s.conclusion === 'success')) continue;
+    const previousReceipt = legacyReceiptFor ? await legacyReceiptFor(entries, run, job) : null;
+    const expected = [receipt, ...(previousReceipt ? [previousReceipt] : [])];
+    if (!job.steps?.some(s => expected.includes(s.name) && s.conclusion === 'success')) continue;
     if (!profile.steps.every(name => job.steps.some(s => s.name === name && s.conclusion === 'success'))) {
       return { execute: true, reason: 'Receipt does not include all executed source checks.' };
     }
@@ -125,14 +136,25 @@ async function main() {
     const diff = await api(`compare/${base}...${source}`);
     if (Array.isArray(diff.files) && diff.files.length < 300) paths = diff.files.flatMap(f => [f.filename, ...(f.previous_filename ? [f.previous_filename] : [])]);
   } catch { /* Missing exact comparison is never documentation-only. */ }
+  const docsOnly = documentationOnly(paths, profile);
   let accepted = { execute: true, reason: 'Source proof has not been inspected.' };
-  if (documentationOnly(paths, profile)) accepted = { execute: false, reason: 'Only explicitly declared non-runtime documentation changed.' };
+  if (docsOnly) accepted = { execute: false, reason: 'Only explicitly declared non-runtime documentation changed.' };
   else if (profile.deliversPackage) accepted.reason = 'Exact-source package production remains current; source reuse never substitutes package delivery.';
   else if (Object.values(observed).includes('<unavailable>')) accepted.reason = 'Required tool environment is unobservable; execute affected checks.';
   else if (process.env.GITHUB_EVENT_NAME !== 'workflow_dispatch') try {
     const all = await api(`actions/workflows/${profile.workflow}/runs?per_page=30`);
     accepted = await select({ runs: all.workflow_runs, profile, repository: config.repository,
       canonicalRef: config.canonicalRef, input, receipt, currentRun: process.env.GITHUB_RUN_ID,
+      legacyReceiptFor: async (entries, run, job) => {
+        if (!job.steps?.some(s => s.name.startsWith(`Executed source proof ${name} `) && s.conclusion === 'success')) return null;
+        const configEntry = entries.find(e => e.path === '.github/validation-profiles.json');
+        if (!configEntry) return null;
+        let old;
+        try { old = JSON.parse(git('show', `${run.head_sha}:.github/validation-profiles.json`)); }
+        catch { const blob = await api(`git/blobs/${configEntry.sha}`); old = JSON.parse(Buffer.from(blob.content, 'base64').toString('utf8')); }
+        if (old.repository !== config.repository || old.schemaVersion !== 1 || !old.profiles?.[name]) return null;
+        return `Executed source proof ${name} ${digest({ input: legacyFingerprint(entries, old.profiles[name]), observed })}`;
+      },
       treeAt: async ref => { try { return localTree(ref); } catch {
         const data = await api(`git/trees/${ref}?recursive=1`);
         if (data.truncated) throw Error('Truncated evidence tree');
@@ -142,10 +164,10 @@ async function main() {
       artifactsAt: async run => (await api(`actions/runs/${run.id}/artifacts?per_page=100`)).artifacts });
   } catch { accepted = { execute: true, reason: 'Source evidence is incomplete or inaccessible; execute affected checks.' }; }
   else accepted.reason = 'Explicit manual validation executes current checks.';
-  for (const [key, value] of Object.entries({ execute: accepted.execute, receipt })) {
+  for (const [key, value] of Object.entries({ execute: accepted.execute, receipt, documentation_only: docsOnly })) {
     appendFileSync(process.env.GITHUB_OUTPUT, `${key}=${value}\n`);
   }
-  const plan = { schemaVersion: 1, profile: name, source, input, observed, accepted,
+  const plan = { schemaVersion: 2, profile: name, source, input, observed, accepted, documentationOnly: docsOnly,
     sourceBuildStepsPlanned: accepted.execute ? (profile.buildSteps || 0) : 0,
     alwaysCurrent: profile.alwaysCurrent || [],
     continuation: 'Inspect this run/attempt and referenced executed job before any retry. No package or live authority is reused.' };

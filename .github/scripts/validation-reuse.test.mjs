@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { digest, documented, fingerprint, documentationOnly, trusted, select, validCheckout } from './validation-reuse.mjs';
+import { digest, documented, fingerprint, legacyFingerprint, documentationOnly, trusted, select, validCheckout } from './validation-reuse.mjs';
 
 const repository = 'thatoneguydan/example';
 const entry = (path, c = 'a') => ({ path, mode: '100644', sha: c.repeat(40) });
@@ -63,6 +63,21 @@ test('ordering is stable; empty or malformed committed input is rejected', () =>
   assert.equal(input, fingerprint([...tree].reverse(), profile));
   assert.throws(() => fingerprint([], profile)); assert.throws(() => fingerprint([{ path: 'bad' }], profile));
   assert.equal(documented('docs/handoff-other/x', profile.documentation), false);
+});
+test('changed selector fixtures do not invalidate unchanged application proof', () => {
+  assert.equal(fingerprint([...tree, entry('.github/scripts/validation-reuse.mjs')], profile),
+    fingerprint([...tree, entry('.github/scripts/validation-reuse.mjs', 'b')], profile));
+  assert.notEqual(input, fingerprint(tree, { ...profile, steps: ['Different proof'] }));
+});
+test('the previous receipt format is reusable only through matching full inputs, environment and executed steps', async () => {
+  const previous = 'Executed source proof fixture ' + digest({ input: legacyFingerprint(tree, profile), observed: 'same' });
+  const old = job();old.steps[2].name = previous;
+  const r = await select(options({ jobsAt: async () => [old], legacyReceiptFor: () => previous }));
+  assert.equal(r.execute, false);
+  const changed = await select(options({ input: 'different-inputs', jobsAt: async () => [old], legacyReceiptFor: () => previous }));
+  assert.equal(changed.execute, true);
+  old.steps[1].conclusion = 'skipped';
+  assert.equal((await select(options({ jobsAt: async () => [old], legacyReceiptFor: () => previous }))).execute, true);
 });
 for (const state of ['queued', 'in_progress']) test(`a ${state} latest matching attempt executes`, async () => {
   assert.equal((await select(options({ runs: [{ ...run(), status: state }] }))).execute, true);

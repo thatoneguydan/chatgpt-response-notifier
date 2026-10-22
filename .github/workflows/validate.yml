@@ -125,6 +125,8 @@ jobs:
           if ($manifest.host_permissions -notcontains 'ws://127.0.0.1/*') { throw 'Loopback WebSocket permission is missing.' }
 
       - name: Build helper, installer, and exact candidate bundle
+        if: ${{ steps.validation_plan.outputs.execute == 'true' }}
+        id: package_proof_1
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -171,6 +173,8 @@ jobs:
           $candidateManifest | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $artifactRoot 'candidate-manifest.json') -Encoding UTF8
 
       - name: Prove isolated Setup, legacy-root preservation, stable-root replacement, and localhost helper handshake
+        if: ${{ steps.validation_plan.outputs.execute == 'true' }}
+        id: package_proof_2
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -274,6 +278,8 @@ jobs:
           }
 
       - name: Upload exact candidate for live acceptance
+        if: ${{ steps.validation_plan.outputs.execute == 'true' }}
+        id: package_proof_3
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: chatgpt-response-notifier-candidate-${{ github.event.pull_request.head.sha || github.sha }}
@@ -281,7 +287,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
       - name: ${{ steps.validation_plan.outputs.receipt }}
-        if: ${{ success() && steps.validation_plan.outputs.execute == 'true' && steps.validation_proof_0.outcome == 'success' }}
+        if: ${{ success() && steps.validation_plan.outputs.execute == 'true' && steps.validation_proof_0.outcome == 'success' && steps.package_proof_1.outcome == 'success' && steps.package_proof_2.outcome == 'success' && steps.package_proof_3.outcome == 'success' }}
         shell: powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
         working-directory: ${{ github.workspace }}
         run: Write-Host 'Complete source checks executed; this receipt grants no package or live authority.'
