@@ -6,7 +6,12 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   validate:
@@ -24,10 +29,27 @@ jobs:
       SOURCE_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
     steps:
       - name: Checkout exact source head
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
         with:
           fetch-depth: 0
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Verify affected-validation routing fixtures
+        shell: powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        working-directory: ${{ github.workspace }}
+        run: |
+          node --test .github/scripts/validation-reuse.test.mjs
+          if ($LASTEXITCODE -ne 0) { throw 'VALIDATION_ROUTING_FIXTURES_FAILED' }
+
+      - name: Plan affected source validation
+        id: validation_plan
+        shell: powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        working-directory: ${{ github.workspace }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          node .github/scripts/validation-reuse.mjs validate-validate
+          if ($LASTEXITCODE -ne 0) { throw 'VALIDATION_PLAN_FAILED' }
 
       - name: Verify exact source identity
         shell: pwsh
@@ -40,6 +62,8 @@ jobs:
           Write-Host "Exact source head: $actual"
 
       - name: Validate extension architecture and source
+        if: ${{ steps.validation_plan.outputs.execute == 'true' }}
+        id: validation_proof_0
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -250,9 +274,15 @@ jobs:
           }
 
       - name: Upload exact candidate for live acceptance
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         with:
           name: chatgpt-response-notifier-candidate-${{ github.event.pull_request.head.sha || github.sha }}
           path: ${{ runner.temp }}\chatgpt-response-notifier-candidate\artifacts\*
           if-no-files-found: error
           retention-days: 7
+      - name: ${{ steps.validation_plan.outputs.receipt }}
+        if: ${{ success() && steps.validation_plan.outputs.execute == 'true' && steps.validation_proof_0.outcome == 'success' }}
+        shell: powershell -NoLogo -NoProfile -ExecutionPolicy Bypass -Command ". '{0}'"
+        working-directory: ${{ github.workspace }}
+        run: Write-Host 'Complete source checks executed; this receipt grants no package or live authority.'
+

@@ -1,0 +1,63 @@
+{
+  "schemaVersion": 1,
+  "repository": "thatoneguydan/chatgpt-response-notifier",
+  "canonicalRef": "main",
+  "implementation": {
+    "repository": "thatoneguydan/DevelopmentInfrastructure",
+    "path": "Shared/Validation/validation-reuse.mjs",
+    "sha256": "17e4a525d2d0e5ff5d279c35df6842b24cd79248b9368f11713a2114d2fbedf0"
+  },
+  "profiles": {
+    "playwright-extension-regressions-browser-regressions": {
+      "workflow": "playwright-extension-regressions.yml",
+      "steps": [
+        "Install pinned Playwright test dependency",
+        "Run traffic-inert MV3 browser regressions"
+      ],
+      "tools": [
+        "pwsh"
+      ],
+      "buildSteps": 0,
+      "alwaysCurrent": [
+        "Exact checkout identity"
+      ],
+      "artifacts": [],
+      "deliversPackage": false,
+      "job": "browser-regressions",
+      "documentation": [
+        "AGENTS.md",
+        "PROJECT.md",
+        "HANDOFF.md",
+        "ROADMAP.md",
+        "docs/handoff/**"
+      ],
+      "environmentFiles": [
+        "tests/playwright/node_modules/.package-lock.json"
+      ]
+    },
+    "validate-validate": {
+      "workflow": "validate.yml",
+      "steps": [
+        "Validate extension architecture and source"
+      ],
+      "tools": [
+        "powershell",
+        "dotnet"
+      ],
+      "buildSteps": 0,
+      "alwaysCurrent": [
+        "Exact-source helper/installer/candidate packaging and isolated install proof"
+      ],
+      "artifacts": [],
+      "deliversPackage": false,
+      "job": "validate",
+      "documentation": [
+        "AGENTS.md",
+        "PROJECT.md",
+        "HANDOFF.md",
+        "ROADMAP.md",
+        "docs/handoff/**"
+      ]
+    }
+  }
+}
